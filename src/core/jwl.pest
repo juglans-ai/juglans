@@ -1,0 +1,94 @@
+// src/core/jwl.pest
+
+// --- 基础词法定义 ---
+// 显式定义的空白字符会被 Pest 自动处理（除非是在原子规则内）
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+// 支持以 # 开头的行注释
+COMMENT = _{ "#" ~ (!NEWLINE ~ ANY)* ~ NEWLINE? }
+
+// --- 基础值类型 ---
+boolean = { "true" | "false" }
+null = { "null" }
+// 支持负数和小数的数字定义
+number = @{ "-"? ~ ("0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*) ~ ("." ~ ASCII_DIGIT*)? }
+// 带引号的字符串定义，支持转义
+string = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+// 标准标识符定义：字母开头，后跟字母数字或下划线
+identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+
+// 支持命名空间的复合标识符 (例如：System.log, McpServer.tool)
+scoped_identifier = @{ identifier ~ ("." ~ identifier)* }
+
+// JWL 特有的变量引用语法，以 $ 开头
+variable_ref = @{ "$" ~ (ASCII_ALPHANUMERIC | "_" | ".")+ }
+
+// 递归的 JSON 对象与数组支持
+json_pair = { string ~ ":" ~ value }
+json_object = { "{" ~ (json_pair ~ ("," ~ json_pair)*)? ~ ","? ~ "}" }
+json_array = { "[" ~ (value ~ ("," ~ value)*)? ~ ","? ~ "]" }
+
+// 汇总所有字面量值
+value = _{ json_object | json_array | string | number | boolean | null }
+
+// --- 元数据定义 (Metadata) ---
+// 定义工作流头部允许的键名，增加了 prompts 和 agents 用于本地资源导入
+meta_key = { "name" | "version" | "author" | "description" | "entry" | "exit" | "libs" | "prompts" | "agents" }
+meta_list_item = { string | identifier }
+meta_val_list = { "[" ~ (meta_list_item ~ ("," ~ meta_list_item)*)? ~ ","? ~ "]" }
+metadata = { meta_key ~ ":" ~ (string | meta_val_list) }
+
+// --- 节点定义 (Nodes) ---
+// 节点 ID 格式为 [id_name]
+node_id = { "[" ~ identifier ~ "]" }
+
+// 【核心修复】递归嵌套内容规则
+// 用于平衡嵌套的括号对，确保内部的逗号或括号不会中断外层解析
+// 支持 () [] {} 三种类型的括号嵌套
+nested_content = { 
+    "(" ~ (nested_content | string | (!")" ~ ANY))* ~ ")" |
+    "[" ~ (nested_content | string | (!"]" ~ ANY))* ~ "]" |
+    "{" ~ (nested_content | string | (!"}" ~ ANY))* ~ "}"
+}
+
+// 【核心修复】表达式规则
+// 参数的值可以是字符串、嵌套内容或者是不包含分隔符（, 或 )）的任意文本
+expression = { (nested_content | string | (!"," ~ !")" ~ ANY))+ }
+
+// 任务参数定义：key=value
+param_pair = { identifier ~ "=" ~ expression }
+
+// 任务调用语法：tool_name(p1=v1, p2=v2)
+task_def = { scoped_identifier ~ "(" ~ (param_pair ~ ("," ~ param_pair)*)? ~ ")" }
+
+// 条件表达式，通常用于 while 循环或 if 分支
+condition_expr = @{ (!")" ~ ANY)* }
+while_def = { "while" ~ "(" ~ condition_expr ~ ")" ~ block_body }
+
+// 集合遍历语法：foreach($item in $list)
+foreach_def = { "foreach" ~ "(" ~ variable_ref ~ "in" ~ variable_ref ~ ")" ~ block_body }
+
+// 逻辑块定义，允许在其中定义局部的节点和连接
+block_body = { "{" ~ (node_def | edge_def)* ~ "}" }
+
+// 节点内容：支持循环、遍历、任务调用或纯 JSON/字符串
+node_content = _{ while_def | foreach_def | task_def | json_object | string }
+node_def = { node_id ~ ":" ~ node_content }
+
+// --- 边定义 (Edges / Connections) ---
+// 条件分支语法：[A] if ctx.var == 1 -> [B]
+edge_condition = { "if" ~ (!"->" ~ ANY)+ }
+// 错误处理路径：[A] on error -> [B]
+edge_error = { "on error" }
+
+// 链式定义：[A] -> [B] -> [C]
+simple_arrow = { "->" }
+chain_edge_def = { node_id ~ (simple_arrow ~ node_id)+ }
+
+// 复杂的单步定义（带条件或错误分支）
+complex_edge_def = { node_id ~ (edge_error | edge_condition) ~ "->" ~ node_id }
+
+// 统一边定义规则
+edge_def = _{ complex_edge_def | chain_edge_def }
+
+// --- 根语法单元 ---
+workflow = { SOI ~ (metadata | node_def | edge_def)* ~ EOI }

@@ -1,0 +1,59 @@
+// src/core/prompt.pest
+
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+
+// --- Values ---
+string = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+number = @{ "-"? ~ ("0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*) ~ ("." ~ ASCII_DIGIT*)? }
+boolean = { "true" | "false" }
+identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+
+// --- JSON-like Recursive Structures ---
+// fm_value is the type allowed for metadata values
+fm_value = _{ json_object | json_array | string | number | boolean }
+
+json_pair = { (string | identifier) ~ ":" ~ fm_value }
+json_object = { "{" ~ (json_pair ~ ("," ~ json_pair)*)? ~ ","? ~ "}" }
+json_array = { "[" ~ (fm_value ~ ("," ~ fm_value)*)? ~ ","? ~ "]" }
+
+// --- Metadata Object (The content under inputs:) ---
+meta_key_names = _{ "slug" | "name" | "type" | "description" | "inputs" }
+
+// obj_pair represents a key-value entry in the inputs list
+obj_pair = { !(meta_key_names ~ ":") ~ !separator ~ identifier ~ ":" ~ fm_value }
+
+metadata_obj = { 
+    json_object | 
+    json_array | 
+    obj_pair* 
+}
+
+// --- Frontmatter Fields ---
+key_slug  = { "slug" ~ ":" ~ string }
+key_name  = { "name" ~ ":" ~ string }
+key_type  = { "type" ~ ":" ~ string }
+key_desc  = { "description" ~ ":" ~ string }
+key_inputs = { "inputs" ~ ":" ~ metadata_obj }
+
+meta_entry = _{ (key_slug | key_name | key_type | key_desc | key_inputs) }
+separator = _{ "---" }
+frontmatter = { separator ~ meta_entry+ ~ separator }
+
+// --- Template Logic ---
+nl = _{ "\r\n" | "\n" }
+if_tag = { "{%" ~ inner_ws* ~ "if" ~ inner_ws+ ~ expression ~ inner_ws* ~ "%}" ~ nl? }
+else_tag = { "{%" ~ inner_ws* ~ "else" ~ inner_ws* ~ "%}" ~ nl? }
+endif_tag = { "{%" ~ inner_ws* ~ "endif" ~ inner_ws* ~ "%}" ~ nl? }
+for_tag = { "{%" ~ inner_ws* ~ "for" ~ inner_ws+ ~ identifier ~ inner_ws+ ~ "in" ~ inner_ws+ ~ expression ~ inner_ws* ~ "%}" ~ nl? }
+endfor_tag = { "{%" ~ inner_ws* ~ "endfor" ~ inner_ws* ~ "%}" ~ nl? }
+interpolation = { "{{" ~ inner_ws* ~ expression ~ inner_ws* ~ "}}" }
+
+body = ${ node* }
+node = _{ for_block | if_block | interpolation | raw_text }
+inner_ws = _{ " " | "\t" | "\r" | "\n" }
+expression = @{ (!"}}" ~ !"%}" ~ ANY)+ }
+raw_text = @{ (!"{{" ~ !"{%" ~ ANY)+ }
+if_block = { if_tag ~ body ~ (else_tag ~ body)? ~ endif_tag }
+for_block = { for_tag ~ body ~ (else_tag ~ body)? ~ endfor_tag }
+
+prompt_file = { SOI ~ frontmatter ~ body ~ EOI }
