@@ -4,7 +4,7 @@
 use axum::{
     routing::{get, post},
     extract::{Extension, Query},
-    response::sse::{Event, Sse},
+    response::{sse::{Event, Sse}, Html},
     Json, Router,
 };
 use tower_http::cors::CorsLayer;
@@ -19,8 +19,9 @@ use serde_json::{json, Value};
 use futures::{Stream, StreamExt}; 
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use uuid::Uuid; // 【新增】
-use chrono::Utc; // 【新增】
+use uuid::Uuid;
+use chrono::{Utc, DateTime};
+use std::time::Instant;
 
 use crate::services::agent_loader::AgentRegistry;
 use crate::services::prompt_loader::PromptRegistry;
@@ -68,6 +69,12 @@ pub struct PromptApiModel {
 
 struct WebState {
     pub project_root: PathBuf,
+    pub start_time: Instant,
+    pub start_datetime: DateTime<Utc>,
+    pub host: String,
+    pub port: u16,
+    pub jug0_base_url: String,
+    pub mcp_server_count: usize,
 }
 
 #[derive(Deserialize)]
@@ -127,16 +134,182 @@ fn generate_deterministic_id(slug: &str) -> Uuid {
     Uuid::new_v5(&namespace, slug.as_bytes())
 }
 
+// 格式化运行时长
+fn format_uptime(secs: u64) -> String {
+    let days = secs / 86400;
+    let hours = (secs % 86400) / 3600;
+    let mins = (secs % 3600) / 60;
+    let s = secs % 60;
+
+    if days > 0 {
+        format!("{}d {}h {}m {}s", days, hours, mins, s)
+    } else if hours > 0 {
+        format!("{}h {}m {}s", hours, mins, s)
+    } else if mins > 0 {
+        format!("{}m {}s", mins, s)
+    } else {
+        format!("{}s", s)
+    }
+}
+
+/// Dashboard 页面
+async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
+    let uptime = format_uptime(state.start_time.elapsed().as_secs());
+
+    // 扫描 prompts
+    let mut prompt_registry = PromptRegistry::new();
+    let prompt_pattern = state.project_root.join("**/*.jgprompt").to_string_lossy().to_string();
+    let _ = prompt_registry.load_from_paths(&[prompt_pattern]);
+
+    let mut prompts_html = String::new();
+    for slug in prompt_registry.keys() {
+        if let Some(content) = prompt_registry.get(&slug) {
+            if let Ok(res) = PromptParser::parse(content) {
+                prompts_html.push_str(&format!(
+                    "    {} - {} (type: {})\n",
+                    res.slug, res.name, res.r#type
+                ));
+            }
+        }
+    }
+    if prompts_html.is_empty() {
+        prompts_html = "    (none)\n".to_string();
+    }
+
+    // 扫描 agents
+    let mut agent_registry = AgentRegistry::new();
+    let agent_pattern = state.project_root.join("**/*.jgagent").to_string_lossy().to_string();
+    let _ = agent_registry.load_from_paths(&[agent_pattern]);
+
+    let mut agents_html = String::new();
+    for key in agent_registry.keys() {
+        if let Some(agent) = agent_registry.get(&key) {
+            let wf_info = agent.workflow.as_ref().map(|w| format!(" [workflow: {}]", w)).unwrap_or_default();
+            agents_html.push_str(&format!(
+                "    {} - {} (model: {}){}\n",
+                agent.slug, agent.name, agent.model, wf_info
+            ));
+        }
+    }
+    if agents_html.is_empty() {
+        agents_html = "    (none)\n".to_string();
+    }
+
+    // 扫描 workflows
+    let workflow_pattern = state.project_root.join("**/*.jgflow").to_string_lossy().to_string();
+    let mut workflows_html = String::new();
+
+    if let Ok(paths) = glob::glob(&workflow_pattern) {
+        for entry in paths.flatten() {
+            if let Ok(content) = fs::read_to_string(&entry) {
+                let file_name = entry.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown");
+                match GraphParser::parse(&content) {
+                    Ok(graph) => {
+                        let slug = if graph.slug.is_empty() { file_name.to_string() } else { graph.slug };
+                        let name = if graph.name.is_empty() { "-".to_string() } else { graph.name };
+                        let node_count = graph.graph.node_count();
+                        workflows_html.push_str(&format!(
+                            "    {} - {} ({} nodes)\n",
+                            slug, name, node_count
+                        ));
+                    }
+                    Err(_) => {
+                        workflows_html.push_str(&format!("    {} (parse error)\n", file_name));
+                    }
+                }
+            }
+        }
+    }
+    if workflows_html.is_empty() {
+        workflows_html = "    (none)\n".to_string();
+    }
+
+    let html = format!(r#"<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Juglans Dashboard</title>
+    <style>
+        body {{ font-family: monospace; background: #1a1a1a; color: #e0e0e0; padding: 20px; line-height: 1.6; }}
+        h1 {{ color: #4CAF50; }}
+        h2 {{ color: #81C784; margin-top: 30px; }}
+        pre {{ background: #2d2d2d; padding: 15px; border-radius: 5px; overflow-x: auto; }}
+        .status {{ color: #4CAF50; }}
+        .label {{ color: #888; }}
+    </style>
+</head>
+<body>
+<h1>Juglans Dashboard</h1>
+
+<h2>Server Status</h2>
+<pre>
+<span class="label">Address:</span>      http://{}:{}
+<span class="label">Project Root:</span> {}
+<span class="label">Started:</span>      {}
+<span class="label">Uptime:</span>       {}
+<span class="label">Jug0 API:</span>     {}
+<span class="label">MCP Servers:</span>  {}
+</pre>
+
+<h2>Prompts ({} found)</h2>
+<pre>
+{}</pre>
+
+<h2>Agents ({} found)</h2>
+<pre>
+{}</pre>
+
+<h2>Workflows ({} found)</h2>
+<pre>
+{}</pre>
+
+<h2>API Endpoints</h2>
+<pre>
+    GET  /              - This dashboard
+    GET  /api/agents    - List agents
+    GET  /api/prompts   - List prompts
+    POST /api/chat      - Chat endpoint (jug0 compatible)
+</pre>
+
+</body>
+</html>"#,
+        state.host,
+        state.port,
+        state.project_root.display(),
+        state.start_datetime.format("%Y-%m-%d %H:%M:%S UTC"),
+        uptime,
+        state.jug0_base_url,
+        state.mcp_server_count,
+        prompt_registry.keys().len(),
+        prompts_html,
+        agent_registry.keys().len(),
+        agents_html,
+        workflows_html.lines().filter(|l| !l.trim().is_empty() && l.trim() != "(none)").count(),
+        workflows_html,
+    );
+
+    Html(html)
+}
+
 pub async fn start_web_server(host: String, port: u16, project_root: PathBuf) -> anyhow::Result<()> {
+    let config = JuglansConfig::load().ok();
+
     let state = Arc::new(WebState {
         project_root: project_root.clone(),
+        start_time: Instant::now(),
+        start_datetime: Utc::now(),
+        host: host.clone(),
+        port,
+        jug0_base_url: config.as_ref().map(|c| c.jug0.base_url.clone()).unwrap_or_else(|| "N/A".to_string()),
+        mcp_server_count: config.as_ref().map(|c| c.mcp_servers.len()).unwrap_or(0),
     });
 
     let app = Router::new()
+        .route("/", get(dashboard))
         .route("/api/agents", get(list_local_agents))
         .route("/api/prompts", get(list_local_prompts))
-        .route("/api/chat", post(handle_chat)) 
-        .layer(TraceLayer::new_for_http()) 
+        .route("/api/chat", post(handle_chat))
+        .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
         .layer(Extension(state));
 
