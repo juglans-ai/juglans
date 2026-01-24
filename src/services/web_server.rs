@@ -33,6 +33,7 @@ use crate::core::prompt_parser::{PromptResource, PromptParser};
 use crate::core::executor::WorkflowExecutor;
 use crate::core::context::{WorkflowContext, WorkflowEvent};
 use crate::core::parser::GraphParser;
+use crate::core::validator::WorkflowValidator;
 
 // --- API Models (兼容 Jug0) ---
 
@@ -85,6 +86,25 @@ pub struct AgentQuery {
 #[derive(Deserialize)]
 pub struct PromptQuery {
     pub pattern: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct WorkflowQuery {
+    pub pattern: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct WorkflowApiModel {
+    pub id: Uuid,
+    pub slug: String,
+    pub name: String,
+    pub description: String,
+    pub node_count: usize,
+    pub is_valid: bool,
+    pub errors: usize,
+    pub warnings: usize,
+    pub issues: Vec<String>,
+    pub created_at: String,
 }
 
 // 兼容 Jug0 的 Chat 请求结构
@@ -198,23 +218,64 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
     // 扫描 workflows
     let workflow_pattern = state.project_root.join("**/*.jgflow").to_string_lossy().to_string();
     let mut workflows_html = String::new();
+    let mut workflow_count = 0;
+    let mut workflow_valid_count = 0;
+    let mut workflow_error_count = 0;
 
     if let Ok(paths) = glob::glob(&workflow_pattern) {
         for entry in paths.flatten() {
             if let Ok(content) = fs::read_to_string(&entry) {
                 let file_name = entry.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown");
+                workflow_count += 1;
+
                 match GraphParser::parse(&content) {
                     Ok(graph) => {
-                        let slug = if graph.slug.is_empty() { file_name.to_string() } else { graph.slug };
-                        let name = if graph.name.is_empty() { "-".to_string() } else { graph.name };
+                        let slug = if graph.slug.is_empty() { file_name.to_string() } else { graph.slug.clone() };
+                        let name = if graph.name.is_empty() { "-".to_string() } else { graph.name.clone() };
                         let node_count = graph.graph.node_count();
+
+                        // Run validation
+                        let validation = WorkflowValidator::validate(&graph);
+                        let (status_icon, status_text) = if validation.is_valid {
+                            if validation.warning_count() > 0 {
+                                ("⚠️", format!("{} warning(s)", validation.warning_count()))
+                            } else {
+                                workflow_valid_count += 1;
+                                ("✓", "valid".to_string())
+                            }
+                        } else {
+                            workflow_error_count += 1;
+                            ("✗", format!("{} error(s), {} warning(s)",
+                                validation.error_count(), validation.warning_count()))
+                        };
+
                         workflows_html.push_str(&format!(
-                            "    {} - {} ({} nodes)\n",
-                            slug, name, node_count
+                            "    <span class=\"wf-status-{}\">{}</span> {} - {} ({} nodes) [{}]\n",
+                            if validation.is_valid { "ok" } else { "err" },
+                            status_icon, slug, name, node_count, status_text
                         ));
+
+                        // Show first few issues
+                        for err in validation.errors.iter().take(3) {
+                            workflows_html.push_str(&format!(
+                                "       <span class=\"error\">└─ {} {}</span>\n",
+                                err.code, err.message
+                            ));
+                        }
+                        for warn in validation.warnings.iter().take(2) {
+                            workflows_html.push_str(&format!(
+                                "       <span class=\"warning\">└─ {} {}</span>\n",
+                                warn.code, warn.message
+                            ));
+                        }
                     }
-                    Err(_) => {
-                        workflows_html.push_str(&format!("    {} (parse error)\n", file_name));
+                    Err(e) => {
+                        workflow_error_count += 1;
+                        workflows_html.push_str(&format!(
+                            "    <span class=\"wf-status-err\">✗</span> {} <span class=\"error\">(parse error: {})</span>\n",
+                            file_name,
+                            e.to_string().lines().next().unwrap_or("unknown error")
+                        ));
                     }
                 }
             }
@@ -223,6 +284,21 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
     if workflows_html.is_empty() {
         workflows_html = "    (none)\n".to_string();
     }
+
+    // Build workflow summary
+    let workflow_summary = if workflow_count > 0 {
+        format!("{} found — <span class=\"status\">{} valid</span>{}",
+            workflow_count,
+            workflow_valid_count,
+            if workflow_error_count > 0 {
+                format!(", <span class=\"error\">{} with errors</span>", workflow_error_count)
+            } else {
+                "".to_string()
+            }
+        )
+    } else {
+        "0 found".to_string()
+    };
 
     let html = format!(r#"<!DOCTYPE html>
 <html>
@@ -236,6 +312,10 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
         pre {{ background: #2d2d2d; padding: 15px; border-radius: 5px; overflow-x: auto; }}
         .status {{ color: #4CAF50; }}
         .label {{ color: #888; }}
+        .error {{ color: #ef5350; }}
+        .warning {{ color: #ffa726; }}
+        .wf-status-ok {{ color: #4CAF50; }}
+        .wf-status-err {{ color: #ef5350; }}
     </style>
 </head>
 <body>
@@ -259,16 +339,17 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
 <pre>
 {}</pre>
 
-<h2>Workflows ({} found)</h2>
+<h2>Workflows ({})</h2>
 <pre>
 {}</pre>
 
 <h2>API Endpoints</h2>
 <pre>
-    GET  /              - This dashboard
-    GET  /api/agents    - List agents
-    GET  /api/prompts   - List prompts
-    POST /api/chat      - Chat endpoint (jug0 compatible)
+    GET  /               - This dashboard
+    GET  /api/agents     - List agents
+    GET  /api/prompts    - List prompts
+    GET  /api/workflows  - List workflows (with validation)
+    POST /api/chat       - Chat endpoint (jug0 compatible)
 </pre>
 
 </body>
@@ -284,7 +365,7 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
         prompts_html,
         agent_registry.keys().len(),
         agents_html,
-        workflows_html.lines().filter(|l| !l.trim().is_empty() && l.trim() != "(none)").count(),
+        workflow_summary,
         workflows_html,
     );
 
@@ -308,6 +389,7 @@ pub async fn start_web_server(host: String, port: u16, project_root: PathBuf) ->
         .route("/", get(dashboard))
         .route("/api/agents", get(list_local_agents))
         .route("/api/prompts", get(list_local_prompts))
+        .route("/api/workflows", get(list_local_workflows))
         .route("/api/chat", post(handle_chat))
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
@@ -327,6 +409,7 @@ pub async fn start_web_server(host: String, port: u16, project_root: PathBuf) ->
     info!("🔌 Endpoints (Jug0 Compatible):");
     info!("   - GET  /api/agents");
     info!("   - GET  /api/prompts");
+    info!("   - GET  /api/workflows");
     info!("   - POST /api/chat");
     info!("--------------------------------------------------");
 
@@ -404,6 +487,71 @@ async fn list_local_prompts(
         },
         Err(e) => warn!("❌ Failed to scan prompts: {}", e),
     }
+    Json(results)
+}
+
+async fn list_local_workflows(
+    Extension(state): Extension<Arc<WebState>>,
+    Query(params): Query<WorkflowQuery>,
+) -> Json<Vec<WorkflowApiModel>> {
+    let pattern = params.pattern.unwrap_or_else(|| "**/*.jgflow".to_string());
+    let full_pattern = state.project_root.join(&pattern).to_string_lossy().to_string();
+
+    let mut results = Vec::new();
+
+    if let Ok(paths) = glob::glob(&full_pattern) {
+        for entry in paths.flatten() {
+            if let Ok(content) = fs::read_to_string(&entry) {
+                let file_name = entry.file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+
+                match GraphParser::parse(&content) {
+                    Ok(graph) => {
+                        let validation = WorkflowValidator::validate(&graph);
+                        let slug = if graph.slug.is_empty() { file_name.clone() } else { graph.slug.clone() };
+
+                        // Collect issue messages
+                        let mut issues: Vec<String> = validation.errors.iter()
+                            .map(|e| format!("[{}] {}", e.code, e.message))
+                            .collect();
+                        issues.extend(validation.warnings.iter()
+                            .map(|w| format!("[{}] {}", w.code, w.message)));
+
+                        results.push(WorkflowApiModel {
+                            id: generate_deterministic_id(&slug),
+                            slug,
+                            name: if graph.name.is_empty() { file_name } else { graph.name },
+                            description: graph.description,
+                            node_count: graph.graph.node_count(),
+                            is_valid: validation.is_valid,
+                            errors: validation.error_count(),
+                            warnings: validation.warning_count(),
+                            issues,
+                            created_at: Utc::now().to_rfc3339(),
+                        });
+                    }
+                    Err(e) => {
+                        // Include failed parses with error info
+                        results.push(WorkflowApiModel {
+                            id: generate_deterministic_id(&file_name),
+                            slug: file_name.clone(),
+                            name: file_name,
+                            description: String::new(),
+                            node_count: 0,
+                            is_valid: false,
+                            errors: 1,
+                            warnings: 0,
+                            issues: vec![format!("[PARSE] {}", e.to_string().lines().next().unwrap_or("Parse error"))],
+                            created_at: Utc::now().to_rfc3339(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
     Json(results)
 }
 

@@ -30,6 +30,7 @@ use core::prompt_parser::PromptParser;
 use core::executor::WorkflowExecutor;
 use core::renderer::JwlRenderer;
 use core::context::WorkflowContext;
+use core::validator::WorkflowValidator;
 
 #[derive(Parser)]
 #[command(name = "juglans", author = "Juglans Team", version = "1.1")]
@@ -43,6 +44,26 @@ struct Cli {
     /// Direct input for prompt variables or agent messages
     #[arg(short, long)]
     input: Option<String>,
+
+    /// Enable verbose output
+    #[arg(short, long)]
+    verbose: bool,
+
+    /// Parse only, do not execute
+    #[arg(long)]
+    dry_run: bool,
+
+    /// Output result to file
+    #[arg(short, long)]
+    output: Option<PathBuf>,
+
+    /// Output format (text or json)
+    #[arg(long, default_value = "text")]
+    output_format: String,
+
+    /// Show agent/prompt info without executing
+    #[arg(long)]
+    info: bool,
 }
 
 #[derive(Subcommand)]
@@ -53,14 +74,48 @@ enum Commands {
     Install,
     /// Push resources to the server
     Apply { file: PathBuf },
-    /// Start local web server for development 
+    /// Validate syntax of .jgflow, .jgagent, .jgprompt files (like cargo check)
+    Check {
+        /// Path to check (file or directory, defaults to current directory)
+        path: Option<PathBuf>,
+        /// Show all issues including warnings
+        #[arg(long)]
+        all: bool,
+        /// Output format (text or json)
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
+    /// Start local web server for development
     Web {
-        // 【修改】改为 Option 以便检测是否传入了参数
         #[arg(short, long)]
         port: Option<u16>,
-        // 【新增】支持 host 参数
         #[arg(long)]
         host: Option<String>,
+    },
+    /// Pull resources from the server
+    Pull {
+        /// Resource slug to pull
+        slug: String,
+        /// Resource type (prompt, agent, workflow)
+        #[arg(long, short = 't')]
+        r#type: String,
+        /// Output directory
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// List resources on the server
+    List {
+        /// Resource type to list (prompt, agent, workflow)
+        #[arg(long, short = 't')]
+        r#type: Option<String>,
+    },
+    /// Delete a resource from the server
+    Delete {
+        /// Resource slug to delete
+        slug: String,
+        /// Resource type (prompt, agent, workflow)
+        #[arg(long, short = 't')]
+        r#type: String,
     },
 }
 
@@ -276,6 +331,309 @@ async fn handle_install() -> Result<()> {
     Ok(())
 }
 
+async fn handle_pull(slug: &str, resource_type: &str, output_dir: Option<&Path>) -> Result<()> {
+    let local_config = JuglansConfig::load()?;
+    let jug0_client = Jug0Client::new(&local_config);
+
+    let (content, filename) = jug0_client.pull_resource(slug, resource_type).await?;
+
+    let output_path = if let Some(dir) = output_dir {
+        dir.join(&filename)
+    } else {
+        PathBuf::from(&filename)
+    };
+
+    fs::write(&output_path, &content)?;
+    println!("✅ Pulled {} to {:?}", slug, output_path);
+    Ok(())
+}
+
+async fn handle_list(resource_type: Option<&str>) -> Result<()> {
+    let local_config = JuglansConfig::load()?;
+    let jug0_client = Jug0Client::new(&local_config);
+
+    let resources = jug0_client.list_resources(resource_type).await?;
+
+    if resources.is_empty() {
+        println!("No resources found.");
+    } else {
+        for resource in resources {
+            println!("  {} ({})", resource.slug, resource.resource_type);
+        }
+    }
+    Ok(())
+}
+
+async fn handle_delete(slug: &str, resource_type: &str) -> Result<()> {
+    let local_config = JuglansConfig::load()?;
+    let jug0_client = Jug0Client::new(&local_config);
+
+    jug0_client.delete_resource(slug, resource_type).await?;
+    println!("✅ Deleted {} ({})", slug, resource_type);
+    Ok(())
+}
+
+fn handle_check(path: Option<&Path>, show_all: bool, output_format: &str) -> Result<()> {
+    use glob::glob;
+
+    let check_path = path.map(|p| p.to_path_buf())
+        .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    // Determine patterns based on input
+    let patterns: Vec<String> = if check_path.is_file() {
+        vec![check_path.to_string_lossy().to_string()]
+    } else {
+        vec![
+            check_path.join("**/*.jgflow").to_string_lossy().to_string(),
+            check_path.join("**/*.jgagent").to_string_lossy().to_string(),
+            check_path.join("**/*.jgprompt").to_string_lossy().to_string(),
+        ]
+    };
+
+    let mut total_files = 0;
+    let mut valid_count = 0;
+    let mut error_count = 0;
+    let mut warning_count = 0;
+    let mut results: Vec<serde_json::Value> = Vec::new();
+
+    // Collect stats by type
+    let mut workflow_count = 0;
+    let mut agent_count = 0;
+    let mut prompt_count = 0;
+
+    println!("    \x1b[1;32mChecking\x1b[0m juglans files in {:?}\n", check_path);
+
+    // Collect all matching files
+    let mut all_paths: Vec<PathBuf> = Vec::new();
+    for pattern in &patterns {
+        if let Ok(paths) = glob(pattern) {
+            all_paths.extend(paths.flatten());
+        }
+    }
+
+    if all_paths.is_empty() {
+        println!("    \x1b[33mNo .jgflow, .jgagent, or .jgprompt files found\x1b[0m");
+        return Ok(());
+    }
+
+    for entry in all_paths {
+        total_files += 1;
+        let file_name = entry.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown");
+
+        let ext = entry.extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+
+        let relative_path = entry.strip_prefix(&check_path)
+            .unwrap_or(&entry)
+            .display()
+            .to_string();
+
+        let relative_path = if relative_path.is_empty() {
+            entry.file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown")
+                .to_string()
+        } else {
+            relative_path
+        };
+
+        match fs::read_to_string(&entry) {
+            Ok(content) => {
+                match ext {
+                    "jgflow" => {
+                        workflow_count += 1;
+                        match GraphParser::parse(&content) {
+                            Ok(graph) => {
+                                let validation = WorkflowValidator::validate(&graph);
+                                let slug = if graph.slug.is_empty() { file_name.to_string() } else { graph.slug.clone() };
+
+                                if output_format == "json" {
+                                    results.push(serde_json::json!({
+                                        "file": relative_path,
+                                        "type": "workflow",
+                                        "slug": slug,
+                                        "valid": validation.is_valid,
+                                        "errors": validation.errors,
+                                        "warnings": validation.warnings,
+                                    }));
+                                }
+
+                                if validation.is_valid {
+                                    valid_count += 1;
+                                    if validation.warning_count() > 0 {
+                                        warning_count += validation.warning_count();
+                                        if show_all {
+                                            println!("    \x1b[33mwarning\x1b[0m[workflow]: {} ({} warning(s))", relative_path, validation.warning_count());
+                                            for warn in &validation.warnings {
+                                                println!("      \x1b[33m-->\x1b[0m [{}] {}", warn.code, warn.message);
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    error_count += 1;
+                                    warning_count += validation.warning_count();
+                                    println!("    \x1b[1;31merror\x1b[0m[workflow]: {} ({} error(s), {} warning(s))",
+                                        relative_path, validation.error_count(), validation.warning_count());
+                                    for err in &validation.errors {
+                                        println!("      \x1b[31m-->\x1b[0m [{}] {}", err.code, err.message);
+                                    }
+                                    if show_all {
+                                        for warn in &validation.warnings {
+                                            println!("      \x1b[33m-->\x1b[0m [{}] {}", warn.code, warn.message);
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                error_count += 1;
+                                let err_msg = e.to_string().lines().next().unwrap_or("Parse error").to_string();
+                                println!("    \x1b[1;31merror\x1b[0m[workflow]: {} (parse failed)", relative_path);
+                                println!("      \x1b[31m-->\x1b[0m {}", err_msg);
+
+                                if output_format == "json" {
+                                    results.push(serde_json::json!({
+                                        "file": relative_path,
+                                        "type": "workflow",
+                                        "slug": file_name,
+                                        "valid": false,
+                                        "errors": [{"code": "PARSE", "message": err_msg}],
+                                        "warnings": [],
+                                    }));
+                                }
+                            }
+                        }
+                    }
+                    "jgagent" => {
+                        agent_count += 1;
+                        match AgentParser::parse(&content) {
+                            Ok(agent) => {
+                                valid_count += 1;
+                                if output_format == "json" {
+                                    results.push(serde_json::json!({
+                                        "file": relative_path,
+                                        "type": "agent",
+                                        "slug": agent.slug,
+                                        "valid": true,
+                                        "errors": [],
+                                        "warnings": [],
+                                    }));
+                                }
+                            }
+                            Err(e) => {
+                                error_count += 1;
+                                let err_msg = e.to_string().lines().next().unwrap_or("Parse error").to_string();
+                                println!("    \x1b[1;31merror\x1b[0m[agent]: {} (parse failed)", relative_path);
+                                println!("      \x1b[31m-->\x1b[0m {}", err_msg);
+
+                                if output_format == "json" {
+                                    results.push(serde_json::json!({
+                                        "file": relative_path,
+                                        "type": "agent",
+                                        "slug": file_name,
+                                        "valid": false,
+                                        "errors": [{"code": "PARSE", "message": err_msg}],
+                                        "warnings": [],
+                                    }));
+                                }
+                            }
+                        }
+                    }
+                    "jgprompt" => {
+                        prompt_count += 1;
+                        match PromptParser::parse(&content) {
+                            Ok(prompt) => {
+                                valid_count += 1;
+                                if output_format == "json" {
+                                    results.push(serde_json::json!({
+                                        "file": relative_path,
+                                        "type": "prompt",
+                                        "slug": prompt.slug,
+                                        "valid": true,
+                                        "errors": [],
+                                        "warnings": [],
+                                    }));
+                                }
+                            }
+                            Err(e) => {
+                                error_count += 1;
+                                let err_msg = e.to_string().lines().next().unwrap_or("Parse error").to_string();
+                                println!("    \x1b[1;31merror\x1b[0m[prompt]: {} (parse failed)", relative_path);
+                                println!("      \x1b[31m-->\x1b[0m {}", err_msg);
+
+                                if output_format == "json" {
+                                    results.push(serde_json::json!({
+                                        "file": relative_path,
+                                        "type": "prompt",
+                                        "slug": file_name,
+                                        "valid": false,
+                                        "errors": [{"code": "PARSE", "message": err_msg}],
+                                        "warnings": [],
+                                    }));
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Err(e) => {
+                error_count += 1;
+                println!("    \x1b[1;31merror\x1b[0m: {} (read failed: {})", relative_path, e);
+            }
+        }
+    }
+
+    println!();
+
+    if output_format == "json" {
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+            "total": total_files,
+            "valid": valid_count,
+            "errors": error_count,
+            "warnings": warning_count,
+            "by_type": {
+                "workflows": workflow_count,
+                "agents": agent_count,
+                "prompts": prompt_count,
+            },
+            "results": results,
+        }))?);
+    } else {
+        // Summary line like cargo check
+        if error_count > 0 {
+            println!("\x1b[1;31merror\x1b[0m: could not validate {} file(s) due to {} previous error(s)",
+                error_count, error_count);
+        }
+
+        if warning_count > 0 && error_count == 0 {
+            println!("\x1b[1;33mwarning\x1b[0m: {} warning(s) generated", warning_count);
+        }
+
+        // Build summary parts
+        let mut parts = Vec::new();
+        if workflow_count > 0 { parts.push(format!("{} workflow(s)", workflow_count)); }
+        if agent_count > 0 { parts.push(format!("{} agent(s)", agent_count)); }
+        if prompt_count > 0 { parts.push(format!("{} prompt(s)", prompt_count)); }
+        let summary = parts.join(", ");
+
+        if error_count == 0 && warning_count == 0 {
+            println!("    \x1b[1;32mFinished\x1b[0m checking {} - all valid", summary);
+        } else if error_count == 0 {
+            println!("    \x1b[1;32mFinished\x1b[0m checking {} - {} valid with warnings",
+                summary, valid_count);
+        }
+    }
+
+    if error_count > 0 {
+        std::process::exit(1);
+    }
+
+    Ok(())
+}
+
 async fn handle_apply(file_to_apply: &Path) -> Result<()> {
     let local_config = JuglansConfig::load()?;
     let jug0_api_ptr = Jug0Client::new(&local_config);
@@ -326,22 +684,34 @@ async fn main() -> Result<()> {
             Commands::Init { name } => handle_init(name)?,
             Commands::Install => handle_install().await?,
             Commands::Apply { file } => handle_apply(file).await?,
+            Commands::Check { path, all, format } => {
+                handle_check(path.as_deref(), *all, format)?;
+            }
             Commands::Web { port, host } => {
                 let current_dir = env::current_dir()?;
                 let root = find_project_root(&current_dir)?;
-                
+
                 // 1. 尝试加载配置
                 let config = JuglansConfig::load().ok();
-                
+
                 // 2. 决定 host (CLI > Config > Default)
                 let final_host = host.clone()
                     .or_else(|| config.as_ref().map(|c| c.server.host.clone()))
                     .unwrap_or_else(|| "127.0.0.1".to_string());
 
-                // 3. 决定 port (CLI > Config > Default)
-                let final_port = port.or_else(|| config.as_ref().map(|c| c.server.port)).unwrap_or(3000);
+                // 3. 决定 port (CLI > Config > Default: 8080)
+                let final_port = port.or_else(|| config.as_ref().map(|c| c.server.port)).unwrap_or(8080);
 
                 web_server::start_web_server(final_host, final_port, root).await?;
+            }
+            Commands::Pull { slug, r#type, output } => {
+                handle_pull(slug, r#type, output.as_deref()).await?;
+            }
+            Commands::List { r#type } => {
+                handle_list(r#type.as_deref()).await?;
+            }
+            Commands::Delete { slug, r#type } => {
+                handle_delete(slug, r#type).await?;
             }
         }
     } else if application_cli.file.is_some() {
