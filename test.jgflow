@@ -1,0 +1,28 @@
+name: "Example Workflow"
+version: "0.1.0"
+author: "Juglans User"
+
+prompts: [ "./prompts/*.jgprompt" ]
+
+entry: [input]
+exit: [output]
+
+# 1. 直接赋值 (JSON)
+[input]: { "task": "Learn JWL" }
+
+# 2. 调用 Agent
+[agent_process]: chat(
+    agent={ slug: "helper" },
+    message=p(
+        slug="demo",
+        variables={
+            "user_name": "Developer",
+            "task": $input.output.task
+        }
+    )
+)
+
+# 3. 输出结果
+[output]: notify(message=$agent_process.output)
+
+[input] -> [agent_process] -> [output]

@@ -1,0 +1,7 @@
+slug: "market-analyst"
+name: "Market Analyst"
+model: "deepseek-reasoner"
+temperature: 0.3
+system_prompt: p(slug="analyst_template")
+mcp: [ "JudgeMarket" ]
+skills: [ "tech_analysis", "news_aggregator" ]

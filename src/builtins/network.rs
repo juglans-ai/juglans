@@ -15,21 +15,46 @@ impl Tool for FetchUrl {
     async fn execute(&self, params: &HashMap<String, String>, _context: &WorkflowContext) -> Result<Option<Value>> {
         let url = params.get("url").ok_or_else(|| anyhow!("Missing param: url"))?;
         let method = params.get("method").map(|s| s.as_str()).unwrap_or("GET");
-        
+
         let client = reqwest::Client::new();
-        let res = match method {
-            "POST" => client.post(url).send().await?,
-            _ => client.get(url).send().await?,
+        let mut builder = match method.to_uppercase().as_str() {
+            "POST" => client.post(url),
+            "PUT" => client.put(url),
+            "DELETE" => client.delete(url),
+            "PATCH" => client.patch(url),
+            _ => client.get(url),
         };
-        
+
+        // Add custom headers if provided
+        if let Some(headers_json) = params.get("headers") {
+            let headers_str = headers_json.trim_matches('"');
+            if let Ok(headers_map) = serde_json::from_str::<HashMap<String, String>>(headers_str) {
+                for (key, value) in headers_map {
+                    builder = builder.header(&key, &value);
+                }
+            }
+        }
+
+        // Add request body if provided
+        if let Some(body) = params.get("body") {
+            let body_str = body.trim_matches('"');
+            builder = builder.body(body_str.to_string());
+        }
+
+        let res = builder.send().await?;
+
         let status = res.status().as_u16();
         let content = res.text().await?;
+
+        // Try to parse as JSON, otherwise return as string
+        let content_value: Value = serde_json::from_str(&content).unwrap_or(json!(content));
 
         Ok(Some(json!({
             "status": status,
             "method": method,
             "url": url,
-            "content": content
+            "content": content_value,
+            "ok": status >= 200 && status < 300
         })))
     }
 }

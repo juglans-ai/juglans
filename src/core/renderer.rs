@@ -28,6 +28,48 @@ impl JwlRenderer {
             }
         });
 
+        // upper filter: convert string to uppercase
+        engine.register_fn("upper", |s: ImmutableString| {
+            s.to_uppercase()
+        });
+
+        // lower filter: convert string to lowercase
+        engine.register_fn("lower", |s: ImmutableString| {
+            s.to_lowercase()
+        });
+
+        // default filter: return fallback if value is empty/null
+        engine.register_fn("default", |s: ImmutableString, fallback: ImmutableString| -> String {
+            if s.is_empty() {
+                fallback.to_string()
+            } else {
+                s.to_string()
+            }
+        });
+
+        // default filter for Dynamic type
+        engine.register_fn("default", |val: Dynamic, fallback: ImmutableString| -> String {
+            if val.is_unit() {
+                fallback.to_string()
+            } else {
+                let s = val.to_string();
+                if s.is_empty() || s == "()" {
+                    fallback.to_string()
+                } else {
+                    s
+                }
+            }
+        });
+
+        // json filter: serialize value to JSON string
+        engine.register_fn("json", |val: Dynamic| -> String {
+            if let Ok(json_val) = rhai::serde::from_dynamic::<serde_json::Value>(&val) {
+                serde_json::to_string(&json_val).unwrap_or_else(|_| val.to_string())
+            } else {
+                val.to_string()
+            }
+        });
+
         Self { engine }
     }
 
@@ -77,15 +119,32 @@ impl JwlRenderer {
                         .map_err(|e| anyhow!("Interpolation error in '{}': {}", expr, e))?;
                     output.push_str(&result.to_string());
                 }
-                TemplateNode::If { condition, then_branch, else_branch } => {
+                TemplateNode::If { condition, then_branch, elif_branches, else_branch } => {
                     let processed = self.preprocess_expression(condition);
                     let cond_res = self.engine.eval_with_scope::<bool>(scope, &processed)
                         .map_err(|e| anyhow!("Condition error in '{}': {}", condition, e))?;
-                    
+
                     if cond_res {
                         output.push_str(&self.render_nodes(then_branch, scope)?);
-                    } else if let Some(eb) = else_branch {
-                        output.push_str(&self.render_nodes(eb, scope)?);
+                    } else {
+                        // Check elif branches
+                        let mut matched = false;
+                        for (elif_cond, elif_body) in elif_branches {
+                            let elif_processed = self.preprocess_expression(elif_cond);
+                            let elif_res = self.engine.eval_with_scope::<bool>(scope, &elif_processed)
+                                .map_err(|e| anyhow!("Elif condition error in '{}': {}", elif_cond, e))?;
+                            if elif_res {
+                                output.push_str(&self.render_nodes(elif_body, scope)?);
+                                matched = true;
+                                break;
+                            }
+                        }
+                        // If no elif matched, try else branch
+                        if !matched {
+                            if let Some(eb) = else_branch {
+                                output.push_str(&self.render_nodes(eb, scope)?);
+                            }
+                        }
                     }
                 }
                 TemplateNode::For { var_name, iterable_expr, body, else_branch } => {

@@ -42,6 +42,7 @@ frontmatter = { separator ~ meta_entry+ ~ separator }
 // --- Template Logic ---
 nl = _{ "\r\n" | "\n" }
 if_tag = { "{%" ~ inner_ws* ~ "if" ~ inner_ws+ ~ expression ~ inner_ws* ~ "%}" ~ nl? }
+elif_tag = { "{%" ~ inner_ws* ~ "elif" ~ inner_ws+ ~ expression ~ inner_ws* ~ "%}" ~ nl? }
 else_tag = { "{%" ~ inner_ws* ~ "else" ~ inner_ws* ~ "%}" ~ nl? }
 endif_tag = { "{%" ~ inner_ws* ~ "endif" ~ inner_ws* ~ "%}" ~ nl? }
 for_tag = { "{%" ~ inner_ws* ~ "for" ~ inner_ws+ ~ identifier ~ inner_ws+ ~ "in" ~ inner_ws+ ~ expression ~ inner_ws* ~ "%}" ~ nl? }
@@ -53,7 +54,8 @@ node = _{ for_block | if_block | interpolation | raw_text }
 inner_ws = _{ " " | "\t" | "\r" | "\n" }
 expression = @{ (!"}}" ~ !"%}" ~ ANY)+ }
 raw_text = @{ (!"{{" ~ !"{%" ~ ANY)+ }
-if_block = { if_tag ~ body ~ (else_tag ~ body)? ~ endif_tag }
+elif_branch = { elif_tag ~ body }
+if_block = { if_tag ~ body ~ elif_branch* ~ (else_tag ~ body)? ~ endif_tag }
 for_block = { for_tag ~ body ~ (else_tag ~ body)? ~ endfor_tag }
 
 prompt_file = { SOI ~ frontmatter ~ body ~ EOI }

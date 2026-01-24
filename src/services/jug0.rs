@@ -41,6 +41,13 @@ struct WorkflowResponse {
     id: Uuid,
 }
 
+/// Resource info for listing
+#[derive(Debug)]
+pub struct ResourceInfo {
+    pub slug: String,
+    pub resource_type: String,
+}
+
 #[derive(Clone)]
 pub struct Jug0Client {
     http: Client,
@@ -51,12 +58,12 @@ pub struct Jug0Client {
 impl Jug0Client {
     pub fn new(config: &JuglansConfig) -> Self {
         let http_client = Client::builder()
-            .timeout(Duration::from_secs(120)) 
+            .timeout(Duration::from_secs(120))
             .build()
             .expect("Failed to build HTTP client for Jug0 communication.");
 
         let base_url_str = config.jug0.base_url.trim_end_matches('/').to_string();
-        
+
         let api_key_str = config.account.api_key.clone()
             .or_else(|| std::env::var("JUGLANS_API_KEY").ok())
             .unwrap_or_default();
@@ -68,11 +75,29 @@ impl Jug0Client {
         }
     }
 
+    /// Check if slug is in owner/slug format (GitHub-style)
+    fn is_owner_slug_format(slug: &str) -> bool {
+        slug.contains('/') && !slug.starts_with('/') && !slug.ends_with('/')
+    }
+
+    /// Build URL for resource lookup, supporting both formats:
+    /// - Simple slug: `/api/prompts/:slug` (legacy)
+    /// - Owner/slug: `/api/r/:owner/:slug` (GitHub-style)
+    fn build_resource_url(&self, slug: &str, resource_type: &str) -> String {
+        if Self::is_owner_slug_format(slug) {
+            // GitHub-style: /api/r/:owner/:slug
+            format!("{}/api/r/{}", self.base_url, slug)
+        } else {
+            // Legacy: /api/{resource_type}/:slug
+            format!("{}/api/{}/{}", self.base_url, resource_type, slug)
+        }
+    }
+
     pub async fn get_prompt_id(&self, slug: &str) -> Result<Uuid> {
-        let url = format!("{}/api/prompts/{}", self.base_url, slug);
+        let url = self.build_resource_url(slug, "prompts");
         let res = self.http.get(&url).header("X-API-KEY", &self.api_key).send().await?;
-        if !res.status().is_success() { 
-            return Err(anyhow!("Remote Resource Not Found: Prompt '{}' is missing.", slug)); 
+        if !res.status().is_success() {
+            return Err(anyhow!("Remote Resource Not Found: Prompt '{}' is missing.", slug));
         }
         let body: PromptResponse = res.json().await?;
         Ok(body.id)
@@ -138,6 +163,121 @@ impl Jug0Client {
         }
     }
 
+    /// Pull a resource from the server
+    pub async fn pull_resource(&self, slug: &str, resource_type: &str) -> Result<(String, String)> {
+        let endpoint = match resource_type {
+            "prompt" => "prompts",
+            "agent" => "agents",
+            "workflow" => "workflows",
+            _ => return Err(anyhow!("Unknown resource type: {}", resource_type)),
+        };
+
+        let url = format!("{}/api/{}/{}", self.base_url, endpoint, slug);
+        let res = self.http.get(&url)
+            .header("X-API-KEY", &self.api_key)
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            return Err(anyhow!("Resource not found: {} ({})", slug, resource_type));
+        }
+
+        let body: Value = res.json().await?;
+
+        let (content, ext) = match resource_type {
+            "prompt" => {
+                let content = body.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                let inputs = body.get("input_variables").cloned().unwrap_or(json!({}));
+                let name = body.get("name").and_then(|v| v.as_str()).unwrap_or(slug);
+                let formatted = format!(
+                    "---\nslug: \"{}\"\nname: \"{}\"\ninputs: {}\n---\n{}",
+                    slug, name, serde_json::to_string_pretty(&inputs)?, content
+                );
+                (formatted, "jgprompt")
+            }
+            "agent" => {
+                let name = body.get("name").and_then(|v| v.as_str()).unwrap_or(slug);
+                let model = body.get("default_model").and_then(|v| v.as_str()).unwrap_or("gpt-4o");
+                let temp = body.get("temperature").and_then(|v| v.as_f64()).unwrap_or(0.7);
+                let formatted = format!(
+                    "slug: \"{}\"\nname: \"{}\"\nmodel: \"{}\"\ntemperature: {}\nsystem_prompt: \"\"",
+                    slug, name, model, temp
+                );
+                (formatted, "jgagent")
+            }
+            "workflow" => {
+                let definition = body.get("definition").and_then(|v| v.as_str()).unwrap_or("");
+                (definition.to_string(), "jgflow")
+            }
+            _ => unreachable!(),
+        };
+
+        let filename = format!("{}.{}", slug, ext);
+        Ok((content, filename))
+    }
+
+    /// List resources from the server
+    pub async fn list_resources(&self, resource_type: Option<&str>) -> Result<Vec<ResourceInfo>> {
+        let mut all_resources = Vec::new();
+
+        let types = if let Some(t) = resource_type {
+            vec![t]
+        } else {
+            vec!["prompt", "agent", "workflow"]
+        };
+
+        for rt in types {
+            let endpoint = match rt {
+                "prompt" => "prompts",
+                "agent" => "agents",
+                "workflow" => "workflows",
+                _ => continue,
+            };
+
+            let url = format!("{}/api/{}", self.base_url, endpoint);
+            let res = self.http.get(&url)
+                .header("X-API-KEY", &self.api_key)
+                .send()
+                .await?;
+
+            if res.status().is_success() {
+                let items: Vec<Value> = res.json().await?;
+                for item in items {
+                    if let Some(slug) = item.get("slug").and_then(|v| v.as_str()) {
+                        all_resources.push(ResourceInfo {
+                            slug: slug.to_string(),
+                            resource_type: rt.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(all_resources)
+    }
+
+    /// Delete a resource from the server
+    pub async fn delete_resource(&self, slug: &str, resource_type: &str) -> Result<()> {
+        let endpoint = match resource_type {
+            "prompt" => "prompts",
+            "agent" => "agents",
+            "workflow" => "workflows",
+            _ => return Err(anyhow!("Unknown resource type: {}", resource_type)),
+        };
+
+        let url = format!("{}/api/{}/{}", self.base_url, endpoint, slug);
+        let res = self.http.delete(&url)
+            .header("X-API-KEY", &self.api_key)
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            return Err(anyhow!("Failed to delete {} ({}): {}", slug, resource_type, res.status()));
+        }
+
+        Ok(())
+    }
+
     /// 注册 workflow 到 jug0
     pub async fn apply_workflow(&self, workflow: &WorkflowGraph, definition: &str, endpoint_url: &str) -> Result<String> {
         let url_get = format!("{}/api/workflows/{}", self.base_url, workflow.slug);
@@ -168,19 +308,29 @@ impl Jug0Client {
 #[async_trait]
 impl JuglansRuntime for Jug0Client {
     async fn fetch_prompt(&self, slug: &str) -> Result<String> {
-        let url = format!("{}/api/prompts/{}", self.base_url, slug);
+        let url = self.build_resource_url(slug, "prompts");
         let res = self.http.get(&url).header("X-API-KEY", &self.api_key).send().await?;
-        
-        if !res.status().is_success() { 
-            return Err(anyhow!("Jug0 Network Error (Fetch Prompt): {}", res.status())); 
+
+        if !res.status().is_success() {
+            return Err(anyhow!("Jug0 Network Error (Fetch Prompt '{}'): {}", slug, res.status()));
         }
 
         let body: Value = res.json().await?;
-        let content = body.get("content")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow!("Data Corruption: 'content' field missing in prompt metadata."))?;
-            
-        Ok(content.to_string())
+
+        // Handle both legacy response and GitHub-style unified resource response
+        let content = if Self::is_owner_slug_format(slug) {
+            // GitHub-style: response has type field and nested prompt data
+            body.get("content")
+                .or_else(|| body.get("prompt").and_then(|p| p.get("content")))
+                .and_then(|v| v.as_str())
+        } else {
+            // Legacy: direct content field
+            body.get("content").and_then(|v| v.as_str())
+        };
+
+        content
+            .map(|s| s.to_string())
+            .ok_or_else(|| anyhow!("Data Corruption: 'content' field missing in prompt metadata."))
     }
 
     async fn search_memories(&self, query: &str, limit: u64) -> Result<Vec<Value>> {

@@ -17,6 +17,7 @@ pub enum TemplateNode {
     If {
         condition: String,
         then_branch: Vec<TemplateNode>,
+        elif_branches: Vec<(String, Vec<TemplateNode>)>,
         else_branch: Option<Vec<TemplateNode>>,
     },
     For {
@@ -91,18 +92,37 @@ impl PromptParser {
                 }
                 Rule::if_block => {
                     let mut it = inner.into_inner();
-                    let header = it.next().unwrap(); 
+                    let header = it.next().unwrap();
                     let cond = header.into_inner()
                         .find(|p| p.as_rule() == Rule::expression)
                         .unwrap().as_str().trim().to_string();
                     let then_nodes = Self::parse_body_to_ast(it.next().unwrap())?;
+                    let mut elif_branches = Vec::new();
                     let mut else_nodes = None;
+
                     while let Some(next) = it.next() {
-                        if next.as_rule() == Rule::else_tag {
-                            else_nodes = Some(Self::parse_body_to_ast(it.next().unwrap())?);
+                        match next.as_rule() {
+                            Rule::elif_branch => {
+                                let mut elif_it = next.into_inner();
+                                let elif_tag = elif_it.next().unwrap();
+                                let elif_cond = elif_tag.into_inner()
+                                    .find(|p| p.as_rule() == Rule::expression)
+                                    .unwrap().as_str().trim().to_string();
+                                let elif_body = Self::parse_body_to_ast(elif_it.next().unwrap())?;
+                                elif_branches.push((elif_cond, elif_body));
+                            }
+                            Rule::else_tag => {
+                                else_nodes = Some(Self::parse_body_to_ast(it.next().unwrap())?);
+                            }
+                            _ => {}
                         }
                     }
-                    nodes.push(TemplateNode::If { condition: cond, then_branch: then_nodes, else_branch: else_nodes });
+                    nodes.push(TemplateNode::If {
+                        condition: cond,
+                        then_branch: then_nodes,
+                        elif_branches,
+                        else_branch: else_nodes,
+                    });
                 }
                 Rule::for_block => {
                     let mut it = inner.into_inner();

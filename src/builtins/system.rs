@@ -11,10 +11,18 @@ pub struct Timer;
 impl Tool for Timer {
     fn name(&self) -> &str { "timer" }
     async fn execute(&self, params: &HashMap<String, String>, _context: &WorkflowContext) -> Result<Option<Value>> {
-        let seconds: u64 = params.get("seconds").and_then(|s| s.parse().ok()).unwrap_or(1);
-        println!("⏳ Sleeping for {} seconds...", seconds);
-        tokio::time::sleep(tokio::time::Duration::from_secs(seconds)).await;
-        Ok(Some(json!({ "status": "finished", "duration": seconds })))
+        // Support both 'ms' (preferred) and 'seconds' (backward compatible)
+        let duration_ms: u64 = if let Some(ms) = params.get("ms") {
+            ms.parse().unwrap_or(1000)
+        } else if let Some(secs) = params.get("seconds") {
+            secs.parse::<u64>().unwrap_or(1) * 1000
+        } else {
+            1000 // default 1 second
+        };
+
+        println!("⏳ Sleeping for {} ms...", duration_ms);
+        tokio::time::sleep(tokio::time::Duration::from_millis(duration_ms)).await;
+        Ok(Some(json!({ "status": "finished", "duration_ms": duration_ms })))
     }
 }
 

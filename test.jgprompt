@@ -1,0 +1,31 @@
+---
+slug: "crypto_analyst"
+name: "加密货币分析师技能"
+type: "skill"
+description: "分析 K 线并给出建议"
+inputs:
+  symbol: "BTC"
+  timeframe: "4h"
+  show_indicators: true
+  indicators: {"rsi": 72.5, "macd": "bullish"}
+  latest_news: [
+    {"title": "Bitcoin breaks $100k", "content": "..."},
+    {"title": "New ETF approved", "content": "..."}
+  ]
+---
+# 内容区开始
+你是一名专业的交易员。正在分析 {{ symbol }} 的 {{ timeframe }} 走势。
+
+{% if show_indicators %}
+## 当前技术指标如下：
+- RSI: {{ indicators.rsi | round(2) }}
+- MACD: {{ indicators.macd }}
+{% endif %}
+
+{% for news in latest_news %}
+### - 新闻[{{ loop.index }}]: {{ news.title | truncate(50) }}
+{% else %}
+暂时没有相关新闻。
+{% endfor %}
+
+请给出你的判断。
