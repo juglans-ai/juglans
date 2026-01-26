@@ -1,8 +1,8 @@
 // src/core/mod.rs
+pub mod agent_parser;
+pub mod context;
 pub mod graph;
 pub mod parser;
-pub mod context;
-pub mod agent_parser;
 pub mod prompt_parser;
 pub mod renderer;
 pub mod validator;

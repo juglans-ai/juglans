@@ -1,8 +1,8 @@
 // src/core/agent_parser.rs
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use pest::Parser;
 use pest_derive::Parser;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 #[derive(Parser)]
 #[grammar = "core/agent.pest"]
@@ -15,8 +15,8 @@ pub struct AgentResource {
     pub description: Option<String>,
     pub model: String,
     pub temperature: Option<f64>,
-    pub system_prompt: String,      
-    pub system_prompt_slug: Option<String>, 
+    pub system_prompt: String,
+    pub system_prompt_slug: Option<String>,
     pub workflow: Option<String>, // 【新增】
     pub mcp: Vec<String>,
     pub skills: Vec<String>,
@@ -43,7 +43,7 @@ impl AgentParser {
                 Rule::key_temp => {
                     let val_str = pair.into_inner().next().unwrap().as_str();
                     agent.temperature = Some(val_str.parse().unwrap_or(0.7));
-                },
+                }
                 Rule::key_mcp => agent.mcp = Self::parse_list(pair),
                 Rule::key_skills => agent.skills = Self::parse_list(pair),
                 Rule::key_system => {
@@ -52,19 +52,27 @@ impl AgentParser {
                         agent.system_prompt = inner.as_str().trim_matches('"').to_string();
                     } else if inner.as_rule() == Rule::p_func {
                         let slug_node = inner.into_inner().next().unwrap();
-                        agent.system_prompt_slug = Some(slug_node.as_str().trim_matches('"').to_string());
+                        agent.system_prompt_slug =
+                            Some(slug_node.as_str().trim_matches('"').to_string());
                     }
                 }
                 _ => {}
             }
         }
 
-        if agent.slug.is_empty() { return Err(anyhow!("Agent must have a 'slug' field")); }
+        if agent.slug.is_empty() {
+            return Err(anyhow!("Agent must have a 'slug' field"));
+        }
         Ok(agent)
     }
 
     fn parse_string(pair: pest::iterators::Pair<Rule>) -> String {
-        pair.into_inner().next().unwrap().as_str().trim_matches('"').to_string()
+        pair.into_inner()
+            .next()
+            .unwrap()
+            .as_str()
+            .trim_matches('"')
+            .to_string()
     }
 
     fn parse_list(pair: pest::iterators::Pair<Rule>) -> Vec<String> {

@@ -1,9 +1,9 @@
 // src/services/agent_loader.rs
+use anyhow::{anyhow, Result};
+use glob::glob;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use anyhow::{Result, anyhow};
-use glob::glob;
 use tracing::{info, warn};
 
 use crate::core::agent_parser::{AgentParser, AgentResource};
@@ -25,7 +25,8 @@ impl AgentRegistry {
     /// 根据配置的 glob patterns 加载本地 agents
     pub fn load_from_paths(&mut self, patterns: &[String]) -> Result<()> {
         for pattern in patterns {
-            let paths = glob(pattern).map_err(|e| anyhow!("Invalid glob pattern '{}': {}", pattern, e))?;
+            let paths =
+                glob(pattern).map_err(|e| anyhow!("Invalid glob pattern '{}': {}", pattern, e))?;
 
             for entry in paths {
                 match entry {
@@ -72,7 +73,7 @@ impl AgentRegistry {
     pub fn get_with_path(&self, slug: &str) -> Option<(&AgentResource, &PathBuf)> {
         self.agents.get(slug).map(|(a, p)| (a, p))
     }
-    
+
     /// 获取所有加载的 Slug
     pub fn keys(&self) -> Vec<String> {
         self.agents.keys().cloned().collect()

@@ -1,10 +1,10 @@
 // src/core/validator.rs
-use std::collections::{HashSet, HashMap};
 use petgraph::algo::{is_cyclic_directed, toposort};
 use petgraph::Direction;
 use serde::Serialize;
+use std::collections::{HashMap, HashSet};
 
-use crate::core::graph::{WorkflowGraph, NodeType};
+use crate::core::graph::{NodeType, WorkflowGraph};
 
 #[derive(Debug, Clone, Serialize)]
 pub enum ValidationSeverity {
@@ -108,7 +108,10 @@ impl WorkflowValidator {
         } else if !graph.node_map.contains_key(&graph.entry_node) {
             result.add_error(
                 "E001",
-                &format!("Entry node '{}' does not exist in the graph", graph.entry_node),
+                &format!(
+                    "Entry node '{}' does not exist in the graph",
+                    graph.entry_node
+                ),
                 Some(&graph.entry_node),
             );
         }
@@ -124,7 +127,10 @@ impl WorkflowValidator {
                     let node = &graph.graph[cycle.node_id()];
                     result.add_error(
                         "E002",
-                        &format!("Cycle detected involving node '{}'. Workflows must be acyclic (DAG).", node.id),
+                        &format!(
+                            "Cycle detected involving node '{}'. Workflows must be acyclic (DAG).",
+                            node.id
+                        ),
                         Some(&node.id),
                     );
                 }
@@ -141,7 +147,10 @@ impl WorkflowValidator {
         // Find entry node index
         let entry_id = if graph.entry_node.is_empty() {
             // Use first node
-            graph.graph.node_indices().next()
+            graph
+                .graph
+                .node_indices()
+                .next()
                 .map(|idx| graph.graph[idx].id.clone())
                 .unwrap_or_default()
         } else {
@@ -192,8 +201,16 @@ impl WorkflowValidator {
 
         // If no exit nodes defined, check for terminal nodes (no outgoing edges)
         if graph.exit_nodes.is_empty() && graph.graph.node_count() > 0 {
-            let terminal_nodes: Vec<_> = graph.graph.node_indices()
-                .filter(|&idx| graph.graph.neighbors_directed(idx, Direction::Outgoing).count() == 0)
+            let terminal_nodes: Vec<_> = graph
+                .graph
+                .node_indices()
+                .filter(|&idx| {
+                    graph
+                        .graph
+                        .neighbors_directed(idx, Direction::Outgoing)
+                        .count()
+                        == 0
+                })
                 .map(|idx| graph.graph[idx].id.clone())
                 .collect();
 
@@ -210,11 +227,7 @@ impl WorkflowValidator {
     /// Check if workflow is empty
     fn check_empty_workflow(graph: &WorkflowGraph, result: &mut ValidationResult) {
         if graph.graph.node_count() == 0 {
-            result.add_error(
-                "E004",
-                "Workflow contains no nodes",
-                None,
-            );
+            result.add_error("E004", "Workflow contains no nodes", None);
         }
     }
 
@@ -223,18 +236,36 @@ impl WorkflowValidator {
         // Known built-in tools
         let known_tools: HashSet<&str> = [
             // Core AI tools
-            "chat", "prompt", "p",
+            "chat",
+            "prompt",
+            "p",
             // HTTP & IO
-            "http", "log", "emit",
+            "http",
+            "log",
+            "emit",
             // Context & State
-            "set", "get", "script",
+            "set",
+            "get",
+            "script",
             // Control flow
-            "if", "switch", "parallel", "sleep", "retry", "cache",
+            "if",
+            "switch",
+            "parallel",
+            "sleep",
+            "retry",
+            "cache",
             // Data transformation
-            "json_parse", "json_stringify", "template", "transform", "render",
+            "json_parse",
+            "json_stringify",
+            "template",
+            "transform",
+            "render",
             // Notifications
             "notify",
-        ].iter().copied().collect();
+        ]
+        .iter()
+        .copied()
+        .collect();
 
         for idx in graph.graph.node_indices() {
             let node = &graph.graph[idx];
@@ -244,7 +275,10 @@ impl WorkflowValidator {
                 if !known_tools.contains(action.name.as_str()) {
                     result.add_warning(
                         "W004",
-                        &format!("Unknown tool '{}'. Ensure it's defined in MCP servers or libs.", action.name),
+                        &format!(
+                            "Unknown tool '{}'. Ensure it's defined in MCP servers or libs.",
+                            action.name
+                        ),
                         Some(&node.id),
                     );
                 }
@@ -283,11 +317,7 @@ impl WorkflowValidator {
             }
             "http" => {
                 if !params.contains_key("url") {
-                    result.add_error(
-                        "E006",
-                        "http tool requires 'url' parameter",
-                        Some(node_id),
-                    );
+                    result.add_error("E006", "http tool requires 'url' parameter", Some(node_id));
                 }
             }
             _ => {}
@@ -348,14 +378,13 @@ mod tests {
     #[test]
     fn test_valid_workflow() {
         let content = r#"
-slug: "test"
 name: "Test Workflow"
 entry: [start]
 
-[start] = chat(agent="default", message="hello")
-[end] = log(message="done")
+[start]: chat(agent="default", message="hello")
+[end]: log(message="done")
 
-start -> end
+[start] -> [end]
 "#;
         let graph = GraphParser::parse(content).unwrap();
         let result = WorkflowValidator::validate(&graph);
@@ -365,10 +394,10 @@ start -> end
     #[test]
     fn test_missing_entry() {
         let content = r#"
-slug: "test"
+name: "Test Workflow"
 entry: [missing]
 
-[start] = chat(agent="default")
+[start]: chat(agent="default")
 "#;
         let graph = GraphParser::parse(content).unwrap();
         let result = WorkflowValidator::validate(&graph);

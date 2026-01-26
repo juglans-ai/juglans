@@ -2,38 +2,41 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use axum::{
-    routing::{get, post},
     extract::{Extension, Query},
-    response::{sse::{Event, Sse}, Html},
+    response::{
+        sse::{Event, Sse},
+        Html,
+    },
+    routing::{get, post},
     Json, Router,
 };
-use tower_http::cors::CorsLayer;
-use tower_http::trace::TraceLayer; 
-use std::sync::Arc;
-use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
-use std::fs;
-use tracing::{info, debug, warn, error}; 
+use chrono::{DateTime, Utc};
+use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use futures::{Stream, StreamExt}; 
+use std::fs;
+use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
+use tower_http::cors::CorsLayer;
+use tower_http::trace::TraceLayer;
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
-use chrono::{Utc, DateTime};
-use std::time::Instant;
 
-use crate::services::agent_loader::AgentRegistry;
-use crate::services::prompt_loader::PromptRegistry;
-use crate::services::config::JuglansConfig;
-use crate::services::jug0::Jug0Client;
-use crate::services::interface::JuglansRuntime;
-use crate::core::agent_parser::{AgentResource, AgentParser};
-use crate::core::prompt_parser::{PromptResource, PromptParser};
-use crate::core::executor::WorkflowExecutor;
+use crate::core::agent_parser::{AgentParser, AgentResource};
 use crate::core::context::{WorkflowContext, WorkflowEvent};
+use crate::core::executor::WorkflowExecutor;
 use crate::core::parser::GraphParser;
+use crate::core::prompt_parser::{PromptParser, PromptResource};
 use crate::core::validator::WorkflowValidator;
+use crate::services::agent_loader::AgentRegistry;
+use crate::services::config::JuglansConfig;
+use crate::services::interface::JuglansRuntime;
+use crate::services::jug0::Jug0Client;
+use crate::services::prompt_loader::PromptRegistry;
 
 // --- API Models (兼容 Jug0) ---
 
@@ -45,7 +48,7 @@ pub struct AgentApiModel {
     pub name: String,
     pub description: Option<String>,
     // 简化处理：本地没有 system_prompt_id，这里填空或造一个
-    pub system_prompt_id: Option<Uuid>, 
+    pub system_prompt_id: Option<Uuid>,
     pub default_model: String,
     pub temperature: Option<f64>,
     pub skills: Option<Vec<String>>,
@@ -178,7 +181,11 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
 
     // 扫描 prompts
     let mut prompt_registry = PromptRegistry::new();
-    let prompt_pattern = state.project_root.join("**/*.jgprompt").to_string_lossy().to_string();
+    let prompt_pattern = state
+        .project_root
+        .join("**/*.jgprompt")
+        .to_string_lossy()
+        .to_string();
     let _ = prompt_registry.load_from_paths(&[prompt_pattern]);
 
     let mut prompts_html = String::new();
@@ -198,13 +205,21 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
 
     // 扫描 agents
     let mut agent_registry = AgentRegistry::new();
-    let agent_pattern = state.project_root.join("**/*.jgagent").to_string_lossy().to_string();
+    let agent_pattern = state
+        .project_root
+        .join("**/*.jgagent")
+        .to_string_lossy()
+        .to_string();
     let _ = agent_registry.load_from_paths(&[agent_pattern]);
 
     let mut agents_html = String::new();
     for key in agent_registry.keys() {
         if let Some(agent) = agent_registry.get(&key) {
-            let wf_info = agent.workflow.as_ref().map(|w| format!(" [workflow: {}]", w)).unwrap_or_default();
+            let wf_info = agent
+                .workflow
+                .as_ref()
+                .map(|w| format!(" [workflow: {}]", w))
+                .unwrap_or_default();
             agents_html.push_str(&format!(
                 "    {} - {} (model: {}){}\n",
                 agent.slug, agent.name, agent.model, wf_info
@@ -216,7 +231,11 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
     }
 
     // 扫描 workflows
-    let workflow_pattern = state.project_root.join("**/*.jgflow").to_string_lossy().to_string();
+    let workflow_pattern = state
+        .project_root
+        .join("**/*.jgflow")
+        .to_string_lossy()
+        .to_string();
     let mut workflows_html = String::new();
     let mut workflow_count = 0;
     let mut workflow_valid_count = 0;
@@ -225,13 +244,24 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
     if let Ok(paths) = glob::glob(&workflow_pattern) {
         for entry in paths.flatten() {
             if let Ok(content) = fs::read_to_string(&entry) {
-                let file_name = entry.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown");
+                let file_name = entry
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("unknown");
                 workflow_count += 1;
 
                 match GraphParser::parse(&content) {
                     Ok(graph) => {
-                        let slug = if graph.slug.is_empty() { file_name.to_string() } else { graph.slug.clone() };
-                        let name = if graph.name.is_empty() { "-".to_string() } else { graph.name.clone() };
+                        let slug = if graph.slug.is_empty() {
+                            file_name.to_string()
+                        } else {
+                            graph.slug.clone()
+                        };
+                        let name = if graph.name.is_empty() {
+                            "-".to_string()
+                        } else {
+                            graph.name.clone()
+                        };
                         let node_count = graph.graph.node_count();
 
                         // Run validation
@@ -245,14 +275,24 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
                             }
                         } else {
                             workflow_error_count += 1;
-                            ("✗", format!("{} error(s), {} warning(s)",
-                                validation.error_count(), validation.warning_count()))
+                            (
+                                "✗",
+                                format!(
+                                    "{} error(s), {} warning(s)",
+                                    validation.error_count(),
+                                    validation.warning_count()
+                                ),
+                            )
                         };
 
                         workflows_html.push_str(&format!(
                             "    <span class=\"wf-status-{}\">{}</span> {} - {} ({} nodes) [{}]\n",
                             if validation.is_valid { "ok" } else { "err" },
-                            status_icon, slug, name, node_count, status_text
+                            status_icon,
+                            slug,
+                            name,
+                            node_count,
+                            status_text
                         ));
 
                         // Show first few issues
@@ -287,11 +327,15 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
 
     // Build workflow summary
     let workflow_summary = if workflow_count > 0 {
-        format!("{} found — <span class=\"status\">{} valid</span>{}",
+        format!(
+            "{} found — <span class=\"status\">{} valid</span>{}",
             workflow_count,
             workflow_valid_count,
             if workflow_error_count > 0 {
-                format!(", <span class=\"error\">{} with errors</span>", workflow_error_count)
+                format!(
+                    ", <span class=\"error\">{} with errors</span>",
+                    workflow_error_count
+                )
             } else {
                 "".to_string()
             }
@@ -300,7 +344,8 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
         "0 found".to_string()
     };
 
-    let html = format!(r#"<!DOCTYPE html>
+    let html = format!(
+        r#"<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
@@ -372,7 +417,11 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
     Html(html)
 }
 
-pub async fn start_web_server(host: String, port: u16, project_root: PathBuf) -> anyhow::Result<()> {
+pub async fn start_web_server(
+    host: String,
+    port: u16,
+    project_root: PathBuf,
+) -> anyhow::Result<()> {
     let config = JuglansConfig::load().ok();
 
     let state = Arc::new(WebState {
@@ -381,7 +430,10 @@ pub async fn start_web_server(host: String, port: u16, project_root: PathBuf) ->
         start_datetime: Utc::now(),
         host: host.clone(),
         port,
-        jug0_base_url: config.as_ref().map(|c| c.jug0.base_url.clone()).unwrap_or_else(|| "N/A".to_string()),
+        jug0_base_url: config
+            .as_ref()
+            .map(|c| c.jug0.base_url.clone())
+            .unwrap_or_else(|| "N/A".to_string()),
         mcp_server_count: config.as_ref().map(|c| c.mcp_servers.len()).unwrap_or(0),
     });
 
@@ -401,7 +453,7 @@ pub async fn start_web_server(host: String, port: u16, project_root: PathBuf) ->
     });
 
     let addr = SocketAddr::from((ip_addr, port));
-    
+
     info!("--------------------------------------------------");
     info!("✨ Juglans Web Services Initialized");
     info!("📡 Listening on: http://{}", addr);
@@ -423,10 +475,15 @@ pub async fn start_web_server(host: String, port: u16, project_root: PathBuf) ->
 async fn list_local_agents(
     Extension(state): Extension<Arc<WebState>>,
     Query(params): Query<AgentQuery>,
-) -> Json<Vec<AgentApiModel>> { // 【修改】返回类型
+) -> Json<Vec<AgentApiModel>> {
+    // 【修改】返回类型
     let mut registry = AgentRegistry::new();
     let pattern = params.pattern.unwrap_or_else(|| "**/*.jgagent".to_string());
-    let full_pattern = state.project_root.join(&pattern).to_string_lossy().to_string();
+    let full_pattern = state
+        .project_root
+        .join(&pattern)
+        .to_string_lossy()
+        .to_string();
 
     let mut results = Vec::new();
     match registry.load_from_paths(&[full_pattern]) {
@@ -440,7 +497,10 @@ async fn list_local_agents(
                         user_id: "local".to_string(),
                         name: agent.name.clone(),
                         description: agent.description.clone(),
-                        system_prompt_id: agent.system_prompt_slug.as_ref().map(|s| generate_deterministic_id(s)),
+                        system_prompt_id: agent
+                            .system_prompt_slug
+                            .as_ref()
+                            .map(|s| generate_deterministic_id(s)),
                         default_model: agent.model.clone(),
                         temperature: agent.temperature,
                         skills: Some(agent.skills.clone()),
@@ -449,7 +509,7 @@ async fn list_local_agents(
                     });
                 }
             }
-        },
+        }
         Err(e) => warn!("❌ Failed to scan agents: {}", e),
     }
     Json(results)
@@ -458,10 +518,17 @@ async fn list_local_agents(
 async fn list_local_prompts(
     Extension(state): Extension<Arc<WebState>>,
     Query(params): Query<PromptQuery>,
-) -> Json<Vec<PromptApiModel>> { // 【修改】返回类型
+) -> Json<Vec<PromptApiModel>> {
+    // 【修改】返回类型
     let mut registry = PromptRegistry::new();
-    let pattern = params.pattern.unwrap_or_else(|| "**/*.jgprompt".to_string());
-    let full_pattern = state.project_root.join(&pattern).to_string_lossy().to_string();
+    let pattern = params
+        .pattern
+        .unwrap_or_else(|| "**/*.jgprompt".to_string());
+    let full_pattern = state
+        .project_root
+        .join(&pattern)
+        .to_string_lossy()
+        .to_string();
 
     let mut results = Vec::new();
     match registry.load_from_paths(&[full_pattern]) {
@@ -484,7 +551,7 @@ async fn list_local_prompts(
                     }
                 }
             }
-        },
+        }
         Err(e) => warn!("❌ Failed to scan prompts: {}", e),
     }
     Json(results)
@@ -495,14 +562,19 @@ async fn list_local_workflows(
     Query(params): Query<WorkflowQuery>,
 ) -> Json<Vec<WorkflowApiModel>> {
     let pattern = params.pattern.unwrap_or_else(|| "**/*.jgflow".to_string());
-    let full_pattern = state.project_root.join(&pattern).to_string_lossy().to_string();
+    let full_pattern = state
+        .project_root
+        .join(&pattern)
+        .to_string_lossy()
+        .to_string();
 
     let mut results = Vec::new();
 
     if let Ok(paths) = glob::glob(&full_pattern) {
         for entry in paths.flatten() {
             if let Ok(content) = fs::read_to_string(&entry) {
-                let file_name = entry.file_stem()
+                let file_name = entry
+                    .file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or("unknown")
                     .to_string();
@@ -510,19 +582,33 @@ async fn list_local_workflows(
                 match GraphParser::parse(&content) {
                     Ok(graph) => {
                         let validation = WorkflowValidator::validate(&graph);
-                        let slug = if graph.slug.is_empty() { file_name.clone() } else { graph.slug.clone() };
+                        let slug = if graph.slug.is_empty() {
+                            file_name.clone()
+                        } else {
+                            graph.slug.clone()
+                        };
 
                         // Collect issue messages
-                        let mut issues: Vec<String> = validation.errors.iter()
+                        let mut issues: Vec<String> = validation
+                            .errors
+                            .iter()
                             .map(|e| format!("[{}] {}", e.code, e.message))
                             .collect();
-                        issues.extend(validation.warnings.iter()
-                            .map(|w| format!("[{}] {}", w.code, w.message)));
+                        issues.extend(
+                            validation
+                                .warnings
+                                .iter()
+                                .map(|w| format!("[{}] {}", w.code, w.message)),
+                        );
 
                         results.push(WorkflowApiModel {
                             id: generate_deterministic_id(&slug),
                             slug,
-                            name: if graph.name.is_empty() { file_name } else { graph.name },
+                            name: if graph.name.is_empty() {
+                                file_name
+                            } else {
+                                graph.name
+                            },
                             description: graph.description,
                             node_count: graph.graph.node_count(),
                             is_valid: validation.is_valid,
@@ -543,7 +629,10 @@ async fn list_local_workflows(
                             is_valid: false,
                             errors: 1,
                             warnings: 0,
-                            issues: vec![format!("[PARSE] {}", e.to_string().lines().next().unwrap_or("Parse error"))],
+                            issues: vec![format!(
+                                "[PARSE] {}",
+                                e.to_string().lines().next().unwrap_or("Parse error")
+                            )],
                             created_at: Utc::now().to_rfc3339(),
                         });
                     }
@@ -560,12 +649,20 @@ async fn handle_chat(
     Json(req): Json<ChatRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>, Json<Value>> {
     let mut agent_registry = AgentRegistry::new();
-    let agent_pattern = state.project_root.join("**/*.jgagent").to_string_lossy().to_string();
-    agent_registry.load_from_paths(&[agent_pattern]).map_err(|e| Json(json!({"error": e.to_string()})))?;
+    let agent_pattern = state
+        .project_root
+        .join("**/*.jgagent")
+        .to_string_lossy()
+        .to_string();
+    agent_registry
+        .load_from_paths(&[agent_pattern])
+        .map_err(|e| Json(json!({"error": e.to_string()})))?;
 
     // 提取 agent slug（兼容 jug0 格式）
     let agent_slug = if let Some(ref agent_config) = req.agent {
-        agent_config.slug.clone()
+        agent_config
+            .slug
+            .clone()
             .or(agent_config.id.map(|u| u.to_string()))
             .unwrap_or_else(|| "default".to_string())
     } else {
@@ -591,35 +688,45 @@ async fn handle_chat(
     let is_stateless = req.stateless.unwrap_or(false) || req.chat_id.is_none();
 
     // 提取自定义 tools
-    let custom_tools = req.tools.clone()
+    let custom_tools = req
+        .tools
+        .clone()
         .or_else(|| req.agent.as_ref().and_then(|a| a.tools.clone()));
 
     // 提取 system_prompt 覆盖
     let system_prompt_override = req.agent.as_ref().and_then(|a| a.system_prompt.clone());
 
-    let (agent_meta, agent_file_path) = agent_registry.get_with_path(&agent_slug)
-        .ok_or_else(|| Json(json!({"error": format!("Agent '{}' not found in workspace", agent_slug)})))?;
+    let (agent_meta, agent_file_path) =
+        agent_registry.get_with_path(&agent_slug).ok_or_else(|| {
+            Json(json!({"error": format!("Agent '{}' not found in workspace", agent_slug)}))
+        })?;
 
     let agent_meta = agent_meta.clone();
-    let agent_dir = agent_file_path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let agent_dir = agent_file_path
+        .parent()
+        .unwrap_or(Path::new("."))
+        .to_path_buf();
 
     let config = JuglansConfig::load().map_err(|e| Json(json!({"error": e.to_string()})))?;
     let runtime: Arc<dyn JuglansRuntime> = Arc::new(Jug0Client::new(&config));
 
     let mut prompt_registry = PromptRegistry::new();
-    let _ = prompt_registry.load_from_paths(&[state.project_root.join("**/*.jgprompt").to_string_lossy().to_string()]);
+    let _ = prompt_registry.load_from_paths(&[state
+        .project_root
+        .join("**/*.jgprompt")
+        .to_string_lossy()
+        .to_string()]);
 
-    let executor = Arc::new(WorkflowExecutor::new(
-        Arc::new(prompt_registry),
-        Arc::new(agent_registry),
-        runtime
-    ).await);
+    let executor = Arc::new(
+        WorkflowExecutor::new(Arc::new(prompt_registry), Arc::new(agent_registry), runtime).await,
+    );
 
     let (tx, rx) = mpsc::unbounded_channel::<WorkflowEvent>();
     let ctx = WorkflowContext::with_sender(tx.clone());
 
     // 设置输入上下文
-    ctx.set("input.message".to_string(), json!(message_text)).ok();
+    ctx.set("input.message".to_string(), json!(message_text))
+        .ok();
 
     // 如果有 chat_id，存入上下文供后续继承
     if let Some(ref cid) = chat_id_str {
@@ -628,7 +735,9 @@ async fn handle_chat(
 
     if let Some(vars) = req.variables {
         if let Some(obj) = vars.as_object() {
-            for (k, v) in obj { ctx.set(format!("input.{}", k), v.clone()).ok(); }
+            for (k, v) in obj {
+                ctx.set(format!("input.{}", k), v.clone()).ok();
+            }
         }
     }
 
@@ -650,9 +759,17 @@ async fn handle_chat(
             match fs::read_to_string(&full_wf_path) {
                 Ok(content) => match GraphParser::parse(&content) {
                     Ok(graph) => executor.execute_graph(Arc::new(graph), &ctx).await,
-                    Err(e) => Err(anyhow::anyhow!("Workflow Parse Error (in {:?}): {}", full_wf_path, e)),
+                    Err(e) => Err(anyhow::anyhow!(
+                        "Workflow Parse Error (in {:?}): {}",
+                        full_wf_path,
+                        e
+                    )),
                 },
-                Err(e) => Err(anyhow::anyhow!("Workflow File Error: {} (tried {:?})", e, full_wf_path)),
+                Err(e) => Err(anyhow::anyhow!(
+                    "Workflow File Error: {} (tried {:?})",
+                    e,
+                    full_wf_path
+                )),
             }
         } else {
             // 直接 chat 模式
@@ -675,7 +792,10 @@ async fn handle_chat(
                 params.insert("system_prompt".to_string(), sp);
             }
 
-            executor.execute_tool_internal("chat", &params, &ctx).await.map(|_| ())
+            executor
+                .execute_tool_internal("chat", &params, &ctx)
+                .await
+                .map(|_| ())
         };
 
         if let Err(e) = result {

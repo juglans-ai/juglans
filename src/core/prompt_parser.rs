@@ -1,10 +1,10 @@
 // src/core/prompt_parser.rs
-use anyhow::{Result, anyhow};
-use pest::Parser;
+use anyhow::{anyhow, Result};
 use pest::iterators::Pair;
+use pest::Parser;
 use pest_derive::Parser;
-use serde::{Serialize, Deserialize};
-use serde_json::{Value, json};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
 #[derive(Parser)]
 #[grammar = "core/prompt.pest"]
@@ -33,8 +33,8 @@ pub struct PromptResource {
     pub slug: String,
     pub name: String,
     pub description: Option<String>,
-    pub r#type: String, 
-    pub inputs: Value, 
+    pub r#type: String,
+    pub inputs: Value,
     pub ast: Vec<TemplateNode>,
     pub content: String,
 }
@@ -57,17 +57,19 @@ impl PromptParser {
                         match meta.as_rule() {
                             Rule::key_slug => resource.slug = Self::parse_raw_string(meta),
                             Rule::key_name => resource.name = Self::parse_raw_string(meta),
-                            Rule::key_desc => resource.description = Some(Self::parse_raw_string(meta)),
+                            Rule::key_desc => {
+                                resource.description = Some(Self::parse_raw_string(meta))
+                            }
                             Rule::key_type => resource.r#type = Self::parse_raw_string(meta),
                             Rule::key_inputs => {
                                 if let Some(obj_node) = meta.into_inner().next() {
                                     resource.inputs = Self::parse_object(obj_node);
                                 }
-                            },
+                            }
                             _ => {}
                         }
                     }
-                },
+                }
                 Rule::body => {
                     resource.content = pair.as_str().to_string();
                     resource.ast = Self::parse_body_to_ast(pair)?;
@@ -85,17 +87,25 @@ impl PromptParser {
             match inner.as_rule() {
                 Rule::raw_text => nodes.push(TemplateNode::Text(inner.as_str().to_string())),
                 Rule::interpolation => {
-                    let expr = inner.into_inner()
+                    let expr = inner
+                        .into_inner()
                         .find(|p| p.as_rule() == Rule::expression)
-                        .unwrap().as_str().trim().to_string();
+                        .unwrap()
+                        .as_str()
+                        .trim()
+                        .to_string();
                     nodes.push(TemplateNode::Interpolation(expr));
                 }
                 Rule::if_block => {
                     let mut it = inner.into_inner();
                     let header = it.next().unwrap();
-                    let cond = header.into_inner()
+                    let cond = header
+                        .into_inner()
                         .find(|p| p.as_rule() == Rule::expression)
-                        .unwrap().as_str().trim().to_string();
+                        .unwrap()
+                        .as_str()
+                        .trim()
+                        .to_string();
                     let then_nodes = Self::parse_body_to_ast(it.next().unwrap())?;
                     let mut elif_branches = Vec::new();
                     let mut else_nodes = None;
@@ -105,9 +115,13 @@ impl PromptParser {
                             Rule::elif_branch => {
                                 let mut elif_it = next.into_inner();
                                 let elif_tag = elif_it.next().unwrap();
-                                let elif_cond = elif_tag.into_inner()
+                                let elif_cond = elif_tag
+                                    .into_inner()
                                     .find(|p| p.as_rule() == Rule::expression)
-                                    .unwrap().as_str().trim().to_string();
+                                    .unwrap()
+                                    .as_str()
+                                    .trim()
+                                    .to_string();
                                 let elif_body = Self::parse_body_to_ast(elif_it.next().unwrap())?;
                                 elif_branches.push((elif_cond, elif_body));
                             }
@@ -126,10 +140,19 @@ impl PromptParser {
                 }
                 Rule::for_block => {
                     let mut it = inner.into_inner();
-                    let header = it.next().unwrap(); 
+                    let header = it.next().unwrap();
                     let mut h_inner = header.into_inner();
-                    let var_name = h_inner.find(|p| p.as_rule() == Rule::identifier).unwrap().as_str().to_string();
-                    let iterable = h_inner.find(|p| p.as_rule() == Rule::expression).unwrap().as_str().trim().to_string();
+                    let var_name = h_inner
+                        .find(|p| p.as_rule() == Rule::identifier)
+                        .unwrap()
+                        .as_str()
+                        .to_string();
+                    let iterable = h_inner
+                        .find(|p| p.as_rule() == Rule::expression)
+                        .unwrap()
+                        .as_str()
+                        .trim()
+                        .to_string();
                     let body_nodes = Self::parse_body_to_ast(it.next().unwrap())?;
                     let mut else_nodes = None;
                     while let Some(next) = it.next() {
@@ -137,7 +160,12 @@ impl PromptParser {
                             else_nodes = Some(Self::parse_body_to_ast(it.next().unwrap())?);
                         }
                     }
-                    nodes.push(TemplateNode::For { var_name, iterable_expr: iterable, body: body_nodes, else_branch: else_nodes });
+                    nodes.push(TemplateNode::For {
+                        var_name,
+                        iterable_expr: iterable,
+                        body: body_nodes,
+                        else_branch: else_nodes,
+                    });
                 }
                 _ => {}
             }
@@ -146,7 +174,10 @@ impl PromptParser {
     }
 
     fn parse_raw_string(pair: Pair<Rule>) -> String {
-        pair.into_inner().next().map(|s| s.as_str().trim_matches('"').to_string()).unwrap_or_default()
+        pair.into_inner()
+            .next()
+            .map(|s| s.as_str().trim_matches('"').to_string())
+            .unwrap_or_default()
     }
 
     /// Recursively parses any JSON-compatible value from the Pest tree
@@ -157,7 +188,8 @@ impl PromptParser {
             Rule::boolean => json!(pair.as_str() == "true"),
             Rule::json_object => {
                 let mut map = serde_json::Map::new();
-                for p in pair.into_inner() { // json_pair
+                for p in pair.into_inner() {
+                    // json_pair
                     let mut inner = p.into_inner();
                     let key = inner.next().unwrap().as_str().trim_matches('"').to_string();
                     let val = Self::parse_json_value(inner.next().unwrap());

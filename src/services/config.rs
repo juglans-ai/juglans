@@ -1,8 +1,8 @@
 // src/services/config.rs
+use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::fs;
 use std::path::Path;
-use anyhow::{Result, Context};
 use tracing::info;
 
 #[derive(Debug, Deserialize, Clone)]
@@ -42,14 +42,18 @@ pub struct ServerConfig {
     pub port: u16,
 }
 
-fn default_server_host() -> String { "127.0.0.1".to_string() }
-fn default_server_port() -> u16 { 3000 }
+fn default_server_host() -> String {
+    "127.0.0.1".to_string()
+}
+fn default_server_port() -> u16 {
+    3000
+}
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct JuglansConfig {
     pub account: AccountConfig,
     pub workspace: Option<WorkspaceConfig>,
-    
+
     #[serde(default = "default_jug0_config")]
     pub jug0: Jug0Config,
 
@@ -83,7 +87,7 @@ impl Default for ServerConfig {
 impl JuglansConfig {
     pub fn load() -> Result<Self> {
         let path = Path::new("juglans.toml");
-        
+
         if !path.exists() {
             info!("⚠️ 'juglans.toml' not found. Using default dev configuration.");
             return Ok(JuglansConfig {
@@ -105,12 +109,11 @@ impl JuglansConfig {
             });
         }
 
-        let content = fs::read_to_string(path)
-            .context("Failed to read juglans.toml")?;
-            
-        let config: JuglansConfig = toml::from_str(&content)
-            .context("Failed to parse juglans.toml")?;
-            
+        let content = fs::read_to_string(path).context("Failed to read juglans.toml")?;
+
+        let config: JuglansConfig =
+            toml::from_str(&content).context("Failed to parse juglans.toml")?;
+
         info!("🔧 Loaded configuration for user: {}", config.account.name);
         Ok(config)
     }

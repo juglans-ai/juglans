@@ -1,10 +1,10 @@
 // src/core/context.rs
+use anyhow::{anyhow, Result};
+use serde::Serialize;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use serde_json::{Value, json};
-use anyhow::{Result, anyhow};
 use tokio::sync::mpsc::UnboundedSender;
-use serde::Serialize;
 
 /// 工作流执行过程中的实时事件
 #[derive(Debug, Clone, Serialize)]
@@ -55,13 +55,13 @@ impl WorkflowContext {
     pub fn get_token_sender_adapter(&self) -> Option<UnboundedSender<String>> {
         let event_sender = self.event_sender.clone()?;
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-        
+
         tokio::spawn(async move {
             while let Some(token) = rx.recv().await {
                 let _ = event_sender.send(WorkflowEvent::Token(token));
             }
         });
-        
+
         Some(tx)
     }
 
@@ -74,16 +74,20 @@ impl WorkflowContext {
             }
         }
 
-        let mut data = self.data.lock()
+        let mut data = self
+            .data
+            .lock()
             .map_err(|_| anyhow!("Failed to acquire context lock"))?;
 
         let parts: Vec<&str> = path.split('.').collect();
-        let (last_key, parent_parts) = parts.split_last()
+        let (last_key, parent_parts) = parts
+            .split_last()
             .ok_or_else(|| anyhow!("Cannot set a value with an empty path"))?;
 
         let mut current = &mut *data;
         for part in parent_parts {
-            current = current.as_object_mut()
+            current = current
+                .as_object_mut()
                 .ok_or_else(|| anyhow!(format!("Path part '{}' is not an object", part)))?
                 .entry(part.to_string())
                 .or_insert_with(|| json!({}));
@@ -105,16 +109,20 @@ impl WorkflowContext {
             return Ok(None);
         }
 
-        let data = self.data.lock()
+        let data = self
+            .data
+            .lock()
             .map_err(|_| anyhow!("Failed to acquire context lock"))?;
-        
+
         let pointer = format!("/{}", parts.join("/"));
         Ok(data.pointer(&pointer).cloned())
     }
 
     /// Returns a snapshot of the context as a serde_json::Value.
     pub fn get_as_value(&self) -> Result<Value> {
-        let data = self.data.lock()
+        let data = self
+            .data
+            .lock()
             .map_err(|_| anyhow!("Failed to acquire context lock"))?;
         Ok(data.clone())
     }

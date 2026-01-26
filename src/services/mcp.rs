@@ -1,17 +1,17 @@
 // src/services/mcp.rs
+use crate::services::config::McpServerConfig;
+use anyhow::{anyhow, Result};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use anyhow::{Result, anyhow};
-use reqwest::Client;
 use std::time::Duration;
-use crate::services::config::McpServerConfig;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpTool {
     pub name: String,
     pub description: String,
     pub input_schema: Value,
-    
+
     #[serde(skip)]
     pub server_url: String,
     #[serde(skip)]
@@ -51,27 +51,45 @@ impl McpClient {
             req = req.header("Authorization", format!("Bearer {}", token));
         }
 
-        let res = req.send().await.map_err(|e| anyhow!("Connection failed: {}", e))?;
+        let res = req
+            .send()
+            .await
+            .map_err(|e| anyhow!("Connection failed: {}", e))?;
         let status = res.status();
 
         if !status.is_success() {
             let err_body = res.text().await.unwrap_or_default();
-            return Err(anyhow!("MCP Server ({} /tools/list) returned {}: {}", config.name, status, err_body));
+            return Err(anyhow!(
+                "MCP Server ({} /tools/list) returned {}: {}",
+                config.name,
+                status,
+                err_body
+            ));
         }
 
         let body: Value = res.json().await?;
-        
+
         if let Some(err) = body.get("error") {
             return Err(anyhow!("MCP Server Error: {:?}", err));
         }
 
-        let tools_array = body.pointer("/result/tools")
+        let tools_array = body
+            .pointer("/result/tools")
             .and_then(|v| v.as_array())
-            .ok_or_else(|| anyhow!("Invalid MCP response from {}: missing result.tools", config.name))?;
+            .ok_or_else(|| {
+                anyhow!(
+                    "Invalid MCP response from {}: missing result.tools",
+                    config.name
+                )
+            })?;
 
         let mut mcp_tools = Vec::new();
         for t in tools_array {
-            let schema = t.get("inputSchema").or(t.get("input_schema")).cloned().unwrap_or(json!({}));
+            let schema = t
+                .get("inputSchema")
+                .or(t.get("input_schema"))
+                .cloned()
+                .unwrap_or(json!({}));
             mcp_tools.push(McpTool {
                 name: t["name"].as_str().unwrap_or("unknown").to_string(),
                 description: t["description"].as_str().unwrap_or("").to_string(),
@@ -99,16 +117,22 @@ impl McpClient {
             req = req.header("Authorization", format!("Bearer {}", token));
         }
 
-        let res = req.send().await.map_err(|e| anyhow!("Request failed: {}", e))?;
+        let res = req
+            .send()
+            .await
+            .map_err(|e| anyhow!("Request failed: {}", e))?;
         let status = res.status();
-        
+
         // Handle potential non-JSON errors before parsing
         if !status.is_success() {
-             let text = res.text().await.unwrap_or_default();
-             return Err(anyhow!("MCP Server returned error {}: {}", status, text));
+            let text = res.text().await.unwrap_or_default();
+            return Err(anyhow!("MCP Server returned error {}: {}", status, text));
         }
 
-        let body: Value = res.json().await.map_err(|_| anyhow!("MCP Server returned non-JSON response (Status {})", status))?;
+        let body: Value = res
+            .json()
+            .await
+            .map_err(|_| anyhow!("MCP Server returned non-JSON response (Status {})", status))?;
 
         if let Some(err) = body.get("error") {
             return Err(anyhow!("MCP Execution Error: {:?}", err));

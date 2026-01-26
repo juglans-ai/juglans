@@ -1,8 +1,8 @@
 // src/services/interface.rs
+use crate::services::jug0::ChatOutput;
+use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
-use anyhow::Result;
-use crate::services::jug0::ChatOutput;
 use tokio::sync::mpsc::UnboundedSender;
 
 /// 定义 JWL 运行时所需的外部能力接口
@@ -11,12 +11,12 @@ pub trait JuglansRuntime: Send + Sync {
     /// 核心对话能力
     /// 增加 token_sender 用于流式透传
     async fn chat(
-        &self, 
-        agent_config: Value, 
-        messages: Vec<Value>, 
+        &self,
+        agent_config: Value,
+        messages: Vec<Value>,
         tools: Option<Vec<Value>>,
         chat_id: Option<&str>,
-        token_sender: Option<UnboundedSender<String>> // 【新增】
+        token_sender: Option<UnboundedSender<String>>, // 【新增】
     ) -> Result<ChatOutput>;
 
     /// 资源加载能力：获取提示词内容

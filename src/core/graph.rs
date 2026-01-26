@@ -1,7 +1,7 @@
 // src/core/graph.rs
-use std::collections::HashMap;
-use petgraph::graph::{NodeIndex, DiGraph};
+use petgraph::graph::{DiGraph, NodeIndex};
 use serde_json::Value;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct Action {
@@ -12,10 +12,10 @@ pub struct Action {
 #[derive(Debug, Clone)]
 pub enum NodeType {
     Task(Action),
-    Foreach { 
-        item: String, 
+    Foreach {
+        item: String,
         list: String,
-        body: Box<WorkflowGraph> 
+        body: Box<WorkflowGraph>,
     },
     Literal(Value),
     Loop {

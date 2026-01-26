@@ -1,8 +1,8 @@
 // src/core/renderer.rs
-use anyhow::{Result, anyhow};
-use serde_json::{Value, json};
-use rhai::{Engine, Scope, Dynamic, ImmutableString};
 use crate::core::prompt_parser::TemplateNode;
+use anyhow::{anyhow, Result};
+use rhai::{Dynamic, Engine, ImmutableString, Scope};
+use serde_json::{json, Value};
 
 pub struct JwlRenderer {
     engine: Engine,
@@ -29,37 +29,39 @@ impl JwlRenderer {
         });
 
         // upper filter: convert string to uppercase
-        engine.register_fn("upper", |s: ImmutableString| {
-            s.to_uppercase()
-        });
+        engine.register_fn("upper", |s: ImmutableString| s.to_uppercase());
 
         // lower filter: convert string to lowercase
-        engine.register_fn("lower", |s: ImmutableString| {
-            s.to_lowercase()
-        });
+        engine.register_fn("lower", |s: ImmutableString| s.to_lowercase());
 
         // default filter: return fallback if value is empty/null
-        engine.register_fn("default", |s: ImmutableString, fallback: ImmutableString| -> String {
-            if s.is_empty() {
-                fallback.to_string()
-            } else {
-                s.to_string()
-            }
-        });
-
-        // default filter for Dynamic type
-        engine.register_fn("default", |val: Dynamic, fallback: ImmutableString| -> String {
-            if val.is_unit() {
-                fallback.to_string()
-            } else {
-                let s = val.to_string();
-                if s.is_empty() || s == "()" {
+        engine.register_fn(
+            "default",
+            |s: ImmutableString, fallback: ImmutableString| -> String {
+                if s.is_empty() {
                     fallback.to_string()
                 } else {
-                    s
+                    s.to_string()
                 }
-            }
-        });
+            },
+        );
+
+        // default filter for Dynamic type
+        engine.register_fn(
+            "default",
+            |val: Dynamic, fallback: ImmutableString| -> String {
+                if val.is_unit() {
+                    fallback.to_string()
+                } else {
+                    let s = val.to_string();
+                    if s.is_empty() || s == "()" {
+                        fallback.to_string()
+                    } else {
+                        s
+                    }
+                }
+            },
+        );
 
         // json filter: serialize value to JSON string
         engine.register_fn("json", |val: Dynamic| -> String {
@@ -97,7 +99,7 @@ impl JwlRenderer {
 
     pub fn render(&self, ast: &[TemplateNode], context: &Value) -> Result<String> {
         let mut scope = Scope::new();
-        
+
         let dynamic_ctx = rhai::serde::to_dynamic(context.clone())?;
         if let Some(map) = dynamic_ctx.try_cast::<rhai::Map>() {
             for (k, v) in map {
@@ -115,13 +117,22 @@ impl JwlRenderer {
                 TemplateNode::Text(t) => output.push_str(t),
                 TemplateNode::Interpolation(expr) => {
                     let processed = self.preprocess_expression(expr);
-                    let result = self.engine.eval_with_scope::<Dynamic>(scope, &processed)
+                    let result = self
+                        .engine
+                        .eval_with_scope::<Dynamic>(scope, &processed)
                         .map_err(|e| anyhow!("Interpolation error in '{}': {}", expr, e))?;
                     output.push_str(&result.to_string());
                 }
-                TemplateNode::If { condition, then_branch, elif_branches, else_branch } => {
+                TemplateNode::If {
+                    condition,
+                    then_branch,
+                    elif_branches,
+                    else_branch,
+                } => {
                     let processed = self.preprocess_expression(condition);
-                    let cond_res = self.engine.eval_with_scope::<bool>(scope, &processed)
+                    let cond_res = self
+                        .engine
+                        .eval_with_scope::<bool>(scope, &processed)
                         .map_err(|e| anyhow!("Condition error in '{}': {}", condition, e))?;
 
                     if cond_res {
@@ -131,8 +142,12 @@ impl JwlRenderer {
                         let mut matched = false;
                         for (elif_cond, elif_body) in elif_branches {
                             let elif_processed = self.preprocess_expression(elif_cond);
-                            let elif_res = self.engine.eval_with_scope::<bool>(scope, &elif_processed)
-                                .map_err(|e| anyhow!("Elif condition error in '{}': {}", elif_cond, e))?;
+                            let elif_res = self
+                                .engine
+                                .eval_with_scope::<bool>(scope, &elif_processed)
+                                .map_err(|e| {
+                                    anyhow!("Elif condition error in '{}': {}", elif_cond, e)
+                                })?;
                             if elif_res {
                                 output.push_str(&self.render_nodes(elif_body, scope)?);
                                 matched = true;
@@ -147,11 +162,18 @@ impl JwlRenderer {
                         }
                     }
                 }
-                TemplateNode::For { var_name, iterable_expr, body, else_branch } => {
+                TemplateNode::For {
+                    var_name,
+                    iterable_expr,
+                    body,
+                    else_branch,
+                } => {
                     let processed = self.preprocess_expression(iterable_expr);
-                    let list = self.engine.eval_with_scope::<Dynamic>(scope, &processed)
+                    let list = self
+                        .engine
+                        .eval_with_scope::<Dynamic>(scope, &processed)
                         .map_err(|e| anyhow!("For loop error in '{}': {}", iterable_expr, e))?;
-                    
+
                     let mut ran_loop = false;
                     if let Some(array) = list.try_cast::<Vec<Dynamic>>() {
                         let total = array.len();
@@ -172,7 +194,7 @@ impl JwlRenderer {
                                 output.push_str(&self.render_nodes(body, scope)?);
 
                                 // 清理当前循环的作用域变量
-                                scope.rewind(scope.len() - 2); 
+                                scope.rewind(scope.len() - 2);
                             }
                         }
                     }

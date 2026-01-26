@@ -1,9 +1,9 @@
 // src/services/prompt_loader.rs
+use anyhow::{anyhow, Result};
+use glob::glob;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use anyhow::{Result, anyhow};
-use glob::glob;
 use tracing::{info, warn};
 
 /// 提示词注册表
@@ -23,7 +23,8 @@ impl PromptRegistry {
     /// 加载配置文件中定义的路径列表
     pub fn load_from_paths(&mut self, patterns: &[String]) -> Result<()> {
         for pattern in patterns {
-            let paths = glob(pattern).map_err(|e| anyhow!("Invalid glob pattern '{}': {}", pattern, e))?;
+            let paths =
+                glob(pattern).map_err(|e| anyhow!("Invalid glob pattern '{}': {}", pattern, e))?;
 
             for entry in paths {
                 match entry {
@@ -46,7 +47,8 @@ impl PromptRegistry {
         }
 
         // 使用文件名作为 Slug
-        let slug = path.file_stem()
+        let slug = path
+            .file_stem()
             .and_then(|s| s.to_str())
             .ok_or_else(|| anyhow!("Invalid filename: {:?}", path))?
             .to_string();
