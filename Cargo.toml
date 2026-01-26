@@ -31,12 +31,13 @@ glob = "0.3"
 tracing = "0.1"
 futures = "0.3"
 
-# --- 2. WASM 专用桥接 ---
+# --- 2. WASM 专用依赖 (仅在 wasm32 目标时编译) ---
+[target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
 serde-wasm-bindgen = "0.6"
-getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom = { version = "0.2", features = ["js"] }
 
-# --- 3. Native 专用依赖 ---
+# --- 3. Native 专用依赖 (非 wasm32 目标) ---
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { version = "1.0", features = ["full"] }
 reqwest = { version = "0.12", features = ["json", "stream"] }

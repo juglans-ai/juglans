@@ -1,5 +1,4 @@
 // src/lib.rs
-use wasm_bindgen::prelude::*;
 
 // ============================================================================
 // 模块定义 (Modules)
@@ -49,13 +48,17 @@ pub use services::config::JuglansConfig;
 pub use services::mcp::McpClient;
 
 // ============================================================================
-// WASM 专用接口
+// WASM 专用接口 (仅在 wasm32 目标时编译)
 // ============================================================================
 
-// 【修改】重命名为 JuglansEngine，更符合包名
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
+
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub struct JuglansEngine;
 
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 impl JuglansEngine {
     #[wasm_bindgen(constructor)]
