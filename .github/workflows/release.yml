@@ -1,0 +1,185 @@
+# .github/workflows/release.yml
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+  BINARY_NAME: juglans
+
+permissions:
+  contents: write
+
+jobs:
+  # 创建 Release
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+      version: ${{ steps.get_version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: get_version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Juglans CLI v${{ steps.get_version.outputs.version }}
+          draft: false
+          prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # 构建多平台二进制
+  build-release:
+    name: Build (${{ matrix.target }})
+    needs: create-release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS Intel
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: juglans
+            asset_name: juglans-darwin-x64
+
+          # macOS Apple Silicon
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: juglans
+            asset_name: juglans-darwin-arm64
+
+          # Linux x64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: juglans
+            asset_name: juglans-linux-x64
+
+          # Linux ARM64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact_name: juglans
+            asset_name: juglans-linux-arm64
+            cross: true
+
+          # Windows x64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: juglans.exe
+            asset_name: juglans-windows-x64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      # Linux ARM64 需要 cross 编译
+      - name: Install cross (Linux ARM64)
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      # 标准构建
+      - name: Build (native)
+        if: ${{ !matrix.cross }}
+        run: cargo build --release --target ${{ matrix.target }}
+
+      # Cross 编译 (Linux ARM64)
+      - name: Build (cross)
+        if: matrix.cross
+        run: cross build --release --target ${{ matrix.target }}
+
+      # 打包 (Unix)
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cd target/${{ matrix.target }}/release
+          chmod +x ${{ matrix.artifact_name }}
+          tar -czvf ../../../${{ matrix.asset_name }}.tar.gz ${{ matrix.artifact_name }}
+          cd ../../..
+          shasum -a 256 ${{ matrix.asset_name }}.tar.gz > ${{ matrix.asset_name }}.tar.gz.sha256
+
+      # 打包 (Windows)
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cd target/${{ matrix.target }}/release
+          7z a ../../../${{ matrix.asset_name }}.zip ${{ matrix.artifact_name }}
+          cd ../../..
+          (Get-FileHash ${{ matrix.asset_name }}.zip -Algorithm SHA256).Hash.ToLower() + "  ${{ matrix.asset_name }}.zip" | Out-File -Encoding utf8 ${{ matrix.asset_name }}.zip.sha256
+
+      # 上传到 Release (Unix)
+      - name: Upload Release Asset (Unix)
+        if: runner.os != 'Windows'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            ${{ matrix.asset_name }}.tar.gz
+            ${{ matrix.asset_name }}.tar.gz.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 上传到 Release (Windows)
+      - name: Upload Release Asset (Windows)
+        if: runner.os == 'Windows'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            ${{ matrix.asset_name }}.zip
+            ${{ matrix.asset_name }}.zip.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # 构建完成后更新 Release Notes
+  finalize-release:
+    name: Finalize Release
+    needs: [create-release, build-release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update Release with install instructions
+        uses: softprops/action-gh-release@v1
+        with:
+          append_body: true
+          body: |
+
+            ## Installation
+
+            ### Quick Install (macOS/Linux)
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | sh
+            ```
+
+            ### Manual Download
+            | Platform | Architecture | Download |
+            |----------|--------------|----------|
+            | macOS | Intel (x64) | [juglans-darwin-x64.tar.gz](https://github.com/${{ github.repository }}/releases/download/v${{ needs.create-release.outputs.version }}/juglans-darwin-x64.tar.gz) |
+            | macOS | Apple Silicon (ARM64) | [juglans-darwin-arm64.tar.gz](https://github.com/${{ github.repository }}/releases/download/v${{ needs.create-release.outputs.version }}/juglans-darwin-arm64.tar.gz) |
+            | Linux | x64 | [juglans-linux-x64.tar.gz](https://github.com/${{ github.repository }}/releases/download/v${{ needs.create-release.outputs.version }}/juglans-linux-x64.tar.gz) |
+            | Linux | ARM64 | [juglans-linux-arm64.tar.gz](https://github.com/${{ github.repository }}/releases/download/v${{ needs.create-release.outputs.version }}/juglans-linux-arm64.tar.gz) |
+            | Windows | x64 | [juglans-windows-x64.zip](https://github.com/${{ github.repository }}/releases/download/v${{ needs.create-release.outputs.version }}/juglans-windows-x64.zip) |
+
+            ### Verify Download (SHA256)
+            Each binary has a corresponding `.sha256` file for verification.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
