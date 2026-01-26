@@ -40,7 +40,7 @@ getrandom = { version = "0.2", features = ["js"] }
 # --- 3. Native 专用依赖 (非 wasm32 目标) ---
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { version = "1.0", features = ["full"] }
-reqwest = { version = "0.12", features = ["json", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 clap = { version = "4.4", features = ["derive"] }
 toml = "0.8"
 include_dir = "0.7"
