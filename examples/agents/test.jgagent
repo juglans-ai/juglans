@@ -1,5 +1,0 @@
-slug: "local-agent"
-name: "本地工作流智能体"
-model: "deepseek-chat"
-system_prompt: "Simple Test"
-workflow: "test.jgflow"
