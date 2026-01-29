@@ -78,4 +78,10 @@ impl AgentRegistry {
     pub fn keys(&self) -> Vec<String> {
         self.agents.keys().cloned().collect()
     }
+
+    /// 【新增】手动注册一个 agent
+    pub fn register(&mut self, agent: AgentResource, path: PathBuf) {
+        info!("🤖 Registered Agent: [{}] from {:?}", agent.slug, path);
+        self.agents.insert(agent.slug.clone(), (agent, path));
+    }
 }

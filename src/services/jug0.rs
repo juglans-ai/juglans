@@ -494,6 +494,33 @@ impl JuglansRuntime for Jug0Client {
         chat_id: Option<&str>,
         token_sender: Option<UnboundedSender<String>>,
     ) -> Result<ChatOutput> {
+        // 验证 agent_config 包含必须字段
+        if let Some(agent_obj) = agent_config.as_object() {
+            let required_fields = ["slug", "model"];
+            let mut missing_fields = Vec::new();
+
+            for field in required_fields {
+                if !agent_obj.contains_key(field) {
+                    missing_fields.push(field);
+                }
+            }
+
+            if !missing_fields.is_empty() {
+                return Err(anyhow!(
+                    "Agent configuration is incomplete. Missing required fields: {}\n\n\
+                    💡 This usually means:\n\
+                       1. The agent file (.jgagent) is missing required fields: slug and model\n\
+                       2. Or the jug0 server endpoint is incorrect\n\
+                       3. Current jug0 endpoint: {}\n\
+                       4. For local development, add [jug0] section in juglans.toml:\n\
+                          [jug0]\n\
+                          base_url = \"http://localhost:3000\"",
+                    missing_fields.join(", "),
+                    self.base_url
+                ));
+            }
+        }
+
         let url = format!("{}/api/chat", self.base_url);
 
         if let Some(t_def) = tools_def {
@@ -527,6 +554,26 @@ impl JuglansRuntime for Jug0Client {
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown Error".to_string());
+
+            // 422 错误通常是请求体字段缺失或格式错误
+            if status == 422 {
+                let mut error_msg = format!("Jug0 API Validation Error (422): {}", txt);
+
+                // 如果错误提到 missing field，提供配置建议
+                if txt.contains("missing field") {
+                    error_msg.push_str("\n\n💡 Possible causes:");
+                    error_msg.push_str(
+                        "\n   1. Agent configuration is incomplete (missing required fields)",
+                    );
+                    error_msg.push_str("\n   2. Check your jug0 server configuration:");
+                    error_msg.push_str(&format!("\n      - Current endpoint: {}", self.base_url));
+                    error_msg.push_str("\n      - Ensure [jug0] section exists in juglans.toml");
+                    error_msg.push_str("\n   3. Verify agent file has all required fields: slug, name, model, system_prompt");
+                }
+
+                return Err(anyhow!(error_msg));
+            }
+
             return Err(anyhow!("Jug0 API Rejection ({}): {}", status, txt));
         }
 

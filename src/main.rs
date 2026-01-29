@@ -230,6 +230,10 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
 
             let mut local_p_store = PromptRegistry::new();
             let mut local_a_store = AgentRegistry::new();
+
+            // 【修复】将当前 agent 注册到本地 registry，使 pure agent 也能正常工作
+            local_a_store.register(agent_meta_definition.clone(), absolute_target_path.clone());
+
             let mut active_workflow_ptr = None;
 
             if let Some(wf_path_string) = &agent_meta_definition.workflow {

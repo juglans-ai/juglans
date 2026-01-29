@@ -1,0 +1,6 @@
+slug: "deepseek-pure"
+name: "DeepSeek Pure Agent"
+description: "不绑定 workflow 的纯 agent，用于简单对话"
+model: "deepseek-chat"
+temperature: 0.7
+system_prompt: "你是一个简洁的 AI 助手，回答限制在 50 字以内。"

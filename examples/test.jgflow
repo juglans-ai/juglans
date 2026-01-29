@@ -1,28 +1,89 @@
-name: "Example Workflow"
+# 意图识别 + 智能回复工作流
+# 演示如何使用 prompt 模板、意图分析和条件路由
+# 使用方法：juglans examples/test.jgagent
+
+name: "Intent-based Chat Workflow"
 version: "0.1.0"
-author: "Juglans User"
+description: "意图识别 + 智能回复工作流"
+author: "Juglans Team"
 
-prompts: [ "./prompts/*.jgprompt" ]
+# 加载本地资源（相对于 workflow 文件的路径）
+prompts: ["./test.jgprompt"]
 
-entry: [input]
-exit: [output]
+# 定义入口和出口节点
+entry: [start]
+exit: [reply]
 
-# 1. 直接赋值 (JSON)
-[input]: { "task": "Learn JWL" }
+# ========== 节点定义 ==========
 
-# 2. 调用 Agent
-[agent_process]: chat(
-    agent={ slug: "helper" },
-    message=p(
-        slug="demo",
-        variables={
-            "user_name": "Developer",
-            "task": $input.output.task
-        }
-    )
+# 1. 开始节点
+[start]: notify(status="🚀 开始处理用户消息...")
+
+# 2. 意图识别 - 使用 prompt 模板 + agent 分析
+[classify_intent]: chat(
+  agent="test",
+  message=p(
+    slug="intent-classifier",
+    user_message=$input.message
+  ),
+  format="json"
 )
 
-# 3. 输出结果
-[output]: notify(message=$agent_process.output)
+# 3. 保存意图到上下文
+[save_intent]: set(
+  intent=$classify_intent.output.intent,
+  confidence=$classify_intent.output.confidence
+)
 
-[input] -> [agent_process] -> [output]
+# 4. 根据意图分支处理
+[route]: notify(status="🔀 路由到: " + $ctx.intent)
+
+# 5a. 问候类回复
+[handle_greeting]: chat(
+  agent="test",
+  message="用户说：" + $input.message + "\n请给出友好的问候回复。"
+)
+
+# 5b. 问题类回复
+[handle_question]: chat(
+  agent="test",
+  message="用户提问：" + $input.message + "\n请给出详细的解答。"
+)
+
+# 5c. 命令类回复
+[handle_command]: chat(
+  agent="test",
+  message="用户命令：" + $input.message + "\n请确认并说明如何执行。"
+)
+
+# 5d. 闲聊类回复
+[handle_chat]: chat(
+  agent="test",
+  message="用户说：" + $input.message + "\n请自然地聊天回应。"
+)
+
+# 6. 最终回复
+[reply]: notify(
+  status="✅ 完成",
+  message=$output
+)
+
+# ========== 流程定义 ==========
+
+# 主流程
+[start] -> [classify_intent] -> [save_intent] -> [route]
+
+# 条件路由（根据意图类型）
+[route] if $ctx.intent == "greeting" -> [handle_greeting]
+[route] if $ctx.intent == "question" -> [handle_question]
+[route] if $ctx.intent == "command" -> [handle_command]
+[route] if $ctx.intent == "chat" -> [handle_chat]
+
+# 默认路由（兜底）
+[route] -> [handle_chat]
+
+# 所有分支汇聚到最终回复
+[handle_greeting] -> [reply]
+[handle_question] -> [reply]
+[handle_command] -> [reply]
+[handle_chat] -> [reply]

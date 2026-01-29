@@ -1,7 +1,17 @@
-slug: "market-analyst"
-name: "Market Analyst"
-model: "deepseek-reasoner"
-temperature: 0.3
-system_prompt: p(slug="analyst_template")
-mcp: [ "JudgeMarket" ]
-skills: [ "tech_analysis", "news_aggregator" ]
+# 测试 Agent - 带工作流绑定
+# 用于快速测试意图识别 + 智能回复工作流
+# 使用方法：juglans examples/test.jgagent
+
+slug: "test"
+name: "测试助手"
+description: "用于快速测试的简单对话助手"
+
+# 模型配置
+model: "deepseek-chat"
+temperature: 0.7
+
+# 系统提示词
+system_prompt: "你是一个友好、专业的 AI 助手。"
+
+# 绑定工作流（意图识别 + 智能回复）
+workflow: "./test.jgflow"
