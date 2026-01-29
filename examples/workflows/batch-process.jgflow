@@ -1,0 +1,61 @@
+name: "Batch Processor"
+version: "0.1.0"
+author: "Juglans Team"
+description: "Process multiple items in batch with results aggregation"
+
+prompts: ["../prompts/*.jgprompt"]
+agents: ["../agents/*.jgagent"]
+
+entry: [init]
+exit: [summary]
+
+# 初始化上下文
+[init]: set_context(
+  results=[],
+  processed=0
+)
+
+[start_notify]: notify(status="Starting batch processing...")
+
+# 批量处理循环
+[process_loop]: foreach($item in $input.items) {
+  # 使用 prompt 模板
+  [render]: p(
+    slug="data-analysis",
+    data=[$item],
+    focus="key metrics"
+  )
+
+  # 调用分析 Agent
+  [analyze]: chat(
+    agent="data-analyst",
+    message=$output
+  )
+
+  # 收集结果
+  [collect]: set_context(
+    results=append($ctx.results, {
+      "id": $item.id,
+      "analysis": $output
+    }),
+    processed=$ctx.processed + 1
+  )
+
+  # 进度通知
+  [progress]: notify(
+    status="Processed " + $ctx.processed + " / " + len($input.items)
+  )
+
+  [render] -> [analyze] -> [collect] -> [progress]
+}
+
+# 生成摘要
+[summary]: chat(
+  agent="data-analyst",
+  message="Summarize these analysis results: " + json($ctx.results)
+)
+
+[done]: notify(status="Completed! Total processed: " + $ctx.processed)
+
+# 执行流程
+[init] -> [start_notify] -> [process_loop] -> [summary] -> [done]

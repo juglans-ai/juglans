@@ -1,0 +1,48 @@
+name: "Smart Router"
+version: "0.1.0"
+author: "Juglans Team"
+description: "Route queries to specialized agents based on intent"
+
+prompts: ["../prompts/*.jgprompt"]
+agents: ["../agents/*.jgagent"]
+
+entry: [classify]
+exit: [done]
+
+# 分类查询意图
+[classify]: chat(
+  agent="helpful-assistant",
+  message="Classify this query into one of: technical, data_analysis, general. Query: " + $input.query,
+  format="json"
+)
+
+# 技术查询处理
+[technical]: chat(
+  agent="helpful-assistant",
+  message="[Technical Expert] " + $input.query
+)
+
+# 数据分析处理
+[data_analysis]: chat(
+  agent="data-analyst",
+  message=$input.query
+)
+
+# 通用查询处理
+[general]: chat(
+  agent="helpful-assistant",
+  message=$input.query
+)
+
+# 完成通知
+[done]: notify(status="Query processed: " + $output)
+
+# 路由逻辑
+[classify] if $output.category == "technical" -> [technical]
+[classify] if $output.category == "data_analysis" -> [data_analysis]
+[classify] -> [general]
+
+# 所有分支汇聚到完成节点
+[technical] -> [done]
+[data_analysis] -> [done]
+[general] -> [done]

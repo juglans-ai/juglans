@@ -1,0 +1,24 @@
+name: "Simple Chat"
+version: "0.1.0"
+author: "Juglans Team"
+description: "A basic chat workflow demonstrating agent interaction"
+
+agents: ["../agents/*.jgagent"]
+
+entry: [start]
+exit: [end]
+
+# 开始节点
+[start]: notify(status="Chat started...")
+
+# 调用 Agent 进行对话
+[chat]: chat(
+  agent="helpful-assistant",
+  message=$input.message
+)
+
+# 结束节点
+[end]: notify(status="Chat completed")
+
+# 执行流程
+[start] -> [chat] -> [end]

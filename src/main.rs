@@ -33,7 +33,7 @@ use services::prompt_loader::PromptRegistry;
 use services::web_server;
 
 #[derive(Parser)]
-#[command(name = "juglans", author = "Juglans Team", version = "1.1")]
+#[command(name = "juglans", author = "Juglans Team", version = env!("CARGO_PKG_VERSION"))]
 struct Cli {
     /// Target file path to process (.jgflow, .jgprompt, .jgagent)
     file: Option<PathBuf>,
@@ -44,6 +44,10 @@ struct Cli {
     /// Direct input for prompt variables or agent messages
     #[arg(short, long)]
     input: Option<String>,
+
+    /// Read input from a JSON file
+    #[arg(long)]
+    input_file: Option<PathBuf>,
 
     /// Enable verbose output
     #[arg(short, long)]
@@ -73,7 +77,12 @@ enum Commands {
     /// Retrieve MCP tool schemas
     Install,
     /// Push resources to the server
-    Apply { file: PathBuf },
+    Apply {
+        file: PathBuf,
+        /// Force overwrite if resource already exists
+        #[arg(long)]
+        force: bool,
+    },
     /// Validate syntax of .jgflow, .jgagent, .jgprompt files (like cargo check)
     Check {
         /// Path to check (file or directory, defaults to current directory)
@@ -117,6 +126,17 @@ enum Commands {
         #[arg(long, short = 't')]
         r#type: String,
     },
+}
+
+/// Resolve input data from --input or --input-file
+fn resolve_input_data(cli: &Cli) -> Result<Option<String>> {
+    if let Some(input_file_path) = &cli.input_file {
+        let content = fs::read_to_string(input_file_path)
+            .with_context(|| format!("Failed to read input file: {:?}", input_file_path))?;
+        Ok(Some(content))
+    } else {
+        Ok(cli.input.clone())
+    }
 }
 
 fn resolve_import_patterns_verbose(base_dir_ref: &Path, raw_patterns: &[String]) -> Vec<String> {
@@ -247,9 +267,10 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
             );
 
             let multi_turn_interaction_ctx = WorkflowContext::new();
+            let resolved_cli_input = resolve_input_data(cli)?;
 
             loop {
-                let session_input_string = if let Some(cmd_input) = &cli.input {
+                let session_input_string = if let Some(cmd_input) = &resolved_cli_input {
                     cmd_input.clone()
                 } else {
                     print!("\nUser > ");
@@ -314,7 +335,7 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
                     }
                 }
 
-                if cli.input.is_some() {
+                if resolved_cli_input.is_some() {
                     break;
                 }
             }
@@ -325,8 +346,8 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
             let prompt_resource_item = PromptParser::parse(&source_raw_text)?;
             let mut rendering_variables_ctx = prompt_resource_item.inputs.clone();
 
-            if let Some(ext_input_json) = &cli.input {
-                let parsed_input_data: Value = serde_json::from_str(ext_input_json)?;
+            if let Some(ext_input_json) = resolve_input_data(cli)? {
+                let parsed_input_data: Value = serde_json::from_str(&ext_input_json)?;
                 if let Some(data_obj) = parsed_input_data.as_object() {
                     for (k, v) in data_obj {
                         rendering_variables_ctx[k] = v.clone();
@@ -759,7 +780,7 @@ fn handle_check(path: Option<&Path>, show_all: bool, output_format: &str) -> Res
     Ok(())
 }
 
-async fn handle_apply(file_to_apply: &Path) -> Result<()> {
+async fn handle_apply(file_to_apply: &Path, force: bool) -> Result<()> {
     let local_config = JuglansConfig::load()?;
     let jug0_api_ptr = Jug0Client::new(&local_config);
     let raw_file_data = fs::read_to_string(file_to_apply)?;
@@ -768,18 +789,22 @@ async fn handle_apply(file_to_apply: &Path) -> Result<()> {
         .and_then(|s| s.to_str())
         .unwrap_or("");
 
+    if force {
+        info!("🔄 Force mode enabled - will overwrite existing resources");
+    }
+
     if ext_str == "jgagent" {
         println!(
             "✅ {}",
             jug0_api_ptr
-                .apply_agent(&AgentParser::parse(&raw_file_data)?)
+                .apply_agent(&AgentParser::parse(&raw_file_data)?, force)
                 .await?
         );
     } else if ext_str == "jgprompt" {
         println!(
             "✅ {}",
             jug0_api_ptr
-                .apply_prompt(&PromptParser::parse(&raw_file_data)?)
+                .apply_prompt(&PromptParser::parse(&raw_file_data)?, force)
                 .await?
         );
     } else if ext_str == "jgflow" {
@@ -807,7 +832,7 @@ async fn handle_apply(file_to_apply: &Path) -> Result<()> {
         println!(
             "✅ {}",
             jug0_api_ptr
-                .apply_workflow(&workflow, &raw_file_data, &endpoint_url)
+                .apply_workflow(&workflow, &raw_file_data, &endpoint_url, force)
                 .await?
         );
     }
@@ -827,7 +852,7 @@ async fn main() -> Result<()> {
         match sub_command_enum {
             Commands::Init { name } => handle_init(name)?,
             Commands::Install => handle_install().await?,
-            Commands::Apply { file } => handle_apply(file).await?,
+            Commands::Apply { file, force } => handle_apply(file, *force).await?,
             Commands::Check { path, all, format } => {
                 handle_check(path.as_deref(), *all, format)?;
             }

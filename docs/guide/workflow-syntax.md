@@ -37,21 +37,72 @@ exit: [end_node]
 
 ## 资源导入
 
-使用 glob 模式导入 Prompt 和 Agent 文件：
+工作流可以导入本地的 Prompt 和 Agent 文件，也可以引用远程资源。
+
+### 本地资源导入
+
+使用 glob 模式导入本地文件：
 
 ```yaml
-# 相对路径
+# 相对路径（相对于 .jgflow 文件所在目录）
 prompts: ["./prompts/*.jgprompt"]
 agents: ["./agents/*.jgagent"]
 
 # 多个路径
 prompts: [
   "./local/*.jgprompt",
-  "/shared/prompts/*.jgprompt"
+  "./shared/*.jgprompt"
 ]
 
 # 单个文件
 agents: ["./agents/main-agent.jgagent"]
+
+# 绝对路径
+prompts: ["/absolute/path/to/prompts/*.jgprompt"]
+```
+
+**路径解析规则：**
+- 相对路径：相对于 `.jgflow` 文件所在目录
+- 绝对路径：以 `/` 开头的路径
+- Glob 通配符：`*` 匹配文件名，`**` 匹配子目录
+
+### 本地 vs 远程资源
+
+导入的本地资源可以通过 slug 引用：
+
+```yaml
+# 导入本地 Agent
+agents: ["./agents/*.jgagent"]
+
+# 引用本地 Agent（通过 slug）
+[chat]: chat(agent="my-local-agent", message=$input)
+```
+
+如果需要引用远程（Jug0）资源，使用 `owner/slug` 格式：
+
+```yaml
+# 无需导入，直接引用远程资源
+[chat]: chat(agent="juglans/premium-agent", message=$input)
+[render]: p(slug="owner/shared-prompt", data=$input)
+```
+
+### 混合使用
+
+```yaml
+# 导入本地资源
+prompts: ["./prompts/*.jgprompt"]
+agents: ["./agents/*.jgagent"]
+
+entry: [start]
+exit: [end]
+
+# 使用本地 Agent
+[local_chat]: chat(agent="my-agent", message=$input)
+
+# 使用远程 Agent
+[remote_chat]: chat(agent="juglans/cloud-agent", message=$output)
+
+[start] -> [local_chat] -> [remote_chat] -> [end]
 ```
 
 ## 入口和出口

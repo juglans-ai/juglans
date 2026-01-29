@@ -7,6 +7,7 @@
 ```yaml
 slug: "agent_identifier"
 name: "Display Name"
+description: "A brief description of what this agent does"
 model: "deepseek-chat"
 temperature: 0.7
 system_prompt: "You are a helpful assistant."
@@ -14,16 +15,17 @@ system_prompt: "You are a helpful assistant."
 
 ## 配置字段
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `slug` | string | 是 | 唯一标识符 |
-| `name` | string | 否 | 显示名称 |
-| `model` | string | 否 | 模型名称 |
-| `temperature` | float | 否 | 温度参数 (0-2) |
-| `system_prompt` | string | 否 | 系统提示词 |
-| `mcp` | array | 否 | MCP 服务器列表 |
-| `skills` | array | 否 | 技能列表 |
-| `workflow` | string | 否 | 关联的工作流文件 |
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `slug` | string | 是 | - | 唯一标识符 |
+| `name` | string | 否 | - | 显示名称 |
+| `description` | string | 否 | - | Agent 描述 |
+| `model` | string | 否 | gpt-4o | 模型名称 |
+| `temperature` | float | 否 | 0.7 | 温度参数 (0-2) |
+| `system_prompt` | string | 否 | - | 系统提示词（内联或引用） |
+| `mcp` | array | 否 | [] | MCP 服务器列表 |
+| `skills` | array | 否 | [] | 技能列表 |
+| `workflow` | string | 否 | - | 关联的工作流文件路径 |
 
 ## 模型配置
 

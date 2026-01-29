@@ -22,10 +22,10 @@ meta_key_names = _{ "slug" | "name" | "type" | "description" | "inputs" }
 // obj_pair represents a key-value entry in the inputs list
 obj_pair = { !(meta_key_names ~ ":") ~ !separator ~ identifier ~ ":" ~ fm_value }
 
-metadata_obj = { 
-    json_object | 
-    json_array | 
-    obj_pair* 
+metadata_obj = {
+    json_object |
+    json_array |
+    obj_pair*
 }
 
 // --- Frontmatter Fields ---

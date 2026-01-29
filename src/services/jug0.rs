@@ -114,7 +114,7 @@ impl Jug0Client {
         Ok(body.id)
     }
 
-    pub async fn apply_prompt(&self, prompt: &PromptResource) -> Result<String> {
+    pub async fn apply_prompt(&self, prompt: &PromptResource, force: bool) -> Result<String> {
         let url_get = format!("{}/api/prompts/{}", self.base_url, prompt.slug);
         let res_get = self
             .http
@@ -134,8 +134,13 @@ impl Jug0Client {
 
         if res_get.status().is_success() {
             let existing: PromptResponse = res_get.json().await?;
+            let url = if force {
+                format!("{}/api/prompts/{}?force=true", self.base_url, existing.id)
+            } else {
+                format!("{}/api/prompts/{}", self.base_url, existing.id)
+            };
             self.http
-                .patch(&format!("{}/api/prompts/{}", self.base_url, existing.id))
+                .patch(&url)
                 .header("X-API-KEY", &self.api_key)
                 .json(&payload)
                 .send()
@@ -144,8 +149,13 @@ impl Jug0Client {
         } else {
             let mut create_payload = payload.clone();
             create_payload["slug"] = json!(prompt.slug);
+            let url = if force {
+                format!("{}/api/prompts?force=true", self.base_url)
+            } else {
+                format!("{}/api/prompts", self.base_url)
+            };
             self.http
-                .post(&format!("{}/api/prompts", self.base_url))
+                .post(&url)
                 .header("X-API-KEY", &self.api_key)
                 .json(&create_payload)
                 .send()
@@ -157,7 +167,7 @@ impl Jug0Client {
         }
     }
 
-    pub async fn apply_agent(&self, agent: &AgentResource) -> Result<String> {
+    pub async fn apply_agent(&self, agent: &AgentResource, force: bool) -> Result<String> {
         let sys_prompt_id = if let Some(slug) = &agent.system_prompt_slug {
             self.get_prompt_id(slug).await?
         } else {
@@ -183,8 +193,13 @@ impl Jug0Client {
 
         if res_get.status().is_success() {
             let existing: AgentResponse = res_get.json().await?;
+            let url = if force {
+                format!("{}/api/agents/{}?force=true", self.base_url, existing.id)
+            } else {
+                format!("{}/api/agents/{}", self.base_url, existing.id)
+            };
             self.http
-                .patch(&format!("{}/api/agents/{}", self.base_url, existing.id))
+                .patch(&url)
                 .header("X-API-KEY", &self.api_key)
                 .json(&payload)
                 .send()
@@ -193,8 +208,13 @@ impl Jug0Client {
         } else {
             let mut create_payload = payload.clone();
             create_payload["slug"] = json!(agent.slug);
+            let url = if force {
+                format!("{}/api/agents?force=true", self.base_url)
+            } else {
+                format!("{}/api/agents", self.base_url)
+            };
             self.http
-                .post(&format!("{}/api/agents", self.base_url))
+                .post(&url)
                 .header("X-API-KEY", &self.api_key)
                 .json(&create_payload)
                 .send()
@@ -347,6 +367,7 @@ impl Jug0Client {
         workflow: &WorkflowGraph,
         definition: &str,
         endpoint_url: &str,
+        force: bool,
     ) -> Result<String> {
         let url_get = format!("{}/api/workflows/{}", self.base_url, workflow.slug);
         let res_get = self
@@ -365,8 +386,13 @@ impl Jug0Client {
 
         if res_get.status().is_success() {
             let existing: WorkflowResponse = res_get.json().await?;
+            let url = if force {
+                format!("{}/api/workflows/{}?force=true", self.base_url, existing.id)
+            } else {
+                format!("{}/api/workflows/{}", self.base_url, existing.id)
+            };
             self.http
-                .patch(&format!("{}/api/workflows/{}", self.base_url, existing.id))
+                .patch(&url)
                 .header("X-API-KEY", &self.api_key)
                 .json(&payload)
                 .send()
@@ -378,8 +404,13 @@ impl Jug0Client {
         } else {
             let mut create_payload = payload.clone();
             create_payload["slug"] = json!(workflow.slug);
+            let url = if force {
+                format!("{}/api/workflows?force=true", self.base_url)
+            } else {
+                format!("{}/api/workflows", self.base_url)
+            };
             self.http
-                .post(&format!("{}/api/workflows", self.base_url))
+                .post(&url)
                 .header("X-API-KEY", &self.api_key)
                 .json(&create_payload)
                 .send()

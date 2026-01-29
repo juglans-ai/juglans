@@ -24,23 +24,29 @@ JUGLANS_CONFIG=/path/to/juglans.toml juglans ...
 # 账户配置
 [account]
 id = "user_123"
+name = "John Doe"
+role = "admin"
 api_key = "jug0_sk_..."
+
+# 工作空间配置（可选）
+[workspace]
+id = "workspace_456"
+name = "My Workspace"
+members = ["user_123", "user_789"]
 
 # Jug0 后端配置
 [jug0]
 base_url = "http://localhost:3000"
-timeout = 30
 
 # Web 服务器配置
 [server]
 host = "127.0.0.1"
 port = 8080
-cors_origins = ["http://localhost:5173"]
 
-# 日志配置
-[logging]
-level = "info"
-format = "pretty"
+# 环境变量（可选）
+[env]
+DATABASE_URL = "postgresql://localhost/mydb"
+CUSTOM_VAR = "value"
 
 # MCP 服务器配置
 [mcp.filesystem]
@@ -60,11 +66,15 @@ api_key = "mcp_key_..."
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `id` | string | 是 | 用户 ID |
-| `api_key` | string | 是 | API 密钥 |
+| `name` | string | 是 | 用户名称 |
+| `role` | string | 否 | 用户角色（如 admin, user） |
+| `api_key` | string | 否 | API 密钥 |
 
 ```toml
 [account]
 id = "user_123"
+name = "John Doe"
+role = "admin"
 api_key = "jug0_sk_abcdef123456"
 ```
 
@@ -76,17 +86,34 @@ export JUGLANS_API_KEY="jug0_sk_..."
 
 ---
 
+### [workspace] - 工作空间配置
+
+工作空间用于多用户协作，可选配置。
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `id` | string | 是 | 工作空间 ID |
+| `name` | string | 是 | 工作空间名称 |
+| `members` | array | 否 | 成员用户 ID 列表 |
+
+```toml
+[workspace]
+id = "workspace_456"
+name = "My Team Workspace"
+members = ["user_123", "user_789", "user_456"]
+```
+
+---
+
 ### [jug0] - 后端配置
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `base_url` | string | http://localhost:3000 | API 地址 |
-| `timeout` | number | 30 | 超时秒数 |
+| `base_url` | string | https://api.jug0.com | API 地址 |
 
 ```toml
 [jug0]
 base_url = "https://api.jug0.com"
-timeout = 60
 ```
 
 **不同环境配置：**
@@ -108,18 +135,34 @@ base_url = "http://localhost:3000"
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `host` | string | 127.0.0.1 | 绑定地址 |
-| `port` | number | 8080 | 端口号 |
-| `cors_origins` | array | [] | CORS 允许源 |
+| `port` | number | 3000 | 端口号 |
 
 ```toml
 [server]
 host = "0.0.0.0"
-port = 3030
-cors_origins = [
-  "http://localhost:5173",
-  "https://app.example.com"
-]
+port = 8080
 ```
+
+---
+
+### [env] - 环境变量
+
+自定义环境变量字典，可在工作流中访问。
+
+```toml
+[env]
+DATABASE_URL = "postgresql://localhost/mydb"
+API_ENDPOINT = "https://api.example.com"
+CUSTOM_SETTING = "value"
+```
+
+这些环境变量可以在工作流执行时通过 `$env.DATABASE_URL` 等方式访问。
+
+**使用场景：**
+- 数据库连接字符串
+- API 端点配置
+- 自定义配置项
+- 开发/生产环境切换
 
 ---
 

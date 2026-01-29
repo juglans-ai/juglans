@@ -123,6 +123,52 @@ juglans chat-flow.jgflow --input '{"question": "What is Juglans?"}'
 | `.jgagent` | Agent 配置 | 模型、温度、系统提示 |
 | `juglans.toml` | 项目配置 | API 密钥、服务器设置 |
 
+## 配置文件
+
+创建 `juglans.toml` 来配置项目：
+
+```toml
+# 账户配置
+[account]
+id = "user_123"
+name = "Your Name"
+role = "admin"
+api_key = "jug0_sk_your_api_key_here"
+
+# 工作空间配置（可选）
+[workspace]
+id = "workspace_456"
+name = "My Workspace"
+members = ["user_123"]
+
+# Jug0 后端配置
+[jug0]
+base_url = "http://localhost:3000"  # 本地开发
+# base_url = "https://api.jug0.com"  # 生产环境
+
+# Web 服务器配置
+[server]
+host = "127.0.0.1"
+port = 8080
+
+# 环境变量（可选）
+[env]
+DATABASE_URL = "postgresql://localhost/mydb"
+API_KEY = "your_api_key"
+
+# MCP 服务器配置（可选）
+[mcp.filesystem]
+command = "npx"
+args = ["-y", "@anthropic/mcp-filesystem"]
+env = { ROOT_DIR = "/workspace" }
+
+[mcp.web-browser]
+url = "http://localhost:3001/mcp"
+api_key = "mcp_key_..."
+```
+
+详细配置说明请参考 [配置文件参考](./reference/config.md)。
+
 ## 示例
 
 查看 [examples/](../examples/) 目录获取更多示例：

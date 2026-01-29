@@ -1,0 +1,18 @@
+---
+slug: "greeting"
+name: "Greeting Prompt"
+type: "user"
+description: "A simple greeting prompt with name variable"
+inputs: {
+  name: "World", 
+  language: "English"
+}
+
+---
+Hello, {{ name }}!
+
+{% if language == "Chinese" %}
+你好！很高兴见到你。
+{% else %}
+How can I help you today?
+{% endif %}

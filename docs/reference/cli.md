@@ -41,6 +41,7 @@ juglans path/to/workflow.jgflow [OPTIONS]
 | `--verbose`, `-v` | 详细输出 |
 | `--dry-run` | 仅解析，不执行 |
 | `--output <FILE>` | 输出结果到文件 |
+| `--output-format <FORMAT>` | 输出格式 (text, json)，默认 text |
 
 **示例：**
 
@@ -59,7 +60,28 @@ juglans workflows/main.jgflow -v
 
 # 仅验证
 juglans workflows/main.jgflow --dry-run
+
+# JSON 格式输出（便于程序化处理）
+juglans workflows/main.jgflow --output-format json
 ```
+
+**JSON 输出格式：**
+
+当使用 `--output-format json` 时，输出结构化的执行结果：
+
+```json
+{
+  "success": true,
+  "duration_ms": 1234,
+  "nodes_executed": 5,
+  "final_output": {
+    "status": "completed",
+    "result": "..."
+  }
+}
+```
+
+这对于 CI/CD 集成或程序化处理工作流结果非常有用
 
 ---
 
@@ -251,6 +273,214 @@ juglans pull my-prompt --type prompt
 # 拉取到指定目录
 juglans pull my-agent --type agent --output ./agents/
 ```
+
+---
+
+### list - 列出远程资源
+
+列出 Jug0 后端的资源。
+
+```bash
+juglans list [OPTIONS]
+```
+
+**选项：**
+
+| 选项 | 说明 |
+|------|------|
+| `--type <TYPE>`, `-t` | 过滤资源类型 (prompt, agent, workflow)，可选 |
+
+**示例：**
+
+```bash
+# 列出所有资源
+juglans list
+
+# 只列出 Prompts
+juglans list --type prompt
+
+# 只列出 Agents（短选项）
+juglans list -t agent
+
+# 只列出 Workflows
+juglans list --type workflow
+```
+
+**输出格式：**
+
+```
+greeting-prompt (prompt)
+assistant (agent)
+market-analyst (agent)
+simple-chat (workflow)
+data-pipeline (workflow)
+```
+
+输出格式为：`slug (resource_type)`，每行一个资源。
+
+**空结果：**
+
+如果没有找到资源，会显示：
+```
+No resources found.
+```
+
+**使用场景：**
+
+- 查看服务器上已有的资源
+- 确认资源是否已成功 apply
+- 在 pull 之前确认资源存在
+
+**注意事项：**
+
+- 需要配置有效的 API key
+- 只显示当前账户可访问的资源
+- 按资源类型和名称排序
+
+---
+
+### check - 验证文件语法
+
+验证 `.jgflow`、`.jgagent`、`.jgprompt` 文件的语法正确性（类似 `cargo check`）。
+
+```bash
+juglans check [PATH] [OPTIONS]
+```
+
+**参数：**
+
+| 参数 | 说明 |
+|------|------|
+| `PATH` | 要检查的文件或目录路径（可选，默认为当前目录） |
+
+**选项：**
+
+| 选项 | 说明 |
+|------|------|
+| `--all` | 显示所有问题包括警告 |
+| `--format <FORMAT>` | 输出格式 (text, json)，默认 text |
+
+**示例：**
+
+```bash
+# 检查当前目录所有文件
+juglans check
+
+# 检查特定目录
+juglans check ./workflows/
+
+# 检查单个文件
+juglans check workflow.jgflow
+
+# 显示所有警告
+juglans check --all
+
+# JSON 格式输出
+juglans check --format json
+```
+
+**输出示例（text 格式）：**
+
+```
+    Checking juglans files in "."
+
+    error[workflow]: workflows/main.jgflow (1 error(s), 0 warning(s))
+      --> [E001] Entry node 'start' not defined
+
+    warning[workflow]: workflows/test.jgflow (1 warning(s))
+      --> [W001] Unused node 'debug'
+
+    Finished checking 3 workflow(s), 2 agent(s), 1 prompt(s) - 2 valid with warnings
+
+error: could not validate 1 file(s) due to 1 previous error(s)
+```
+
+**输出示例（JSON 格式）：**
+
+```json
+{
+  "total": 6,
+  "valid": 5,
+  "errors": 1,
+  "warnings": 1,
+  "by_type": {
+    "workflows": 3,
+    "agents": 2,
+    "prompts": 1
+  },
+  "results": [
+    {
+      "file": "workflows/main.jgflow",
+      "type": "workflow",
+      "slug": "main",
+      "valid": false,
+      "errors": [
+        {"code": "E001", "message": "Entry node 'start' not defined"}
+      ],
+      "warnings": []
+    }
+  ]
+}
+```
+
+**退出码：**
+
+- `0` - 所有文件验证通过
+- `1` - 存在语法错误
+
+**使用场景：**
+
+- CI/CD 流水线中的语法验证
+- 提交前的本地检查
+- 批量验证项目中所有工作流文件
+
+---
+
+### delete - 删除远程资源
+
+从 Jug0 后端删除资源。
+
+```bash
+juglans delete <SLUG> --type <TYPE>
+```
+
+**参数：**
+
+| 参数 | 说明 |
+|------|------|
+| `SLUG` | 要删除的资源 slug |
+
+**选项：**
+
+| 选项 | 说明 |
+|------|------|
+| `--type <TYPE>`, `-t` | 资源类型 (prompt, agent, workflow) |
+
+**示例：**
+
+```bash
+# 删除 Prompt
+juglans delete my-prompt --type prompt
+
+# 删除 Agent（短选项）
+juglans delete my-agent -t agent
+
+# 删除 Workflow
+juglans delete chat-flow --type workflow
+```
+
+**注意事项：**
+
+- 需要配置有效的 API key（通过 `juglans.toml` 或环境变量）
+- 删除操作不可逆，请谨慎使用
+- 只能删除当前账户拥有的资源
+- 删除成功后会显示确认消息：`✅ Deleted <slug> (<type>)`
+
+**错误处理：**
+
+- 如果资源不存在，会返回错误
+- 如果没有权限删除，会返回认证错误
+- 网络错误会显示相应的错误信息
 
 ---
 

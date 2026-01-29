@@ -1,0 +1,17 @@
+---
+slug: "data-analysis"
+name: "Data Analysis Prompt"
+type: "user"
+description: "Analyze data and provide insights"
+inputs: {data: [], focus: "trends"}
+---
+Please analyze the following data and focus on {{ focus }}:
+
+{% for item in data %}
+- {{ item.name }}: {{ item.value }}
+{% endfor %}
+
+Provide a detailed analysis with:
+1. Key findings
+2. Trends and patterns
+3. Recommendations
