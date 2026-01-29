@@ -12,19 +12,67 @@
 - **Jug0 后端** - 与 Jug0 AI 平台无缝集成
 - **跨平台** - 支持 Native + WebAssembly
 
-## 快速开始
+## 安装
 
-### 安装
+### 快速安装 (macOS & Linux)
 
 ```bash
-# 从源码构建
+curl -fsSL https://juglans.ai/get-sdk | sh
+```
+
+或使用 GitHub 直链：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/juglans-ai/juglans/main/install.sh | sh
+```
+
+### macOS (Homebrew)
+
+```bash
+# 添加 tap
+brew tap juglans-ai/tap
+
+# 安装
+brew install juglans
+
+# 验证安装
+juglans --version
+```
+
+### Linux
+
+```bash
+# 使用安装脚本（推荐）
+curl -fsSL https://juglans.ai/get-sdk | sh
+
+# 或从 Releases 下载
+wget https://github.com/juglans-ai/juglans/releases/latest/download/juglans-linux-x64.tar.gz
+tar -xzf juglans-linux-x64.tar.gz
+sudo mv juglans /usr/local/bin/
+```
+
+### Windows
+
+```powershell
+# PowerShell 安装
+irm https://juglans.ai/get-sdk.ps1 | iex
+
+# 或手动下载
+# https://github.com/juglans-ai/juglans/releases/latest
+```
+
+### 从源码构建
+
+```bash
+# 前置要求: Rust 1.70+
 git clone https://github.com/juglans-ai/juglans.git
 cd juglans
 cargo build --release
 
-# 添加到 PATH
-export PATH="$PATH:$(pwd)/target/release"
+# 二进制文件位置: target/release/juglans
 ```
+
+## 快速开始
 
 ### 创建第一个 Agent
 
@@ -42,6 +90,19 @@ system_prompt: "You are a helpful assistant."
 juglans my-agent.jgagent
 ```
 
+### 从源码构建
+
+```bash
+# 前置要求: Rust 1.70+
+git clone https://github.com/juglans-ai/juglans.git
+cd juglans
+cargo build --release
+
+# 二进制文件位置: target/release/juglans
+```
+
+## 快速开始
+
 ### 创建 Prompt 模板
 
 ```yaml
@@ -49,8 +110,7 @@ juglans my-agent.jgagent
 ---
 slug: "greeting"
 name: "Greeting Prompt"
-inputs:
-  name: "World"
+inputs: {name: "World"}
 ---
 Hello, {{ name }}! How can I help you today?
 ```
