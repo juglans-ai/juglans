@@ -196,6 +196,8 @@ exit: [success, failure]
 [check] if !$ctx.is_valid -> [reject]
 ```
 
+**分支汇聚行为：** 当多个条件分支汇聚到同一节点时，使用 **OR 语义**（任意一个前驱完成即可执行），而非 AND 语义（等待所有前驱）。未执行的分支会被自动标记为不可达。详见[条件分支指南](./conditionals.md#分支汇聚语义)。
+
 ### 错误处理
 
 ```yaml

@@ -16,7 +16,8 @@ Juglans 提供多个内置工具，用于工作流中的各种操作。
 | `message` | string | 是 | 发送的消息 |
 | `format` | string | 否 | 输出格式 ("text", "json") |
 | `stateless` | string | 否 | "true" 则不保存历史 |
-| `tools` | array | 否 | 可用的工具定义 |
+| `chat_id` | string | 否 | 对话 ID，用于复用会话上下文 |
+| `tools` | array | 否 | 自定义工具定义（覆盖 Agent 默认配置） |
 
 **示例：**
 
@@ -40,11 +41,46 @@ Juglans 提供多个内置工具，用于工作流中的各种操作。
   message=$input.data,
   stateless="true"
 )
+
+# 复用对话上下文
+[reply]: chat(
+  agent="assistant",
+  chat_id=$reply.chat_id,
+  message=$input.followup
+)
+
+# 附加工具
+[solver]: chat(
+  agent="assistant",
+  message=$input.question,
+  tools=[
+    {
+      "type": "function",
+      "function": {
+        "name": "search_web",
+        "description": "搜索互联网内容",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {"type": "string", "description": "搜索关键词"}
+          },
+          "required": ["query"]
+        }
+      }
+    }
+  ]
+)
 ```
 
 **输出：**
 
 返回 AI 的响应文本。如果 `format="json"`，返回解析后的 JSON 对象。
+
+**工具配置说明：**
+
+- 如果工作流中指定了 `tools` 参数，使用工作流中的配置
+- 否则，如果 Agent 配置中有 `tools` 字段，使用 Agent 的默认工具
+- 工具配置遵循 OpenAI Function Calling 格式
 
 ---
 

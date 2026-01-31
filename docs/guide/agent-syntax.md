@@ -23,6 +23,7 @@ system_prompt: "You are a helpful assistant."
 | `model` | string | 否 | gpt-4o | 模型名称 |
 | `temperature` | float | 否 | 0.7 | 温度参数 (0-2) |
 | `system_prompt` | string | 否 | - | 系统提示词（内联或引用） |
+| `tools` | array/string | 否 | - | 默认工具配置（JSON 数组或字符串） |
 | `mcp` | array | 否 | [] | MCP 服务器列表 |
 | `skills` | array | 否 | [] | 技能列表 |
 | `workflow` | string | 否 | - | 关联的工作流文件路径 |
@@ -85,6 +86,84 @@ system_prompt: p(slug="system-analyst")
 ```
 
 这会从已加载的 Prompt 中查找 `slug="system-analyst"` 的模板作为系统提示词。
+
+## 工具配置
+
+Agent 可以配置默认的工具集，这些工具在调用 `chat()` 时会自动附加到请求中（除非工作流中显式指定了 `tools` 参数）。
+
+### JSON 数组格式
+
+直接使用 JSON 数组定义工具，无需转义：
+
+```yaml
+slug: "web-agent"
+model: "gpt-4o"
+tools: [
+  {
+    "type": "function",
+    "function": {
+      "name": "fetch_url",
+      "description": "获取网页内容",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "url": {"type": "string", "description": "目标 URL"},
+          "method": {"type": "string", "enum": ["GET", "POST"]}
+        },
+        "required": ["url"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "parse_html",
+      "description": "解析 HTML 内容",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "html": {"type": "string", "description": "HTML 源码"},
+          "selector": {"type": "string", "description": "CSS 选择器"}
+        },
+        "required": ["html"]
+      }
+    }
+  }
+]
+```
+
+### 字符串格式
+
+也可以使用 JSON 字符串：
+
+```yaml
+slug: "tool-agent"
+model: "deepseek-chat"
+tools: "[{\"type\":\"function\",\"function\":{\"name\":\"calculator\",\"description\":\"执行数学计算\"}}]"
+```
+
+### 工具优先级
+
+当工作流中的 `chat()` 调用同时指定了 `tools` 参数时，工作流中的配置优先：
+
+```yaml
+# Agent 配置
+slug: "my-agent"
+tools: [{"type": "function", "function": {"name": "default_tool"}}]
+
+# 工作流中使用
+[step]: chat(
+  agent="my-agent",
+  message=$input,
+  tools=[{"type": "function", "function": {"name": "override_tool"}}]  # 这个会被使用
+)
+
+# 不指定 tools 时使用 Agent 的默认配置
+[step2]: chat(
+  agent="my-agent",
+  message=$input  # 会使用 Agent 配置的 default_tool
+)
+```
 
 ## MCP 工具集成
 

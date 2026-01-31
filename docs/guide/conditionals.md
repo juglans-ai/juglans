@@ -102,6 +102,31 @@ exit: [done]
 [fallback] -> [done]
 ```
 
+### 分支汇聚语义
+
+**重要：** 当多个条件分支汇聚到同一个节点时，执行引擎使用 **OR 语义**，即：
+
+- 只要**任意一个**前驱节点完成，汇聚节点就会执行
+- **不会**等待所有前驱节点都完成（不是 AND 语义）
+
+```yaml
+# 分支后汇聚
+[router] if $ctx.type == "A" -> [handler_a]
+[router] if $ctx.type == "B" -> [handler_b]
+
+[handler_a]: chat(agent="agent-a", message=$input)
+[handler_b]: chat(agent="agent-b", message=$input)
+
+[final]: notify(status="Done")
+
+# final 节点有两个前驱，但只有一个会执行
+# 执行引擎会自动检测未执行的分支，标记为不可达
+[handler_a] -> [final]
+[handler_b] -> [final]
+```
+
+这确保了条件分支的直觉行为：分支路径是互斥的，汇聚点不会等待未执行的分支。
+
 ### 优先级分支
 
 条件按定义顺序评估，第一个为真的分支被执行：

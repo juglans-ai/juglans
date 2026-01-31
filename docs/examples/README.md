@@ -8,6 +8,7 @@
 |------|------|------|
 | [basic-chat](./basic-chat.md) | 基础对话工作流 | 入门 |
 | [intent-router](./intent-router.md) | 意图分类路由 | 入门 |
+| [tool-calling](./tool-calling.md) | Function Calling 工具调用 | 入门 |
 | [rag-pipeline](./rag-pipeline.md) | RAG 检索增强生成 | 中级 |
 | [multi-agent](./multi-agent.md) | 多 Agent 协作 | 中级 |
 | [code-review](./code-review.md) | 自动代码审查 | 中级 |
