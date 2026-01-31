@@ -185,6 +185,37 @@ impl WorkflowExecutor {
         };
 
         if CONTEXT_VAR_RE.is_match(clean_param_no_quotes) {
+            // 检查是否是纯变量引用（没有运算符/表达式）
+            let is_pure_variable = clean_param_no_quotes.starts_with('$') &&
+                !clean_param_no_quotes.contains("==") &&
+                !clean_param_no_quotes.contains("!=") &&
+                !clean_param_no_quotes.contains(">=") &&
+                !clean_param_no_quotes.contains("<=") &&
+                !clean_param_no_quotes.contains('>') &&
+                !clean_param_no_quotes.contains('<') &&
+                !clean_param_no_quotes.contains('+') &&
+                !clean_param_no_quotes.contains('-') &&
+                !clean_param_no_quotes.contains('*') &&
+                !clean_param_no_quotes.contains('/') &&
+                !clean_param_no_quotes.contains("&&") &&
+                !clean_param_no_quotes.contains("||") &&
+                !clean_param_no_quotes.contains('(') &&
+                !clean_param_no_quotes.contains(' ');
+
+            if is_pure_variable {
+                // 纯变量引用：返回原始 JSON 类型（保留 boolean, number 等）
+                let path = &clean_param_no_quotes[1..]; // 去掉 $
+                let path = if path.starts_with("ctx.") {
+                    &path[4..]
+                } else {
+                    path
+                };
+                return context
+                    .resolve_path(path)?
+                    .ok_or_else(|| anyhow!("Variable '{}' not found in context", path));
+            }
+
+            // 包含表达式：替换变量后用 Rhai 评估
             let rendered = CONTEXT_VAR_RE.replace_all(clean_param_no_quotes, |caps: &Captures| {
                 let raw_path = &caps[1];
                 let path = if raw_path.starts_with("ctx.") {
@@ -196,10 +227,34 @@ impl WorkflowExecutor {
                     .resolve_path(path)
                     .ok()
                     .flatten()
-                    .map(|v| v.as_str().unwrap_or(&v.to_string()).to_string())
-                    .unwrap_or_else(|| format!("[Missing: ${}]", path))
+                    .map(|v| match v {
+                        // 保留类型的字符串表示（用于 Rhai 评估）
+                        Value::String(s) => format!("\"{}\"", s.replace("\"", "\\\"")), // 转义引号
+                        Value::Bool(b) => b.to_string(),
+                        Value::Number(n) => n.to_string(),
+                        Value::Null => "null".to_string(),
+                        Value::Array(_) | Value::Object(_) => v.to_string(),
+                    })
+                    .unwrap_or_else(|| "null".to_string())
             });
-            return Ok(json!(rendered.to_string()));
+
+            // 用 Rhai 评估表达式
+            let mut scope = Scope::new();
+            let context_val = context.get_as_value()?;
+            let dynamic_ctx = rhai::serde::to_dynamic(context_val)?;
+            if let Some(map) = dynamic_ctx.try_cast::<rhai::Map>() {
+                scope.push("ctx", map);
+            }
+
+            match self.rhai_engine.eval_with_scope::<Dynamic>(&mut scope, &rendered.to_string()) {
+                Ok(result) => {
+                    let json_result = rhai::serde::from_dynamic::<Value>(&result)?;
+                    return Ok(json_result);
+                }
+                Err(e) => {
+                    return Err(anyhow!("Failed to evaluate expression '{}': {}", rendered, e));
+                }
+            }
         }
 
         let mut scope = Scope::new();
