@@ -7,9 +7,16 @@ COMMENT = _{ "#" ~ (!NEWLINE ~ ANY)* ~ NEWLINE? }
 string = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
 number = @{ "-"? ~ ("0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*) ~ ("." ~ ASCII_DIGIT*)? }
 boolean = { "true" | "false" }
+null = { "null" }
 
 list_item = { string }
 list = { "[" ~ (list_item ~ ("," ~ list_item)*)? ~ ","? ~ "]" }
+
+// JSON 支持
+json_pair = { string ~ ":" ~ json_value }
+json_object = { "{" ~ (json_pair ~ ("," ~ json_pair)*)? ~ ","? ~ "}" }
+json_array = { "[" ~ (json_value ~ ("," ~ json_value)*)? ~ ","? ~ "]" }
+json_value = { json_object | json_array | string | number | boolean | null }
 
 // Fields
 key_slug = { "slug" ~ ":" ~ string }
@@ -21,14 +28,16 @@ key_mcp = { "mcp" ~ ":" ~ list }
 key_skills = { "skills" ~ ":" ~ list }
 // 【新增】关联工作流文件
 key_workflow = { "workflow" ~ ":" ~ string }
+// 【新增】默认 tools 配置（支持 JSON 数组或字符串）
+key_tools = { "tools" ~ ":" ~ (json_array | string) }
 
 // System Prompt can be a string OR p(slug="...")
 p_func = { "p" ~ "(" ~ "slug" ~ "=" ~ string ~ ")" }
 key_system = { "system_prompt" ~ ":" ~ (string | p_func) }
 
 // Agent Definition
-agent_def = { 
-    SOI ~ 
-    (key_slug | key_name | key_desc | key_model | key_temp | key_mcp | key_skills | key_system | key_workflow)+ 
-    ~ EOI 
+agent_def = {
+    SOI ~
+    (key_slug | key_name | key_desc | key_model | key_temp | key_mcp | key_skills | key_system | key_workflow | key_tools)+
+    ~ EOI
 }

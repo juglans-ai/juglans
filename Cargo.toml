@@ -52,6 +52,9 @@ axum = "0.7"
 tower-http = { version = "0.5", features = ["cors", "trace"] }
 # 【新增】tokio-stream 依赖
 tokio-stream = "0.1"
+# 【新增】智能终端输入和渲染
+crossterm = "0.28"
+termimad = "0.30"
 
 [features]
 default = ["native"]

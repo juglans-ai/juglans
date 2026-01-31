@@ -1,0 +1,17 @@
+# Test Worker Agent (Pure Agent)
+# 用于 workflow 内部调用的纯净 agent，不绑定 workflow
+# 这是推荐的 workflow agent 设计模式
+
+slug: "test-worker"
+name: "测试工作助手"
+description: "用于 workflow 内部的纯净 agent"
+
+# 模型配置
+model: "deepseek-chat"
+temperature: 0.7
+
+# 系统提示词
+system_prompt: "你是一个友好、专业的 AI 助手。"
+
+# 注意：pure agent 不绑定 workflow
+# workflow 中使用的 agent 应该是 pure agent，避免递归调用

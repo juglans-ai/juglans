@@ -9,6 +9,12 @@ author: "Juglans Team"
 
 # 加载本地资源（相对于 workflow 文件的路径）
 prompts: ["./test.jgprompt"]
+agents: ["./agents/test-worker.jgagent"]
+
+# 重要设计原则：
+# - workflow 中应该使用 pure agents（不绑定 workflow 的 agent）
+# - 这样可以避免递归调用和依赖混乱
+# - test-worker.jgagent 是一个 pure agent，专门用于 workflow 内部
 
 # 定义入口和出口节点
 entry: [start]
@@ -21,7 +27,7 @@ exit: [reply]
 
 # 2. 意图识别 - 使用 prompt 模板 + agent 分析
 [classify_intent]: chat(
-  agent="test",
+  agent="test-worker",
   message=p(
     slug="intent-classifier",
     user_message=$input.message
@@ -40,25 +46,25 @@ exit: [reply]
 
 # 5a. 问候类回复
 [handle_greeting]: chat(
-  agent="test",
+  agent="test-worker",
   message="用户说：" + $input.message + "\n请给出友好的问候回复。"
 )
 
 # 5b. 问题类回复
 [handle_question]: chat(
-  agent="test",
+  agent="test-worker",
   message="用户提问：" + $input.message + "\n请给出详细的解答。"
 )
 
 # 5c. 命令类回复
 [handle_command]: chat(
-  agent="test",
+  agent="test-worker",
   message="用户命令：" + $input.message + "\n请确认并说明如何执行。"
 )
 
 # 5d. 闲聊类回复
 [handle_chat]: chat(
-  agent="test",
+  agent="test-worker",
   message="用户说：" + $input.message + "\n请自然地聊天回应。"
 )
 

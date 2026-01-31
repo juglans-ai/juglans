@@ -24,6 +24,11 @@ pub struct WorkflowContext {
     data: Arc<Mutex<Value>>,
     /// 【新增】用于流式输出的信道
     event_sender: Option<UnboundedSender<WorkflowEvent>>,
+    /// 【新增】执行栈追踪，用于防止无限递归
+    /// 格式：["agent_slug:workflow_name", ...]
+    execution_stack: Arc<Mutex<Vec<String>>>,
+    /// 【新增】最大嵌套深度
+    max_depth: usize,
 }
 
 impl WorkflowContext {
@@ -32,6 +37,8 @@ impl WorkflowContext {
         Self {
             data: Arc::new(Mutex::new(json!({}))),
             event_sender: None,
+            execution_stack: Arc::new(Mutex::new(Vec::new())),
+            max_depth: 10, // 默认最大深度 10 层
         }
     }
 
@@ -40,7 +47,72 @@ impl WorkflowContext {
         Self {
             data: Arc::new(Mutex::new(json!({}))),
             event_sender: Some(sender),
+            execution_stack: Arc::new(Mutex::new(Vec::new())),
+            max_depth: 10,
         }
+    }
+
+    /// 【新增】进入嵌套执行（push 到栈）
+    /// 返回 Err 如果检测到递归或超过最大深度
+    pub fn enter_execution(&self, identifier: String) -> Result<()> {
+        let mut stack = self
+            .execution_stack
+            .lock()
+            .map_err(|_| anyhow!("Failed to acquire execution stack lock"))?;
+
+        // 检查深度限制
+        if stack.len() >= self.max_depth {
+            return Err(anyhow!(
+                "Maximum execution depth ({}) exceeded. Current stack: {:?}",
+                self.max_depth,
+                stack
+            ));
+        }
+
+        // 检查循环引用
+        if stack.contains(&identifier) {
+            return Err(anyhow!(
+                "Circular execution detected: '{}' is already in the call stack: {:?}",
+                identifier,
+                stack
+            ));
+        }
+
+        stack.push(identifier);
+        Ok(())
+    }
+
+    /// 【新增】退出嵌套执行（pop 栈）
+    pub fn exit_execution(&self) -> Result<()> {
+        let mut stack = self
+            .execution_stack
+            .lock()
+            .map_err(|_| anyhow!("Failed to acquire execution stack lock"))?;
+
+        if stack.is_empty() {
+            return Err(anyhow!("Execution stack is already empty"));
+        }
+
+        stack.pop();
+        Ok(())
+    }
+
+    /// 【新增】获取当前执行栈（用于调试）
+    pub fn get_execution_stack(&self) -> Result<Vec<String>> {
+        let stack = self
+            .execution_stack
+            .lock()
+            .map_err(|_| anyhow!("Failed to acquire execution stack lock"))?;
+        Ok(stack.clone())
+    }
+
+    /// 【新增】获取当前嵌套深度
+    pub fn get_execution_depth(&self) -> Result<usize> {
+        let stack = self
+            .execution_stack
+            .lock()
+            .map_err(|_| anyhow!("Failed to acquire execution stack lock"))?;
+        Ok(stack.len())
     }
 
     /// 【新增】发送事件

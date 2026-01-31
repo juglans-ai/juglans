@@ -17,7 +17,8 @@ pub struct AgentResource {
     pub temperature: Option<f64>,
     pub system_prompt: String,
     pub system_prompt_slug: Option<String>,
-    pub workflow: Option<String>, // 【新增】
+    pub workflow: Option<String>,
+    pub tools: Option<String>, // 【新增】JSON 格式的 tools 配置
     pub mcp: Vec<String>,
     pub skills: Vec<String>,
 }
@@ -39,7 +40,16 @@ impl AgentParser {
                 Rule::key_name => agent.name = Self::parse_string(pair),
                 Rule::key_desc => agent.description = Some(Self::parse_string(pair)),
                 Rule::key_model => agent.model = Self::parse_string(pair),
-                Rule::key_workflow => agent.workflow = Some(Self::parse_string(pair)), // 【新增】
+                Rule::key_workflow => agent.workflow = Some(Self::parse_string(pair)),
+                Rule::key_tools => {
+                    // 支持 JSON 数组或字符串
+                    let inner = pair.into_inner().next().unwrap();
+                    agent.tools = Some(match inner.as_rule() {
+                        Rule::json_array => Self::parse_json_value(inner),
+                        Rule::string => inner.as_str().trim_matches('"').to_string(),
+                        _ => String::new(),
+                    });
+                }
                 Rule::key_temp => {
                     let val_str = pair.into_inner().next().unwrap().as_str();
                     agent.temperature = Some(val_str.parse().unwrap_or(0.7));
@@ -82,5 +92,49 @@ impl AgentParser {
             list.push(item.as_str().trim_matches('"').to_string());
         }
         list
+    }
+
+    /// 解析 JSON 值并转换为 JSON 字符串
+    fn parse_json_value(pair: pest::iterators::Pair<Rule>) -> String {
+        use serde_json::json;
+
+        match pair.as_rule() {
+            Rule::json_object => {
+                let mut map = serde_json::Map::new();
+                for inner_pair in pair.into_inner() {
+                    if inner_pair.as_rule() == Rule::json_pair {
+                        let mut pair_iter = inner_pair.into_inner();
+                        let key = pair_iter
+                            .next()
+                            .unwrap()
+                            .as_str()
+                            .trim_matches('"')
+                            .to_string();
+                        let value = Self::parse_json_value(pair_iter.next().unwrap());
+                        map.insert(
+                            key,
+                            serde_json::from_str(&value).unwrap_or(json!(value)),
+                        );
+                    }
+                }
+                serde_json::to_string(&map).unwrap()
+            }
+            Rule::json_array => {
+                let mut arr = Vec::new();
+                for inner_pair in pair.into_inner() {
+                    let value = Self::parse_json_value(inner_pair);
+                    arr.push(serde_json::from_str::<serde_json::Value>(&value).unwrap_or(json!(value)));
+                }
+                serde_json::to_string(&arr).unwrap()
+            }
+            Rule::string => {
+                let s = pair.as_str().trim_matches('"').to_string();
+                serde_json::to_string(&s).unwrap()
+            }
+            Rule::number => pair.as_str().to_string(),
+            Rule::boolean => pair.as_str().to_string(),
+            Rule::null => "null".to_string(),
+            _ => "null".to_string(),
+        }
     }
 }

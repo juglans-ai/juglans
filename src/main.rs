@@ -5,6 +5,7 @@ mod builtins;
 mod core;
 mod services;
 mod templates;
+mod ui;
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
@@ -18,6 +19,7 @@ use std::sync::Arc;
 use tracing::{error, info};
 
 use core::agent_parser::AgentParser;
+use ui::{render::render_markdown, render::show_welcome, render::show_shortcuts, MultilineInput};
 use core::context::WorkflowContext;
 use core::executor::WorkflowExecutor;
 use core::parser::GraphParser;
@@ -219,10 +221,14 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
 
         "jgagent" => {
             let agent_meta_definition = AgentParser::parse(&source_raw_text)?;
-            println!(
-                "🤖 Agent Active: {} ({})",
-                agent_meta_definition.name, agent_meta_definition.slug
+
+            // 显示欢迎信息
+            show_welcome(
+                &agent_meta_definition.name,
+                &agent_meta_definition.slug,
+                agent_meta_definition.workflow.is_some(),
             );
+
             let global_system_config = JuglansConfig::load()?;
 
             let shared_runtime_ptr: Arc<dyn JuglansRuntime> =
@@ -270,24 +276,53 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
                 .await,
             );
 
+            // 【新增】注入 executor 引用到 registry（用于嵌套 workflow 执行）
+            primary_executor_ptr
+                .get_registry()
+                .set_executor(Arc::downgrade(&primary_executor_ptr));
+
             let multi_turn_interaction_ctx = WorkflowContext::new();
             let resolved_cli_input = resolve_input_data(cli)?;
+
+            let mut input_widget = MultilineInput::new();
 
             loop {
                 let session_input_string = if let Some(cmd_input) = &resolved_cli_input {
                     cmd_input.clone()
                 } else {
-                    print!("\nUser > ");
-                    io::stdout().flush()?;
-                    let mut input_buffer_str = String::new();
-                    io::stdin().read_line(&mut input_buffer_str)?;
-                    let sanitized_input = input_buffer_str.trim().to_string();
+                    // 获取当前 chat_id
+                    let chat_id = multi_turn_interaction_ctx
+                        .resolve_path("reply.chat_id")
+                        .ok()
+                        .flatten()
+                        .and_then(|v| v.as_str().map(|s| s.to_string()));
 
-                    if sanitized_input == "exit" || sanitized_input == "quit" {
-                        println!("Session terminated. Finalizing...");
-                        break;
+                    // 使用 MultilineInput 获取输入
+                    match input_widget.prompt(
+                        &agent_meta_definition.name,
+                        chat_id.as_deref(),
+                    )? {
+                        Some(input) => {
+                            let trimmed = input.trim();
+                            if trimmed.is_empty() {
+                                continue;
+                            }
+                            // 处理特殊命令
+                            if trimmed == "help" {
+                                show_shortcuts();
+                                continue;
+                            }
+                            if trimmed == "exit" || trimmed == "quit" {
+                                println!("\nGoodbye!");
+                                break;
+                            }
+                            trimmed.to_string()
+                        }
+                        None => {
+                            println!("\nGoodbye!");
+                            break;
+                        }
                     }
-                    sanitized_input
                 };
 
                 if session_input_string.is_empty() {
@@ -303,12 +338,15 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
                 multi_turn_interaction_ctx.set("reply.status".to_string(), json!("processing"))?;
 
                 if let Some(target_flow_obj) = &active_workflow_ptr {
+                    println!("\n⚡ Workflow Execution...");
                     if let Err(logic_err) = primary_executor_ptr
                         .clone()
                         .execute_graph(target_flow_obj.clone(), &multi_turn_interaction_ctx)
                         .await
                     {
-                        error!("Execution Engine Failure: {}", logic_err);
+                        error!("❌ Execution Failed: {}\n", logic_err);
+                    } else {
+                        println!("✓ Workflow Completed\n");
                     }
 
                     let final_concatenated_answer = multi_turn_interaction_ctx
@@ -316,10 +354,11 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
                         .and_then(|v| v.as_str().map(|s| s.to_string()))
                         .unwrap_or_default();
 
-                    println!(
-                        "\n--- [Agent Response Log] ---\n{}",
-                        final_concatenated_answer
-                    );
+                    if !final_concatenated_answer.is_empty() {
+                        // 使用 Markdown 渲染（不带边框）
+                        render_markdown(&final_concatenated_answer);
+                        println!();  // 添加空行
+                    }
                 } else {
                     let chat_result_raw = primary_executor_ptr
                         .execute_tool_internal(

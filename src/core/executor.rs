@@ -59,6 +59,11 @@ impl WorkflowExecutor {
         }
     }
 
+    /// 获取 builtin registry 的引用（用于注入 executor）
+    pub fn get_registry(&self) -> &Arc<BuiltinRegistry> {
+        &self.builtin_registry
+    }
+
     pub async fn load_mcp_tools(&mut self, config: &JuglansConfig) {
         if config.mcp_servers.is_empty() {
             return;
@@ -213,11 +218,11 @@ impl WorkflowExecutor {
             "".to_string()
         };
 
-        info!("\n▶️ Node: [{}]{}", node.id, status_suffix);
+        debug!("│ → [{}]{}", node.id, status_suffix);
 
         match &node.node_type {
             NodeType::Literal(val) => {
-                info!("  [Literal] Assigning value.");
+                debug!("│   Literal value assigned");
                 Ok(Some(val.clone()))
             }
             NodeType::Task(action) => {
@@ -240,9 +245,9 @@ impl WorkflowExecutor {
                 } else {
                     list
                 };
-                info!(
-                    "  [Control] Foreach: iterating over '{}' (path: '{}') into '{}'",
-                    list, clean_path, item
+                debug!(
+                    "│   Foreach: {} in {} ({})",
+                    item, list, clean_path
                 );
                 let list_val = context
                     .resolve_path(clean_path)?
@@ -251,7 +256,7 @@ impl WorkflowExecutor {
                     .as_array()
                     .ok_or_else(|| anyhow!("Variable '{}' is not an array.", list))?;
                 for (i, val) in array.iter().enumerate() {
-                    info!("  [Foreach] Iteration {}/{}", i + 1, array.len());
+                    debug!("│   ├─ Iteration {}/{}", i + 1, array.len());
                     context.set(item.clone(), val.clone())?;
                     let body_arc = Arc::new(*body.clone());
                     if let Err(e) = self.clone().execute_graph(body_arc, context).await {
@@ -302,6 +307,119 @@ impl WorkflowExecutor {
         Ok(())
     }
 
+    /// 清理不可达节点：检查并跳过那些所有前驱都已完成但仍有入度的节点
+    /// 这些节点永远无法执行（因为前驱都没有激活通往它们的边）
+    fn cleanup_unreachable_nodes(
+        workflow: &Arc<WorkflowGraph>,
+        in_degrees: &Arc<Mutex<HashMap<NodeIndex, usize>>>,
+        ready_queue: &Arc<Mutex<VecDeque<NodeIndex>>>,
+        completed_nodes: &Arc<Mutex<HashSet<NodeIndex>>>,
+    ) {
+        let unreachable_nodes = Arc::new(Mutex::new(HashSet::new()));
+        let completed = completed_nodes.lock().unwrap().clone();
+        let mut degrees = in_degrees.lock().unwrap();
+
+        // 找出所有不可达的节点
+        let unreachable: Vec<NodeIndex> = degrees
+            .iter()
+            .filter(|(idx, &degree)| {
+                if degree == 0 || completed.contains(idx) {
+                    return false;
+                }
+
+                // 检查所有前驱是否都已完成
+                let all_predecessors_done = workflow
+                    .graph
+                    .edges_directed(**idx, Direction::Incoming)
+                    .all(|e| completed.contains(&e.source()));
+
+                all_predecessors_done
+            })
+            .map(|(idx, _)| *idx)
+            .collect();
+
+        drop(degrees);
+        drop(completed);
+
+        // 递归处理不可达节点
+        for node_idx in unreachable {
+            Self::mark_unreachable_recursive(
+                node_idx,
+                workflow,
+                in_degrees,
+                ready_queue,
+                completed_nodes,
+                &unreachable_nodes,
+            );
+        }
+    }
+
+    /// 递归标记节点及其后继为不可达
+    fn mark_unreachable_recursive(
+        node_idx: NodeIndex,
+        workflow: &Arc<WorkflowGraph>,
+        in_degrees: &Arc<Mutex<HashMap<NodeIndex, usize>>>,
+        ready_queue: &Arc<Mutex<VecDeque<NodeIndex>>>,
+        completed_nodes: &Arc<Mutex<HashSet<NodeIndex>>>,
+        unreachable_nodes: &Arc<Mutex<HashSet<NodeIndex>>>,
+    ) {
+        // 检查是否已经处理过
+        if completed_nodes.lock().unwrap().contains(&node_idx) {
+            return;
+        }
+
+        info!(
+            "  -> Node [{}] is unreachable (skipping)",
+            workflow.graph[node_idx].id
+        );
+
+        // 标记为已完成（虽然没有执行）
+        completed_nodes.lock().unwrap().insert(node_idx);
+        // 同时标记为不可达
+        unreachable_nodes.lock().unwrap().insert(node_idx);
+
+        // 处理所有后继节点
+        for edge in workflow.graph.edges(node_idx) {
+            let successor_idx = edge.target();
+
+            let mut degrees = in_degrees.lock().unwrap();
+            if let Some(degree) = degrees.get_mut(&successor_idx) {
+                *degree -= 1;
+                let new_degree = *degree;
+                drop(degrees);
+
+                if new_degree == 0 {
+                    // 检查该后继的所有前驱是否都是不可达的
+                    let unreachable = unreachable_nodes.lock().unwrap();
+                    let all_preds_unreachable = workflow
+                        .graph
+                        .edges_directed(successor_idx, Direction::Incoming)
+                        .all(|e| unreachable.contains(&e.source()));
+                    drop(unreachable);
+
+                    if all_preds_unreachable {
+                        // 所有前驱都不可达，继续递归标记
+                        Self::mark_unreachable_recursive(
+                            successor_idx,
+                            workflow,
+                            in_degrees,
+                            ready_queue,
+                            completed_nodes,
+                            unreachable_nodes,
+                        );
+                    } else {
+                        // 有前驱是正常执行的，加入队列
+                        info!(
+                            "Node [{}] is now ready to run.",
+                            workflow.graph[successor_idx].id
+                        );
+                        ready_queue.lock().unwrap().push_back(successor_idx);
+                    }
+                }
+            }
+        }
+    }
+
     pub fn execute_graph<'a>(
         self: Arc<Self>,
         workflow: Arc<WorkflowGraph>,
@@ -344,7 +462,22 @@ impl WorkflowExecutor {
                 if current_batch.is_empty() {
                     let completed = completed_nodes.lock().unwrap().len();
                     if completed < total_nodes {
-                        info!("Workflow graph execution finished early/deadlocked. ({} / {} nodes ran)", completed, total_nodes);
+                        // 尝试清理不可达节点
+                        info!("Detecting unreachable nodes...");
+                        Self::cleanup_unreachable_nodes(
+                            &workflow,
+                            &in_degrees,
+                            &ready_queue,
+                            &completed_nodes,
+                        );
+
+                        // 检查是否有新的节点加入队列
+                        if ready_queue.lock().unwrap().is_empty() {
+                            info!("Workflow graph execution finished early/deadlocked. ({} / {} nodes ran)", completed, total_nodes);
+                            break;
+                        }
+                        // 否则继续执行新加入的节点
+                        continue;
                     }
                     break;
                 }
@@ -423,6 +556,7 @@ impl WorkflowExecutor {
                                             "  -> Condition FALSE, skipping path to [{}]",
                                             workflow_clone.graph[successor_idx].id
                                         );
+                                        // 不做任何处理，让死锁检测逻辑处理不可达节点
                                     }
                                 } else {
                                     proceed = true;

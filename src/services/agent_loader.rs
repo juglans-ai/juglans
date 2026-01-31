@@ -4,7 +4,7 @@ use glob::glob;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::core::agent_parser::{AgentParser, AgentResource};
 
@@ -53,11 +53,11 @@ impl AgentRegistry {
 
         match AgentParser::parse(&content) {
             Ok(agent) => {
-                info!("🤖 Loaded Agent: [{}] from {:?}", agent.slug, abs_path);
+                debug!("  ✓ Agent loaded: {} from {:?}", agent.slug, abs_path);
                 self.agents.insert(agent.slug.clone(), (agent, abs_path));
             }
             Err(e) => {
-                warn!("Failed to parse agent file {:?}: {}", path, e);
+                warn!("  ✗ Failed to parse agent: {:?} - {}", path, e);
             }
         }
 
@@ -81,7 +81,7 @@ impl AgentRegistry {
 
     /// 【新增】手动注册一个 agent
     pub fn register(&mut self, agent: AgentResource, path: PathBuf) {
-        info!("🤖 Registered Agent: [{}] from {:?}", agent.slug, path);
+        debug!("  ✓ Agent registered: {} from {:?}", agent.slug, path);
         self.agents.insert(agent.slug.clone(), (agent, path));
     }
 }

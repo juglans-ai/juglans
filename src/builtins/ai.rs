@@ -140,7 +140,15 @@ impl Tool for Chat {
             .map(|s| s.to_lowercase())
             .unwrap_or_else(|| "text".to_string());
 
-        let custom_tools_json_schema = if let Some(schema_raw) = params.get("tools") {
+        // 【修改】支持从 agent 获取默认 tools
+        let tools_json_str = params.get("tools")
+            .or_else(|| {
+                // 如果 chat 没有指定 tools，尝试从 agent 获取默认 tools
+                self.agent_registry.get(agent_slug_str)
+                    .and_then(|agent| agent.tools.as_ref())
+            });
+
+        let custom_tools_json_schema = if let Some(schema_raw) = tools_json_str {
             let parsed: Vec<Value> = serde_json::from_str(schema_raw).with_context(|| {
                 format!(
                     "Failed to parse 'tools' parameter as JSON array. Input was: {}",
@@ -148,10 +156,13 @@ impl Tool for Chat {
                 )
             })?;
             info!("🛠️ Attaching {} custom tools to the request.", parsed.len());
+            debug!("🛠️ Attaching {} custom tools", parsed.len());
             Some(parsed)
         } else {
             None
         };
+
+        info!("│   Message content: {}", user_message_body);
 
         let mut chat_messages_buffer = vec![json!({
             "type": "text",
@@ -184,7 +195,94 @@ impl Tool for Chat {
         };
 
         let final_agent_config = if let Some(local_res) = self.agent_registry.get(agent_slug_str) {
-            info!("🤖 Resolving Local Agent Definition: [{}]", agent_slug_str);
+            info!("│   Using local agent: {} (has_workflow: {})", agent_slug_str, local_res.workflow.is_some());
+
+            // 【新增】检查 agent 是否有 workflow，如果有则执行嵌套 workflow
+            if let Some(ref workflow_path) = local_res.workflow {
+                if let Some(registry_weak) = &self.builtin_registry {
+                    if let Some(registry) = registry_weak.upgrade() {
+                        // 获取 agent 文件的基准目录
+                        let agent_base_dir = if let Some((_, path)) = self.agent_registry.get_with_path(agent_slug_str) {
+                            path.parent().unwrap_or(std::path::Path::new("."))
+                        } else {
+                            std::path::Path::new(".")
+                        };
+
+                        // 构建 identifier 用于递归检查
+                        let identifier = format!("{}:{}", agent_slug_str, workflow_path);
+
+                        // 获取超时配置（可选参数，默认无限制）
+                        let timeout = params.get("workflow_timeout")
+                            .and_then(|t| t.parse::<u64>().ok())
+                            .map(std::time::Duration::from_secs);
+
+                        if let Some(timeout_duration) = timeout {
+                            info!("│   ⚡ Executing workflow: {} (timeout: {:?})", workflow_path, timeout_duration);
+                        } else {
+                            info!("│   ⚡ Executing workflow: {} (no timeout)", workflow_path);
+                        }
+
+                        // 【修复】保存原始 input.message，执行后恢复
+                        let original_input_message = context.resolve_path("input.message").ok().flatten();
+
+                        // 设置 input.message 到 context（workflow 需要）
+                        context.set("input.message".to_string(), serde_json::json!(user_message_body))?;
+
+                        // 执行嵌套 workflow（带超时控制）
+                        let workflow_future = registry.execute_nested_workflow(
+                            workflow_path,
+                            agent_base_dir,
+                            context,
+                            identifier,
+                        );
+
+                        let execution_result = if let Some(timeout_duration) = timeout {
+                            // 带超时执行
+                            match tokio::time::timeout(timeout_duration, workflow_future).await {
+                                Ok(result) => result,
+                                Err(_) => {
+                                    return Err(anyhow::anyhow!(
+                                        "Workflow execution timeout after {:?}. Consider increasing workflow_timeout parameter.",
+                                        timeout_duration
+                                    ));
+                                }
+                            }
+                        } else {
+                            // 无超时限制
+                            workflow_future.await
+                        };
+
+                        let result = match execution_result {
+                            Ok(_) => {
+                                // 从 context 获取 workflow 的输出
+                                let output = context
+                                    .resolve_path("reply.output")?
+                                    .and_then(|v| v.as_str().map(|s| s.to_string()))
+                                    .unwrap_or_default();
+
+                                if requested_format_mode == "json" {
+                                    Ok(Some(
+                                        serde_json::from_str::<Value>(&output).unwrap_or(json!(output)),
+                                    ))
+                                } else {
+                                    Ok(Some(json!(output)))
+                                }
+                            }
+                            Err(e) => {
+                                Err(anyhow::anyhow!("Nested workflow execution failed: {}", e))
+                            }
+                        };
+
+                        // 【修复】恢复原始 input.message
+                        if let Some(original) = original_input_message {
+                            context.set("input.message".to_string(), original)?;
+                        }
+
+                        return result;
+                    }
+                }
+            }
+
             let mut resolved_sys_prompt = String::new();
             if let Some(override_val) = system_prompt_manual_override {
                 resolved_sys_prompt = override_val;
@@ -206,6 +304,8 @@ impl Tool for Chat {
                 resolved_sys_prompt = local_res.system_prompt.clone();
             }
 
+            info!("│   System prompt: {}...", &resolved_sys_prompt.chars().take(100).collect::<String>());
+
             json!({
                 "slug": local_res.slug,
                 "model": local_res.model,
@@ -213,7 +313,7 @@ impl Tool for Chat {
                 "temperature": local_res.temperature,
             })
         } else {
-            info!("🤖 Using Remote Agent Configuration: [{}]", agent_slug_str);
+            debug!("│   Using remote agent: {}", agent_slug_str);
             let mut base_config = json!({ "slug": agent_slug_str });
             if let Some(override_val) = system_prompt_manual_override {
                 if let Some(map) = base_config.as_object_mut() {
@@ -242,10 +342,7 @@ impl Tool for Chat {
 
             match api_execution_result {
                 ChatOutput::Final { text, chat_id } => {
-                    info!(
-                        "✅ AI Response Generation Completed. Session ID: {}",
-                        chat_id
-                    );
+                    debug!("│   ✓ Response completed (session: {})", chat_id);
 
                     if !is_stateless_mode {
                         context.set("reply.chat_id".to_string(), json!(chat_id))?;
@@ -270,10 +367,7 @@ impl Tool for Chat {
                 }
 
                 ChatOutput::ToolCalls { calls, chat_id } => {
-                    info!(
-                        "🛠️ AI requested tool execution. Pending calls: {}",
-                        calls.len()
-                    );
+                    info!("│   🔧 Tool calls requested: {}", calls.len());
                     current_loop_session_id = Some(chat_id.clone());
 
                     chat_messages_buffer.clear();
@@ -295,8 +389,8 @@ impl Tool for Chat {
                                 .and_then(|v| v.as_str()))
                             .unwrap_or("{}");
 
-                        info!(
-                            "  -> Invoking Local Tool: [{}] Args: {}",
+                        debug!(
+                            "│   ├─ Calling: {} ({})",
                             tool_function_name, arguments_json_str
                         );
 
@@ -311,7 +405,7 @@ impl Tool for Chat {
                             "content": execution_result_payload
                         }));
                     }
-                    info!("🔄 Feedback Loop: Sending tool execution results back to AI...");
+                    debug!("│   └─ Sending tool results back to LLM");
                 }
             }
         }

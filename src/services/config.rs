@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::fs;
 use std::path::Path;
-use tracing::info;
+use tracing::{debug, info};
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct AccountConfig {
@@ -89,7 +89,7 @@ impl JuglansConfig {
         let path = Path::new("juglans.toml");
 
         if !path.exists() {
-            info!("⚠️ 'juglans.toml' not found. Using default dev configuration.");
+            debug!("⚠️ juglans.toml not found, using defaults");
             return Ok(JuglansConfig {
                 account: AccountConfig {
                     id: "dev_user".to_string(),
@@ -114,7 +114,7 @@ impl JuglansConfig {
         let config: JuglansConfig =
             toml::from_str(&content).context("Failed to parse juglans.toml")?;
 
-        info!("🔧 Loaded configuration for user: {}", config.account.name);
+        debug!("✓ Config loaded for user: {}", config.account.name);
         Ok(config)
     }
 }
