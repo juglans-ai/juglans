@@ -601,6 +601,105 @@ juglans delete chat-flow --type workflow
 
 ---
 
+### whoami - 显示账号信息
+
+显示当前用户和工作空间配置信息。
+
+```bash
+juglans whoami [OPTIONS]
+```
+
+**选项：**
+
+| 选项 | 说明 |
+|------|------|
+| `--verbose`, `-v` | 显示详细信息 |
+| `--check-connection` | 测试与 Jug0 服务器的连接 |
+
+**基本用法：**
+
+```bash
+# 显示账号信息
+juglans whoami
+
+# 显示详细信息
+juglans whoami --verbose
+
+# 测试连接
+juglans whoami --check-connection
+
+# 详细模式 + 连接测试
+juglans whoami -v --check-connection
+```
+
+**输出示例（基本）：**
+
+```
+📋 Account Information
+
+User ID:       u_demo
+Name:          Demo User
+Role:          admin
+API Key:       jug0_sk_***...***def (configured)
+
+Workspace:     ws_default (My Workspace)
+Members:       2 user(s)
+
+Jug0 Server:   http://localhost:3000
+
+Config:        ./juglans.toml
+```
+
+**输出示例（详细模式）：**
+
+```
+📋 Account Information
+
+User ID:       u_demo
+Name:          Demo User
+Role:          admin
+API Key:       jug0_sk_***...***def (configured)
+
+Workspace:     ws_default (My Workspace)
+Members:       2 user(s)
+
+Resource Paths:
+  Agents:      ops/agents/**/*.jgagent
+  Workflows:   ops/workflows/**/*.jgflow
+  Prompts:     ops/prompts/**/*.jgprompt
+  Tools:       ops/tools/**/*.json
+
+Exclude:       **/*.backup, **/.draft, **/test_*
+
+Jug0 Server:   http://localhost:3000
+Status:        ✅ Connected
+
+Web Server:    127.0.0.1:3000
+
+MCP Servers:   2 configured
+  - filesystem (alias: fs): http://localhost:3001/mcp/filesystem
+  - github: http://localhost:3001/mcp/github
+
+Config:        ./juglans.toml
+```
+
+**状态指示：**
+
+- `✅ Connected` - 服务器连接正常
+- `⚠️ Server unreachable` - 无法连接服务器
+- `❌ Error: ...` - 连接错误
+- `⚠️ Not configured` - API Key 未配置
+
+**使用场景：**
+
+- 确认当前使用的账号
+- 检查配置是否正确
+- 调试连接问题
+- 查看工作空间设置
+- 验证 API Key 是否已配置
+
+---
+
 ## 开发服务器
 
 ### web - 启动 Web 服务器
