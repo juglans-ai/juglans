@@ -31,8 +31,8 @@ json_array = { "[" ~ (value ~ ("," ~ value)*)? ~ ","? ~ "]" }
 value = _{ json_object | json_array | string | number | boolean | null }
 
 // --- 元数据定义 (Metadata) ---
-// 定义工作流头部允许的键名，增加了 prompts 和 agents 用于本地资源导入
-meta_key = { "name" | "version" | "author" | "description" | "entry" | "exit" | "libs" | "prompts" | "agents" }
+// 定义工作流头部允许的键名，增加了 prompts、agents 和 tools 用于本地资源导入
+meta_key = { "name" | "version" | "author" | "description" | "entry" | "exit" | "libs" | "prompts" | "agents" | "tools" }
 meta_list_item = { string | identifier }
 meta_val_list = { "[" ~ (meta_list_item ~ ("," ~ meta_list_item)*)? ~ ","? ~ "]" }
 metadata = { meta_key ~ ":" ~ (string | meta_val_list) }

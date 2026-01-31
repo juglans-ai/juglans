@@ -51,6 +51,8 @@ pub struct WorkflowGraph {
     pub prompt_patterns: Vec<String>,
     // 【新增】Agent 导入路径模式，用于自动加载
     pub agent_patterns: Vec<String>,
+    // 【新增】Tool 导入路径模式，用于自动加载
+    pub tool_patterns: Vec<String>,
 }
 
 impl Default for WorkflowGraph {
@@ -69,6 +71,7 @@ impl Default for WorkflowGraph {
             prompt_patterns: Vec::new(),
             // 【新增】
             agent_patterns: Vec::new(),
+            tool_patterns: Vec::new(),
         }
     }
 }

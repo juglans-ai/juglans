@@ -79,6 +79,15 @@ impl BuiltinRegistry {
         }
     }
 
+    /// 获取 WorkflowExecutor 引用（用于访问 ToolRegistry）
+    pub fn get_executor(&self) -> Option<Arc<crate::core::executor::WorkflowExecutor>> {
+        self.executor
+            .read()
+            .ok()?
+            .as_ref()?
+            .upgrade()
+    }
+
     /// 执行嵌套 workflow（由 Chat tool 调用）
     pub async fn execute_nested_workflow(
         &self,

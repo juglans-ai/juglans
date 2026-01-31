@@ -140,7 +140,7 @@ impl Tool for Chat {
             .map(|s| s.to_lowercase())
             .unwrap_or_else(|| "text".to_string());
 
-        // 【修改】支持从 agent 获取默认 tools
+        // 【修改】支持从 agent 获取默认 tools，并支持引用解析
         let tools_json_str = params.get("tools")
             .or_else(|| {
                 // 如果 chat 没有指定 tools，尝试从 agent 获取默认 tools
@@ -149,15 +149,66 @@ impl Tool for Chat {
             });
 
         let custom_tools_json_schema = if let Some(schema_raw) = tools_json_str {
-            let parsed: Vec<Value> = serde_json::from_str(schema_raw).with_context(|| {
-                format!(
-                    "Failed to parse 'tools' parameter as JSON array. Input was: {}",
-                    schema_raw
-                )
-            })?;
-            info!("🛠️ Attaching {} custom tools to the request.", parsed.len());
-            debug!("🛠️ Attaching {} custom tools", parsed.len());
-            Some(parsed)
+            // 解析 tools：支持内联 JSON、单个引用(@slug)、多个引用([slugs])
+            let parsed: Vec<Value> = if schema_raw.starts_with('@') {
+                // 单个引用：@web-tools
+                let slug = &schema_raw[1..];
+                debug!("Resolving tool reference: {}", slug);
+
+                // 从 BuiltinRegistry 获取 ToolRegistry
+                if let Some(builtin_reg_weak) = &self.builtin_registry {
+                    if let Some(builtin_reg) = builtin_reg_weak.upgrade() {
+                        if let Some(executor) = builtin_reg.get_executor() {
+                            let tool_registry = executor.get_tool_registry();
+                            if let Some(tool_resource) = tool_registry.get(slug) {
+                                tool_resource.tools.clone()
+                            } else {
+                                return Err(anyhow!("Tool resource '{}' not found", slug));
+                            }
+                        } else {
+                            return Err(anyhow!("Executor not available for tool resolution"));
+                        }
+                    } else {
+                        return Err(anyhow!("BuiltinRegistry not available"));
+                    }
+                } else {
+                    return Err(anyhow!("BuiltinRegistry not set for Chat builtin"));
+                }
+            } else if let Ok(slugs) = serde_json::from_str::<Vec<String>>(schema_raw) {
+                // 多个引用：["web-tools", "data-tools"]
+                debug!("Resolving tool references: {:?}", slugs);
+
+                if let Some(builtin_reg_weak) = &self.builtin_registry {
+                    if let Some(builtin_reg) = builtin_reg_weak.upgrade() {
+                        if let Some(executor) = builtin_reg.get_executor() {
+                            let tool_registry = executor.get_tool_registry();
+                            tool_registry.resolve_tools(&slugs)?
+                        } else {
+                            return Err(anyhow!("Executor not available for tool resolution"));
+                        }
+                    } else {
+                        return Err(anyhow!("BuiltinRegistry not available"));
+                    }
+                } else {
+                    return Err(anyhow!("BuiltinRegistry not set for Chat builtin"));
+                }
+            } else {
+                // 内联 JSON：[{...}, {...}]
+                serde_json::from_str(schema_raw).with_context(|| {
+                    format!(
+                        "Failed to parse 'tools' parameter as JSON array. Input was: {}",
+                        schema_raw
+                    )
+                })?
+            };
+
+            if !parsed.is_empty() {
+                info!("🛠️ Attaching {} custom tools to the request.", parsed.len());
+                debug!("🛠️ Tools: {:?}", parsed);
+                Some(parsed)
+            } else {
+                None
+            }
         } else {
             None
         };

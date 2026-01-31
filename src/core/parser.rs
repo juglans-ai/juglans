@@ -147,7 +147,7 @@ impl GraphParser {
             "version" => workflow.version = Self::parse_text_value_raw(val_node),
             "author" => workflow.author = Self::parse_text_value_raw(val_node),
             "description" => workflow.description = Self::parse_text_value_raw(val_node),
-            "entry" | "exit" | "libs" | "prompts" | "agents" => {
+            "entry" | "exit" | "libs" | "prompts" | "agents" | "tools" => {
                 let string_vec = Self::parse_string_list_helper(val_node)?;
                 match key_str {
                     "entry" => workflow.entry_node = string_vec.get(0).cloned().unwrap_or_default(),
@@ -155,6 +155,7 @@ impl GraphParser {
                     "libs" => workflow.libs = string_vec,
                     "prompts" => workflow.prompt_patterns = string_vec,
                     "agents" => workflow.agent_patterns = string_vec,
+                    "tools" => workflow.tool_patterns = string_vec,
                     _ => {}
                 }
             }

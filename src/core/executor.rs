@@ -25,6 +25,7 @@ use crate::services::config::JuglansConfig;
 use crate::services::interface::JuglansRuntime;
 use crate::services::mcp::{McpClient, McpTool};
 use crate::services::prompt_loader::PromptRegistry;
+use crate::services::tool_registry::ToolRegistry;
 
 lazy_static! {
     static ref CONTEXT_VAR_RE: Regex = Regex::new(r"\$([a-zA-Z0-9_.]+)").unwrap();
@@ -36,6 +37,7 @@ pub struct WorkflowExecutor {
     builtin_registry: Arc<BuiltinRegistry>,
     mcp_client: McpClient,
     mcp_tools_map: HashMap<String, McpTool>,
+    tool_registry: Arc<ToolRegistry>,
     rhai_engine: Engine,
 }
 
@@ -55,6 +57,7 @@ impl WorkflowExecutor {
             builtin_registry: registry_arc,
             mcp_client: McpClient::new(),
             mcp_tools_map: HashMap::new(),
+            tool_registry: Arc::new(ToolRegistry::new()),
             rhai_engine: engine,
         }
     }
@@ -62,6 +65,53 @@ impl WorkflowExecutor {
     /// 获取 builtin registry 的引用（用于注入 executor）
     pub fn get_registry(&self) -> &Arc<BuiltinRegistry> {
         &self.builtin_registry
+    }
+
+    /// Load tool definitions from workflow patterns
+    pub async fn load_tools(&mut self, workflow: &WorkflowGraph) {
+        use crate::core::tool_loader::ToolLoader;
+        use std::path::Path;
+
+        if workflow.tool_patterns.is_empty() {
+            return;
+        }
+
+        info!(
+            "📦 Loading tool definitions from {} pattern(s)...",
+            workflow.tool_patterns.len()
+        );
+
+        let workflow_base_dir = Path::new("."); // 可以从 workflow 文件路径推导
+        let mut loaded_count = 0;
+
+        for pattern in &workflow.tool_patterns {
+            match ToolLoader::load_from_glob(pattern, workflow_base_dir) {
+                Ok(tools) => {
+                    loaded_count += tools.len();
+                    // 需要获取可变引用，所以使用 Arc::get_mut 或 Mutex
+                    // 这里暂时创建一个新的 registry 并替换
+                    let mut registry = (*self.tool_registry).clone();
+                    registry.register_all(tools);
+                    self.tool_registry = Arc::new(registry);
+                }
+                Err(e) => {
+                    warn!("Failed to load tools from pattern '{}': {}", pattern, e);
+                }
+            }
+        }
+
+        if loaded_count > 0 {
+            info!(
+                "  ✅ Loaded {} tool resource(s) with {} total tools",
+                self.tool_registry.count(),
+                loaded_count
+            );
+        }
+    }
+
+    /// Get a reference to the tool registry
+    pub fn get_tool_registry(&self) -> &Arc<ToolRegistry> {
+        &self.tool_registry
     }
 
     pub async fn load_mcp_tools(&mut self, config: &JuglansConfig) {
