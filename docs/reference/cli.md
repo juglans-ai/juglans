@@ -219,32 +219,149 @@ juglans install --force
 
 ### apply - 推送资源
 
-将本地资源推送到 Jug0 后端：
+将本地资源推送到 Jug0 后端，支持单文件或批量操作。
 
 ```bash
-juglans apply <FILE> [OPTIONS]
+juglans apply [PATHS...] [OPTIONS]
 ```
+
+**参数：**
+
+| 参数 | 说明 |
+|------|------|
+| `PATHS` | 文件或目录路径（可选，为空时使用 workspace 配置） |
 
 **选项：**
 
 | 选项 | 说明 |
 |------|------|
 | `--force` | 覆盖已存在的资源 |
+| `--dry-run` | 预览但不执行 |
+| `--type <TYPE>`, `-t` | 过滤资源类型 (workflow, agent, prompt, tool, all) |
+| `--recursive`, `-r` | 递归扫描目录 |
 
-**示例：**
+#### 基本用法
 
 ```bash
-# 推送 Prompt
+# 推送单个文件
 juglans apply prompts/my-prompt.jgprompt
-
-# 推送 Agent
 juglans apply agents/my-agent.jgagent
-
-# 推送 Workflow
 juglans apply workflows/my-flow.jgflow
 
 # 强制覆盖
 juglans apply prompts/my-prompt.jgprompt --force
+```
+
+#### 批量操作
+
+**使用 workspace 配置：**
+
+首先在 `juglans.toml` 中配置资源路径：
+
+```toml
+[workspace]
+agents = ["ops/agents/**/*.jgagent"]
+workflows = ["ops/workflows/**/*.jgflow"]
+prompts = ["ops/prompts/**/*.jgprompt"]
+tools = ["ops/tools/**/*.json"]
+exclude = ["**/*.backup", "**/test_*"]
+```
+
+然后无参数运行 apply：
+
+```bash
+# Apply 所有配置的资源
+juglans apply
+
+# 预览将要 apply 的文件
+juglans apply --dry-run
+
+# 只 apply workflows
+juglans apply --type workflow
+
+# 只 apply agents
+juglans apply -t agent
+```
+
+**输出示例：**
+
+```
+📦 Using workspace configuration from juglans.toml
+
+📂 Found resources:
+  📄 3 workflow(s)
+  👤 5 agent(s)
+  📝 8 prompt(s)
+
+📤 Applying resources...
+
+  ✅ workflow: trading-assistant.jgflow - Applied
+  ✅ agent: trader.jgagent - Applied
+  ⚠️  agent: assistant.jgagent - Skipped (exists, use --force)
+  ✅ prompt: greeting.jgprompt - Applied
+
+📊 Summary:
+  ✅ 9 succeeded
+  ⚠️  1 skipped
+  ❌ 0 failed
+```
+
+**Apply 指定目录：**
+
+```bash
+# Apply 整个目录
+juglans apply ops/workflows/
+
+# 递归 apply 所有子目录
+juglans apply ops/ -r
+
+# Apply 多个目录
+juglans apply ops/agents/ ops/prompts/
+
+# Apply 特定类型
+juglans apply ops/ -r --type workflow
+```
+
+**Glob 模式：**
+
+```bash
+# Apply 所有 workflow
+juglans apply "ops/**/*.jgflow"
+
+# Apply 特定前缀的文件
+juglans apply "ops/agents/prod_*.jgagent"
+```
+
+**Dry-run 模式：**
+
+```bash
+# 预览将要 apply 的文件
+juglans apply --dry-run
+
+# 预览特定目录
+juglans apply ops/workflows/ --dry-run
+```
+
+输出：
+
+```
+📦 Scanning workspace: ops/
+
+📂 Found resources:
+  📄 3 workflow(s)
+  👤 5 agent(s)
+
+🔍 Dry run mode - preview only:
+
+  ✓ ops/workflows/trading.jgflow
+  ✓ ops/workflows/analysis.jgflow
+  ✓ ops/workflows/pipeline.jgflow
+  ✓ ops/agents/trader.jgagent
+  ✓ ops/agents/assistant.jgagent
+
+📊 Total: 8 file(s)
+
+Run without --dry-run to apply.
 ```
 
 ---

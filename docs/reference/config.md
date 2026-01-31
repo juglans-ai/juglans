@@ -34,6 +34,15 @@ id = "workspace_456"
 name = "My Workspace"
 members = ["user_123", "user_789"]
 
+# 资源路径（支持 glob 模式）
+agents = ["ops/agents/**/*.jgagent"]
+workflows = ["ops/workflows/**/*.jgflow"]
+prompts = ["ops/prompts/**/*.jgprompt"]
+tools = ["ops/tools/**/*.json"]
+
+# 排除规则
+exclude = ["**/*.backup", "**/.draft", "**/test_*"]
+
 # Jug0 后端配置
 [jug0]
 base_url = "http://localhost:3000"
@@ -90,19 +99,72 @@ export JUGLANS_API_KEY="jug0_sk_..."
 
 ### [workspace] - 工作空间配置
 
-工作空间用于多用户协作，可选配置。
+工作空间用于多用户协作和资源批量管理。
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `id` | string | 是 | 工作空间 ID |
 | `name` | string | 是 | 工作空间名称 |
 | `members` | array | 否 | 成员用户 ID 列表 |
+| `agents` | array | 否 | Agent 文件路径模式 |
+| `workflows` | array | 否 | Workflow 文件路径模式 |
+| `prompts` | array | 否 | Prompt 文件路径模式 |
+| `tools` | array | 否 | Tool 定义文件路径模式 |
+| `exclude` | array | 否 | 排除文件路径模式 |
 
 ```toml
 [workspace]
 id = "workspace_456"
 name = "My Team Workspace"
 members = ["user_123", "user_789", "user_456"]
+
+# 资源路径配置（支持 glob 模式）
+agents = ["ops/agents/**/*.jgagent"]
+workflows = ["ops/workflows/**/*.jgflow"]
+prompts = ["ops/prompts/**/*.jgprompt"]
+tools = ["ops/tools/**/*.json"]
+
+# 排除规则
+exclude = [
+  "**/*.backup",
+  "**/.draft",
+  "**/test_*",
+  "**/private_*"
+]
+```
+
+#### 资源路径配置
+
+资源路径支持 **glob 模式**，用于批量操作时自动发现文件。
+
+**常用模式：**
+
+- `**/*.jgflow` - 递归匹配所有 .jgflow 文件
+- `workflows/*.jgflow` - 只匹配 workflows 目录下的文件（不递归）
+- `{ops,dev}/**/*.jgagent` - 匹配 ops 和 dev 目录下的所有 agent
+
+**使用场景：**
+
+```bash
+# 使用 workspace 配置批量 apply
+juglans apply                    # apply 所有配置的资源
+juglans apply --type workflow    # 只 apply workflows
+juglans apply --dry-run          # 预览
+```
+
+**排除规则：**
+
+使用 `exclude` 字段忽略特定文件：
+
+```toml
+[workspace]
+exclude = [
+  "**/*.backup",        # 所有备份文件
+  "**/.draft",          # 草稿文件
+  "**/test_*",          # 测试文件
+  "**/private_*",       # 私有文件
+  "ops/experimental/**" # 实验性目录
+]
 ```
 
 ---
