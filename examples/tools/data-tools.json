@@ -1,0 +1,45 @@
+{
+  "slug": "data-tools",
+  "name": "Data Processing Tools",
+  "description": "Tools for data manipulation and calculation",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "calculate",
+        "description": "执行数学计算",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "expression": {
+              "type": "string",
+              "description": "数学表达式，例如 '2 + 2' 或 '(10 * 5) / 2'"
+            }
+          },
+          "required": ["expression"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "format_json",
+        "description": "格式化 JSON 数据",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "data": {
+              "type": "string",
+              "description": "原始 JSON 字符串"
+            },
+            "indent": {
+              "type": "number",
+              "description": "缩进空格数，默认为 2"
+            }
+          },
+          "required": ["data"]
+        }
+      }
+    }
+  ]
+}

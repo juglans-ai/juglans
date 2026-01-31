@@ -1,0 +1,16 @@
+slug: "tool-agent"
+name: "Agent with Default Tools"
+model: "gpt-4o"
+temperature: 0.7
+
+system_prompt: |
+  You are a helpful assistant with access to web scraping and data processing tools.
+
+  Use the available tools when needed to:
+  - Fetch web content
+  - Parse HTML
+  - Perform calculations
+  - Format data
+
+# 默认工具集引用
+tools: ["web-tools", "data-tools"]

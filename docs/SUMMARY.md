@@ -11,6 +11,7 @@
 * [Workflow Syntax](guide/workflow-syntax.md)
 * [Agent Syntax](guide/agent-syntax.md)
 * [Prompt Syntax](guide/prompt-syntax.md)
+* [Tools](guide/tools.md)
 * [Conditionals](guide/conditionals.md)
 * [Loops](guide/loops.md)
 * [Error Handling](guide/error-handling.md)
