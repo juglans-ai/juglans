@@ -88,21 +88,41 @@ npx @anthropic/mcp-filesystem --http --port 3001
 
 ## 在工作流中使用 MCP 工具
 
-### 工具命名
+### 工具命名规则
 
-MCP 工具在工作流中以 `mcp_<server>_<tool>` 格式使用：
+MCP 工具在工作流中以 `<namespace>.<tool_name>` 格式使用：
+
+**namespace 来源：**
+- 如果配置中有 `alias`，使用 alias
+- 否则使用 `name`
+
+**示例配置：**
+
+```toml
+[[mcp_servers]]
+name = "filesystem"
+base_url = "http://localhost:3001/mcp/filesystem"
+alias = "fs"  # 可选别名
+```
+
+**工作流中调用：**
 
 ```yaml
-# 使用 filesystem MCP 的 read_file 工具
-[read]: mcp_filesystem_read_file(path="/data/input.txt")
+# 使用 alias（如果配置了）
+[read]: fs.read_file(path="/data/input.txt")
 
-# 使用 github MCP 的 create_issue 工具
-[issue]: mcp_github_create_issue(
+# 或使用 name（如果没有 alias）
+[read]: filesystem.read_file(path="/data/input.txt")
+
+# GitHub 工具示例
+[issue]: github.create_issue(
   repo="owner/repo",
   title="Bug Report",
   body=$ctx.report
 )
 ```
+
+**命名格式：** `namespace.tool_name`（使用点号分隔，不是下划线）
 
 ### 完整示例
 
@@ -113,7 +133,7 @@ entry: [fetch_pr]
 exit: [done]
 
 # 从 GitHub 获取 PR
-[fetch_pr]: mcp_github_get_pull_request(
+[fetch_pr]: github.get_pull_request(
   repo=$input.repo,
   number=$input.pr_number
 )
@@ -122,7 +142,7 @@ exit: [done]
 [save_pr]: set_context(pr=$output)
 
 # 获取变更文件
-[get_files]: mcp_github_list_pr_files(
+[get_files]: github.list_pr_files(
   repo=$input.repo,
   number=$input.pr_number
 )
@@ -134,7 +154,7 @@ exit: [done]
 )
 
 # 发表评论
-[comment]: mcp_github_create_review_comment(
+[comment]: github.create_review_comment(
   repo=$input.repo,
   number=$input.pr_number,
   body=$output
@@ -178,16 +198,16 @@ npx @anthropic/mcp-filesystem --http --port 3001
 
 ```yaml
 # 读取文件
-[read]: mcp_filesystem_read_file(path="data/config.json")
+[read]: filesystem.read_file(path="data/config.json")
 
 # 写入文件
-[write]: mcp_filesystem_write_file(
+[write]: filesystem.write_file(
   path="output/result.txt",
   content=$ctx.result
 )
 
 # 列出目录
-[list]: mcp_filesystem_list_directory(path="src/")
+[list]: filesystem.list_directory(path="src/")
 ```
 
 ### @anthropic/mcp-github
@@ -222,13 +242,13 @@ npx @anthropic/mcp-github --http --port 3001
 
 ```yaml
 # 搜索代码
-[search]: mcp_github_search_code(
+[search]: github.search_code(
   query="TODO in:file language:rust",
   repo=$input.repo
 )
 
 # 创建 Issue
-[create]: mcp_github_create_issue(
+[create]: github.create_issue(
   repo=$input.repo,
   title="Found TODOs",
   body="Found " + len($output.items) + " TODOs"
@@ -263,12 +283,12 @@ npx @anthropic/mcp-postgres --http --port 3001
 
 ```yaml
 # 查询数据
-[query]: mcp_postgres_query(
+[query]: postgres.query(
   sql="SELECT * FROM users WHERE active = true LIMIT 10"
 )
 
 # 获取表结构
-[schema]: mcp_postgres_describe_table(table="users")
+[schema]: postgres.describe_table(table="users")
 ```
 
 ## 自定义 MCP 服务器
@@ -348,7 +368,7 @@ base_url = "http://localhost:5000"
 ### 在工作流中使用
 
 ```yaml
-[custom]: mcp_my-tools_my_tool(input=$ctx.data)
+[custom]: my-tools.my_tool(input=$ctx.data)
 ```
 
 ## 工具发现
@@ -363,7 +383,7 @@ juglans tools --list
 juglans tools --list --server filesystem
 
 # 显示工具详情
-juglans tools --describe mcp_filesystem_read_file
+juglans tools --describe filesystem.read_file
 ```
 
 ### 工具发现过程
@@ -380,7 +400,7 @@ juglans tools --describe mcp_filesystem_read_file
 ### MCP 工具错误
 
 ```yaml
-[api_call]: mcp_github_get_repo(repo=$input.repo)
+[api_call]: github.get_repo(repo=$input.repo)
 [api_call] -> [process]
 [api_call] on error -> [handle_error]
 
@@ -427,7 +447,7 @@ Juglans 仅通过 HTTP 连接，权限控制应在 MCP 服务器端实现。
 为 MCP 调用添加错误处理：
 
 ```yaml
-[fetch]: mcp_github_get_repo(repo=$input.repo)
+[fetch]: github.get_repo(repo=$input.repo)
 [fetch] -> [process]
 [fetch] on error -> [retry_or_fallback]
 ```
