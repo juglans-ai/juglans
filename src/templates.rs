@@ -23,3 +23,4 @@ DEBUG = "true"
 "#;
 
 pub static PROJECT_TEMPLATE_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/examples");
+pub static DOCS_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/docs");

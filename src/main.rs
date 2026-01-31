@@ -181,7 +181,7 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
         "jgflow" => {
             info!("🚀 Starting Workflow Graph Logic: {:?}", source_file_path);
             let local_config = JuglansConfig::load()?;
-            let workflow_definition_obj = Arc::new(GraphParser::parse(&source_raw_text)?);
+            let mut workflow_definition_obj = GraphParser::parse(&source_raw_text)?;
 
             let mut prompt_registry_inst = PromptRegistry::new();
             let mut agent_registry_inst = AgentRegistry::new();
@@ -194,6 +194,14 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
                 &relative_base_offset,
                 &workflow_definition_obj.agent_patterns,
             );
+            let resolved_t_patterns = resolve_import_patterns_verbose(
+                &relative_base_offset,
+                &workflow_definition_obj.tool_patterns,
+            );
+
+            // Update workflow with resolved tool patterns
+            workflow_definition_obj.tool_patterns = resolved_t_patterns;
+            let workflow_definition_obj = Arc::new(workflow_definition_obj);
 
             if !resolved_p_patterns.is_empty() {
                 prompt_registry_inst.load_from_paths(&resolved_p_patterns)?;
@@ -212,6 +220,7 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
             .await;
 
             executor_instance_obj.load_mcp_tools(&local_config).await;
+            executor_instance_obj.load_tools(&workflow_definition_obj).await;
 
             let shared_executor_engine = Arc::new(executor_instance_obj);
             shared_executor_engine
@@ -249,7 +258,7 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
                         format!("Linked logic file missing: {:?}", wf_physical_path)
                     })?;
 
-                let workflow_parsed_data = GraphParser::parse(&wf_source_data_str)?;
+                let mut workflow_parsed_data = GraphParser::parse(&wf_source_data_str)?;
                 let wf_context_base_dir = wf_physical_path.parent().unwrap_or(Path::new("."));
 
                 let p_import_list = resolve_import_patterns_verbose(
@@ -260,21 +269,35 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
                     wf_context_base_dir,
                     &workflow_parsed_data.agent_patterns,
                 );
+                let t_import_list = resolve_import_patterns_verbose(
+                    wf_context_base_dir,
+                    &workflow_parsed_data.tool_patterns,
+                );
 
                 local_p_store.load_from_paths(&p_import_list)?;
                 local_a_store.load_from_paths(&a_import_list)?;
 
+                // Update workflow with resolved tool patterns
+                workflow_parsed_data.tool_patterns = t_import_list;
+
                 active_workflow_ptr = Some(Arc::new(workflow_parsed_data));
             }
 
-            let primary_executor_ptr = Arc::new(
-                WorkflowExecutor::new(
-                    Arc::new(local_p_store),
-                    Arc::new(local_a_store),
-                    shared_runtime_ptr,
-                )
-                .await,
-            );
+            let mut executor_temp = WorkflowExecutor::new(
+                Arc::new(local_p_store),
+                Arc::new(local_a_store),
+                shared_runtime_ptr,
+            )
+            .await;
+
+            executor_temp.load_mcp_tools(&global_system_config).await;
+
+            // Load tools from workflow if present
+            if let Some(ref wf_arc) = active_workflow_ptr {
+                executor_temp.load_tools(wf_arc).await;
+            }
+
+            let primary_executor_ptr = Arc::new(executor_temp);
 
             // 【新增】注入 executor 引用到 registry（用于嵌套 workflow 执行）
             primary_executor_ptr
@@ -438,6 +461,11 @@ fn handle_init(new_project_name: &str) -> Result<()> {
     fs::create_dir_all(root_path_obj)?;
     fs::write(root_path_obj.join("juglans.toml"), templates::TPL_TOML)?;
     templates::PROJECT_TEMPLATE_DIR.extract(root_path_obj)?;
+
+    let docs_path = root_path_obj.join("docs");
+    fs::create_dir_all(&docs_path)?;
+    templates::DOCS_DIR.extract(&docs_path)?;
+
     println!("✅ Initialized: {:?}", root_path_obj);
     Ok(())
 }
@@ -633,17 +661,14 @@ fn handle_check(path: Option<&Path>, show_all: bool, output_format: &str) -> Res
                         }
                         Err(e) => {
                             error_count += 1;
-                            let err_msg = e
-                                .to_string()
-                                .lines()
-                                .next()
-                                .unwrap_or("Parse error")
-                                .to_string();
+                            let full_err = e.to_string();
                             println!(
                                 "    \x1b[1;31merror\x1b[0m[workflow]: {} (parse failed)",
                                 relative_path
                             );
-                            println!("      \x1b[31m-->\x1b[0m {}", err_msg);
+                            for line in full_err.lines() {
+                                println!("      \x1b[31m-->\x1b[0m {}", line);
+                            }
 
                             if output_format == "json" {
                                 results.push(serde_json::json!({
@@ -651,7 +676,7 @@ fn handle_check(path: Option<&Path>, show_all: bool, output_format: &str) -> Res
                                     "type": "workflow",
                                     "slug": file_name,
                                     "valid": false,
-                                    "errors": [{"code": "PARSE", "message": err_msg}],
+                                    "errors": [{"code": "PARSE", "message": full_err}],
                                     "warnings": [],
                                 }));
                             }
@@ -676,17 +701,14 @@ fn handle_check(path: Option<&Path>, show_all: bool, output_format: &str) -> Res
                         }
                         Err(e) => {
                             error_count += 1;
-                            let err_msg = e
-                                .to_string()
-                                .lines()
-                                .next()
-                                .unwrap_or("Parse error")
-                                .to_string();
+                            let full_err = e.to_string();
                             println!(
                                 "    \x1b[1;31merror\x1b[0m[agent]: {} (parse failed)",
                                 relative_path
                             );
-                            println!("      \x1b[31m-->\x1b[0m {}", err_msg);
+                            for line in full_err.lines() {
+                                println!("      \x1b[31m-->\x1b[0m {}", line);
+                            }
 
                             if output_format == "json" {
                                 results.push(serde_json::json!({
@@ -694,7 +716,7 @@ fn handle_check(path: Option<&Path>, show_all: bool, output_format: &str) -> Res
                                     "type": "agent",
                                     "slug": file_name,
                                     "valid": false,
-                                    "errors": [{"code": "PARSE", "message": err_msg}],
+                                    "errors": [{"code": "PARSE", "message": full_err}],
                                     "warnings": [],
                                 }));
                             }
@@ -719,17 +741,14 @@ fn handle_check(path: Option<&Path>, show_all: bool, output_format: &str) -> Res
                         }
                         Err(e) => {
                             error_count += 1;
-                            let err_msg = e
-                                .to_string()
-                                .lines()
-                                .next()
-                                .unwrap_or("Parse error")
-                                .to_string();
+                            let full_err = e.to_string();
                             println!(
                                 "    \x1b[1;31merror\x1b[0m[prompt]: {} (parse failed)",
                                 relative_path
                             );
-                            println!("      \x1b[31m-->\x1b[0m {}", err_msg);
+                            for line in full_err.lines() {
+                                println!("      \x1b[31m-->\x1b[0m {}", line);
+                            }
 
                             if output_format == "json" {
                                 results.push(serde_json::json!({
@@ -737,7 +756,7 @@ fn handle_check(path: Option<&Path>, show_all: bool, output_format: &str) -> Res
                                     "type": "prompt",
                                     "slug": file_name,
                                     "valid": false,
-                                    "errors": [{"code": "PARSE", "message": err_msg}],
+                                    "errors": [{"code": "PARSE", "message": full_err}],
                                     "warnings": [],
                                 }));
                             }

@@ -9,6 +9,15 @@ number = @{ "-"? ~ ("0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*) ~ ("." ~ ASCII_DIG
 boolean = { "true" | "false" }
 null = { "null" }
 
+// Multiline block scalar (YAML-style "|")
+// Captures indented lines after "|". Empty lines are preserved.
+// Block continues as long as lines are indented or blank.
+// A blank line is only consumed if followed by another indented line (lookahead prevents over-consuming).
+multiline_marker = _{ "|" }
+multiline_line = @{ " "+ ~ (!NEWLINE ~ ANY)* }
+multiline_sep = _{ NEWLINE ~ &(NEWLINE | " ") }
+multiline_string = ${ multiline_marker ~ (multiline_sep ~ multiline_line?)+ }
+
 list_item = { string }
 list = { "[" ~ (list_item ~ ("," ~ list_item)*)? ~ ","? ~ "]" }
 
@@ -31,9 +40,9 @@ key_workflow = { "workflow" ~ ":" ~ string }
 // 【新增】默认 tools 配置（支持 JSON 数组、字符串引用、或字符串数组引用）
 key_tools = { "tools" ~ ":" ~ (json_array | list | string) }
 
-// System Prompt can be a string OR p(slug="...")
+// System Prompt can be a string, p(slug="..."), or multiline block scalar
 p_func = { "p" ~ "(" ~ "slug" ~ "=" ~ string ~ ")" }
-key_system = { "system_prompt" ~ ":" ~ (string | p_func) }
+key_system = { "system_prompt" ~ ":" ~ (multiline_string | string | p_func) }
 
 // Agent Definition
 agent_def = {
