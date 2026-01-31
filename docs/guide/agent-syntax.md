@@ -174,21 +174,24 @@ slug: "tool-agent"
 model: "gpt-4o"
 mcp:
   - "filesystem"     # 文件系统操作
-  - "web-browser"    # 网页浏览
-  - "code-executor"  # 代码执行
+  - "github"         # GitHub 操作
+  - "database"       # 数据库操作
 ```
 
-MCP 服务器需要在 `juglans.toml` 中配置：
+MCP 服务器需要在 `juglans.toml` 中配置（HTTP 连接方式）：
 
 ```toml
-[mcp.filesystem]
-command = "npx"
-args = ["-y", "@anthropic/mcp-filesystem"]
-env = { ROOT_DIR = "/workspace" }
+[[mcp_servers]]
+name = "filesystem"
+base_url = "http://localhost:3001/mcp/filesystem"
 
-[mcp.web-browser]
-url = "http://localhost:3001/mcp"
+[[mcp_servers]]
+name = "github"
+base_url = "http://localhost:3001/mcp/github"
+token = "${GITHUB_TOKEN}"
 ```
+
+**注意：** Juglans 使用 HTTP/JSON-RPC 连接 MCP 服务器，需要先启动 MCP 服务。详见 [MCP 集成指南](../integrations/mcp.md)。
 
 ## 技能系统
 

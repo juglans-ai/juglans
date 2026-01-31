@@ -48,15 +48,17 @@ port = 8080
 DATABASE_URL = "postgresql://localhost/mydb"
 CUSTOM_VAR = "value"
 
-# MCP 服务器配置
-[mcp.filesystem]
-command = "npx"
-args = ["-y", "@anthropic/mcp-filesystem"]
-env = { ROOT_DIR = "/workspace" }
+# MCP 服务器配置（HTTP 连接方式）
+[[mcp_servers]]
+name = "filesystem"
+base_url = "http://localhost:3001/mcp/filesystem"
+alias = "fs"
+token = "optional_token"
 
-[mcp.web-browser]
-url = "http://localhost:3001/mcp"
-api_key = "mcp_key_..."
+[[mcp_servers]]
+name = "github"
+base_url = "http://localhost:3001/mcp/github"
+token = "${GITHUB_TOKEN}"
 ```
 
 ## 配置节详解
@@ -201,54 +203,46 @@ export JUGLANS_LOG_LEVEL=debug
 
 ---
 
-### [mcp.*] - MCP 服务器
+### [[mcp_servers]] - MCP 服务器
 
 配置 Model Context Protocol 服务器以扩展工具能力。
 
-#### 本地命令方式
+**重要：** Juglans 使用 HTTP/JSON-RPC 连接 MCP 服务器，不支持进程启动方式。你需要先启动 MCP 服务器，然后通过 HTTP 连接。
+
+#### 配置格式
 
 ```toml
-[mcp.filesystem]
-command = "npx"
-args = ["-y", "@anthropic/mcp-filesystem"]
-env = { ROOT_DIR = "/workspace" }
+[[mcp_servers]]
+name = "filesystem"
+base_url = "http://localhost:3001/mcp/filesystem"
+alias = "fs"
+token = "optional_token"
 ```
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `command` | string | 启动命令 |
-| `args` | array | 命令参数 |
-| `env` | object | 环境变量 |
-
-#### 远程服务方式
-
-```toml
-[mcp.remote-tools]
-url = "http://localhost:3001/mcp"
-api_key = "mcp_key_..."
-```
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `url` | string | MCP 服务 URL |
-| `api_key` | string | 认证密钥 |
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `name` | string | 是 | 服务器名称（用于工具命名） |
+| `base_url` | string | 是 | MCP 服务器 HTTP 地址 |
+| `alias` | string | 否 | 别名 |
+| `token` | string | 否 | 认证令牌 |
 
 #### 多个 MCP 服务器
 
 ```toml
-[mcp.filesystem]
-command = "npx"
-args = ["-y", "@anthropic/mcp-filesystem"]
-env = { ROOT_DIR = "/data" }
+[[mcp_servers]]
+name = "filesystem"
+base_url = "http://localhost:3001/mcp/filesystem"
+alias = "fs"
 
-[mcp.github]
-command = "npx"
-args = ["-y", "@anthropic/mcp-github"]
-env = { GITHUB_TOKEN = "${GITHUB_TOKEN}" }
+[[mcp_servers]]
+name = "github"
+base_url = "http://localhost:3001/mcp/github"
+token = "${GITHUB_TOKEN}"
 
-[mcp.database]
-url = "http://localhost:5000/mcp"
-api_key = "db_mcp_key"
+[[mcp_servers]]
+name = "database"
+base_url = "http://localhost:5000/mcp"
+token = "db_mcp_key"
 ```
 
 ---
@@ -285,9 +279,9 @@ base_url = "http://localhost:3000"
 [server]
 port = 8080
 
-[mcp.filesystem]
-command = "npx"
-args = ["-y", "@anthropic/mcp-filesystem"]
+[[mcp_servers]]
+name = "filesystem"
+base_url = "http://localhost:3001/mcp/filesystem"
 ```
 
 ### 用户配置 (~/.config/juglans/juglans.toml)

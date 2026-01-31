@@ -7,10 +7,10 @@
 MCP (Model Context Protocol) 是一个开放协议，用于将外部工具能力暴露给 AI 系统。
 
 ```
-┌─────────────────┐         ┌─────────────────┐
-│    Juglans      │  stdio  │   MCP Server    │
-│                 │◀───────▶│                 │
-│  工作流执行器    │  HTTP   │  - 文件系统      │
+┌─────────────────┐  HTTP   ┌─────────────────┐
+│    Juglans      │◀───────▶│   MCP Server    │
+│                 │ JSON-RPC│                 │
+│  工作流执行器    │         │  - 文件系统      │
 │                 │         │  - GitHub       │
 │                 │         │  - 数据库        │
 └─────────────────┘         └─────────────────┘
@@ -20,52 +20,71 @@ MCP (Model Context Protocol) 是一个开放协议，用于将外部工具能力
 
 ### juglans.toml 配置
 
-#### 本地命令方式
+**重要：** Juglans 使用 HTTP/JSON-RPC 连接 MCP 服务器。你需要先启动 MCP 服务器（可以在 jug0 或独立服务中），然后配置 HTTP 连接。
+
+#### HTTP 连接方式
 
 ```toml
 # 文件系统工具
-[mcp.filesystem]
-command = "npx"
-args = ["-y", "@anthropic/mcp-filesystem"]
-env = { ROOT_DIR = "/workspace" }
+[[mcp_servers]]
+name = "filesystem"
+base_url = "http://localhost:3001/mcp/filesystem"
+alias = "fs"
 
 # GitHub 工具
-[mcp.github]
-command = "npx"
-args = ["-y", "@anthropic/mcp-github"]
-env = { GITHUB_TOKEN = "${GITHUB_TOKEN}" }
+[[mcp_servers]]
+name = "github"
+base_url = "http://localhost:3001/mcp/github"
+token = "${GITHUB_TOKEN}"
 
 # 自定义 MCP 服务器
-[mcp.my-tools]
-command = "./tools/my-mcp-server"
-args = ["--port", "0"]
-env = { DEBUG = "true" }
+[[mcp_servers]]
+name = "my-tools"
+base_url = "http://localhost:5000/mcp"
+token = "optional_token"
+
+# 云端 MCP 服务
+[[mcp_servers]]
+name = "cloud-service"
+base_url = "https://mcp.example.com/v1"
+token = "${MCP_API_KEY}"
 ```
 
-#### 远程 HTTP 方式
+**配置说明：**
 
-```toml
-[mcp.remote-tools]
-url = "http://localhost:3001/mcp"
-api_key = "mcp_key_..."
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `name` | string | 是 | 服务器名称（用于生成工具名） |
+| `base_url` | string | 是 | MCP 服务器 HTTP 地址 |
+| `alias` | string | 否 | 别名 |
+| `token` | string | 否 | 认证令牌（Bearer token） |
 
-[mcp.cloud-service]
-url = "https://mcp.example.com/v1"
-api_key = "${MCP_API_KEY}"
-```
+### 启动 MCP 服务器
 
-### 获取工具 Schema
+Juglans 不会自动启动 MCP 服务器，你需要先手动启动或使用 jug0 集成的 MCP 服务：
 
-安装配置的 MCP 服务器并获取工具定义：
+**选项 1: 使用 jug0 的 MCP 集成**
+
+jug0 可以托管 MCP 服务器，然后通过 HTTP 暴露：
 
 ```bash
-juglans install
+# 在 jug0 中配置并启动 MCP 服务
+cd jug0
+cargo run -- --mcp-enabled
 ```
 
-这会：
-1. 启动每个配置的 MCP 服务器
-2. 获取工具列表和 schema
-3. 缓存到 `.juglans/tools/` 目录
+**选项 2: 独立启动 MCP 服务器**
+
+使用 HTTP-to-MCP 桥接工具：
+
+```bash
+# 示例：启动文件系统 MCP 服务
+npx @anthropic/mcp-filesystem --http --port 3001
+```
+
+**选项 3: 自定义 HTTP MCP 服务器**
+
+实现一个 HTTP 服务器，遵循 MCP JSON-RPC 协议（见下文）
 
 ## 在工作流中使用 MCP 工具
 
@@ -130,13 +149,19 @@ exit: [done]
 
 ### @anthropic/mcp-filesystem
 
-文件系统操作：
+文件系统操作（需要先启动 HTTP 服务）：
 
 ```toml
-[mcp.filesystem]
-command = "npx"
-args = ["-y", "@anthropic/mcp-filesystem"]
-env = { ROOT_DIR = "/workspace" }
+[[mcp_servers]]
+name = "filesystem"
+base_url = "http://localhost:3001/mcp/filesystem"
+```
+
+启动服务器（假设有 HTTP 桥接）：
+
+```bash
+# 需要 HTTP-to-stdio 桥接工具
+npx @anthropic/mcp-filesystem --http --port 3001
 ```
 
 可用工具：
@@ -167,13 +192,20 @@ env = { ROOT_DIR = "/workspace" }
 
 ### @anthropic/mcp-github
 
-GitHub 操作：
+GitHub 操作（需要先启动 HTTP 服务）：
 
 ```toml
-[mcp.github]
-command = "npx"
-args = ["-y", "@anthropic/mcp-github"]
-env = { GITHUB_TOKEN = "${GITHUB_TOKEN}" }
+[[mcp_servers]]
+name = "github"
+base_url = "http://localhost:3001/mcp/github"
+token = "${GITHUB_TOKEN}"
+```
+
+启动服务器（假设有 HTTP 桥接）：
+
+```bash
+export GITHUB_TOKEN="ghp_..."
+npx @anthropic/mcp-github --http --port 3001
 ```
 
 可用工具：
@@ -205,15 +237,19 @@ env = { GITHUB_TOKEN = "${GITHUB_TOKEN}" }
 
 ### @anthropic/mcp-postgres
 
-PostgreSQL 数据库：
+PostgreSQL 数据库（需要先启动 HTTP 服务）：
 
 ```toml
-[mcp.postgres]
-command = "npx"
-args = ["-y", "@anthropic/mcp-postgres"]
-env = {
-  DATABASE_URL = "${DATABASE_URL}"
-}
+[[mcp_servers]]
+name = "postgres"
+base_url = "http://localhost:3001/mcp/postgres"
+```
+
+启动服务器（假设有 HTTP 桥接）：
+
+```bash
+export DATABASE_URL="postgresql://..."
+npx @anthropic/mcp-postgres --http --port 3001
 ```
 
 可用工具：
@@ -237,60 +273,76 @@ env = {
 
 ## 自定义 MCP 服务器
 
-### 创建 MCP 服务器
+### 创建 HTTP MCP 服务器
 
-使用任何语言实现 MCP 协议：
+使用任何语言实现 HTTP + JSON-RPC 协议：
 
 ```python
 # my_mcp_server.py
-import json
-import sys
+from flask import Flask, request, jsonify
 
-def handle_request(request):
-    method = request.get("method")
+app = Flask(__name__)
+
+@app.route('/messages', methods=['POST'])
+def handle_request():
+    req = request.json
+    method = req.get("method")
 
     if method == "tools/list":
-        return {
-            "tools": [
-                {
-                    "name": "my_tool",
-                    "description": "My custom tool",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "input": {"type": "string"}
-                        },
-                        "required": ["input"]
+        return jsonify({
+            "jsonrpc": "2.0",
+            "id": req.get("id"),
+            "result": {
+                "tools": [
+                    {
+                        "name": "my_tool",
+                        "description": "My custom tool",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "input": {"type": "string"}
+                            },
+                            "required": ["input"]
+                        }
                     }
-                }
-            ]
-        }
+                ]
+            }
+        })
 
     elif method == "tools/call":
-        tool_name = request["params"]["name"]
-        arguments = request["params"]["arguments"]
+        tool_name = req["params"]["name"]
+        arguments = req["params"]["arguments"]
 
         if tool_name == "my_tool":
             result = process(arguments["input"])
-            return {"content": [{"type": "text", "text": result}]}
+            return jsonify({
+                "jsonrpc": "2.0",
+                "id": req.get("id"),
+                "result": {
+                    "content": [{"type": "text", "text": result}]
+                }
+            })
 
-    return {"error": "Unknown method"}
+    return jsonify({"error": "Unknown method"}), 400
 
-# stdio 通信
-for line in sys.stdin:
-    request = json.loads(line)
-    response = handle_request(request)
-    print(json.dumps(response))
-    sys.stdout.flush()
+if __name__ == '__main__':
+    app.run(port=5000)
 ```
 
 ### 配置自定义服务器
 
+先启动服务器：
+
+```bash
+python ./tools/my_mcp_server.py
+```
+
+然后配置 Juglans：
+
 ```toml
-[mcp.my-tools]
-command = "python"
-args = ["./tools/my_mcp_server.py"]
-env = { CUSTOM_VAR = "value" }
+[[mcp_servers]]
+name = "my-tools"
+base_url = "http://localhost:5000"
 ```
 
 ### 在工作流中使用
@@ -314,23 +366,14 @@ juglans tools --list --server filesystem
 juglans tools --describe mcp_filesystem_read_file
 ```
 
-### 工具 Schema 缓存
+### 工具发现过程
 
-工具定义缓存在 `.juglans/tools/` 目录：
+当工作流加载 Agent 时，Juglans 会：
 
-```
-.juglans/
-└── tools/
-    ├── filesystem.json
-    ├── github.json
-    └── my-tools.json
-```
-
-刷新缓存：
-
-```bash
-juglans install --force
-```
+1. 读取 `juglans.toml` 中的 `[[mcp_servers]]` 配置
+2. 对每个服务器发送 `tools/list` JSON-RPC 请求
+3. 获取工具定义并缓存到内存
+4. 将工具注册为可调用的内置函数
 
 ## 错误处理
 
@@ -375,15 +418,9 @@ env = { GITHUB_TOKEN = "ghp_xxxx..." }
 
 ### 2. 工具权限
 
-限制 MCP 服务器的访问范围：
+在 MCP 服务器实现中限制访问范围，或使用代理层控制权限。
 
-```toml
-[mcp.filesystem]
-env = {
-  ROOT_DIR = "/workspace/safe-dir",  # 限制目录
-  READ_ONLY = "true"                  # 只读模式
-}
-```
+Juglans 仅通过 HTTP 连接，权限控制应在 MCP 服务器端实现。
 
 ### 3. 错误恢复
 
@@ -402,39 +439,39 @@ env = {
 ```toml
 [logging]
 level = "debug"
-
-[mcp.my-tools]
-env = { DEBUG = "true" }
 ```
 
-### 5. 版本固定
+### 5. 服务健康检查
 
-固定 MCP 服务器版本：
+确保 MCP 服务器在 Juglans 启动前已运行：
 
-```toml
-[mcp.filesystem]
-command = "npx"
-args = ["-y", "@anthropic/mcp-filesystem@1.2.3"]
+```bash
+# 检查 MCP 服务器是否可达
+curl http://localhost:3001/mcp/filesystem/messages -d '{"jsonrpc":"2.0","method":"tools/list","id":"1"}'
 ```
 
 ## 故障排查
 
 ### Q: 工具未找到
 
-确保已运行 `juglans install`：
+确保 MCP 服务器正在运行并可访问：
 
 ```bash
-juglans install
-juglans tools --list
+# 测试 MCP 服务器连接
+curl http://localhost:3001/mcp/filesystem/messages \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"tools/list","id":"1"}'
 ```
 
-### Q: MCP 服务器启动失败
+### Q: MCP 服务器连接失败
 
-检查命令和环境：
+检查服务器地址和状态：
 
 ```bash
-# 手动测试
-npx -y @anthropic/mcp-filesystem
+# 检查服务器是否运行
+curl http://localhost:3001/health
+
+# 检查配置的 base_url 是否正确
 ```
 
 ### Q: 认证失败
@@ -447,9 +484,6 @@ echo $GITHUB_TOKEN
 
 ### Q: 超时错误
 
-增加超时配置或检查网络：
+MCP 客户端默认超时 30 秒。检查网络或 MCP 服务器性能。
 
-```toml
-[mcp.slow-api]
-timeout = 120
-```
+如需调整超时，需要修改 Juglans 源码中的 `src/services/mcp.rs`。
