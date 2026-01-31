@@ -418,7 +418,17 @@ impl Tool for Chat {
                 }
 
                 ChatOutput::ToolCalls { calls, chat_id } => {
-                    info!("│   🔧 Tool calls requested: {}", calls.len());
+                    // 提取所有工具名称用于日志显示
+                    let tool_names: Vec<&str> = calls.iter()
+                        .map(|call| {
+                            call["name"]
+                                .as_str()
+                                .or(call.pointer("/function/name").and_then(|v| v.as_str()))
+                                .unwrap_or("unknown_tool")
+                        })
+                        .collect();
+
+                    info!("│   🔧 Tool calls requested: {} - [{}]", calls.len(), tool_names.join(", "));
                     current_loop_session_id = Some(chat_id.clone());
 
                     chat_messages_buffer.clear();
