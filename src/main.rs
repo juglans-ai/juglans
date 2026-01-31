@@ -138,6 +138,15 @@ enum Commands {
         #[arg(long, short = 't')]
         r#type: String,
     },
+    /// Show current account information
+    Whoami {
+        /// Show detailed information
+        #[arg(long, short = 'v')]
+        verbose: bool,
+        /// Test connection to Jug0 server
+        #[arg(long)]
+        check_connection: bool,
+    },
 }
 
 /// Resolve input data from --input or --input-file
@@ -530,6 +539,134 @@ async fn handle_delete(slug: &str, resource_type: &str) -> Result<()> {
     jug0_client.delete_resource(slug, resource_type).await?;
     println!("✅ Deleted {} ({})", slug, resource_type);
     Ok(())
+}
+
+async fn handle_whoami(verbose: bool, check_connection: bool) -> Result<()> {
+    let config = JuglansConfig::load()?;
+    let config_path = if Path::new("juglans.toml").exists() {
+        "./juglans.toml"
+    } else {
+        "~/.config/juglans/juglans.toml or system default"
+    };
+
+    println!("\n📋 Account Information\n");
+
+    // Basic info
+    println!("User ID:       {}", config.account.id);
+    println!("Name:          {}", config.account.name);
+
+    if let Some(role) = &config.account.role {
+        println!("Role:          {}", role);
+    }
+
+    // API Key (masked)
+    if let Some(api_key) = &config.account.api_key {
+        if api_key.is_empty() {
+            println!("API Key:       \x1b[33m⚠️  Not configured\x1b[0m");
+        } else {
+            let masked = mask_api_key(api_key);
+            println!("API Key:       {} \x1b[32m(configured)\x1b[0m", masked);
+        }
+    } else {
+        println!("API Key:       \x1b[33m⚠️  Not configured\x1b[0m");
+    }
+
+    println!();
+
+    // Workspace info
+    if let Some(workspace) = &config.workspace {
+        println!("Workspace:     {} ({})", workspace.id, workspace.name);
+        if let Some(members) = &workspace.members {
+            println!("Members:       {} user(s)", members.len());
+        }
+
+        // Resource paths (verbose mode)
+        if verbose {
+            if !workspace.agents.is_empty() {
+                println!("\nResource Paths:");
+                println!("  Agents:      {}", workspace.agents.join(", "));
+                println!("  Workflows:   {}", workspace.workflows.join(", "));
+                println!("  Prompts:     {}", workspace.prompts.join(", "));
+                if !workspace.tools.is_empty() {
+                    println!("  Tools:       {}", workspace.tools.join(", "));
+                }
+            }
+
+            if !workspace.exclude.is_empty() {
+                println!("\nExclude:       {}", workspace.exclude.join(", "));
+            }
+        }
+
+        println!();
+    }
+
+    // Server info
+    println!("Jug0 Server:   {}", config.jug0.base_url);
+
+    // Connection test
+    if check_connection {
+        print!("Status:        ");
+        io::stdout().flush()?;
+
+        match test_connection(&config).await {
+            Ok(true) => println!("\x1b[32m✅ Connected\x1b[0m"),
+            Ok(false) => println!("\x1b[33m⚠️  Server unreachable\x1b[0m"),
+            Err(e) => println!("\x1b[31m❌ Error: {}\x1b[0m", e),
+        }
+    }
+
+    println!();
+
+    // Web server config (verbose)
+    if verbose {
+        println!("Web Server:    {}:{}", config.server.host, config.server.port);
+        println!();
+    }
+
+    // MCP servers
+    if !config.mcp_servers.is_empty() {
+        println!("MCP Servers:   {} configured", config.mcp_servers.len());
+        if verbose {
+            for server in &config.mcp_servers {
+                let alias_str = server.alias.as_deref().unwrap_or("");
+                let alias_display = if !alias_str.is_empty() {
+                    format!(" (alias: {})", alias_str)
+                } else {
+                    String::new()
+                };
+                println!("  - {}{}: {}", server.name, alias_display, server.base_url);
+            }
+        }
+        println!();
+    }
+
+    // Config file location
+    println!("Config:        {}", config_path);
+    println!();
+
+    Ok(())
+}
+
+fn mask_api_key(key: &str) -> String {
+    if key.len() <= 12 {
+        return "***".to_string();
+    }
+    let prefix = &key[..8];
+    let suffix = &key[key.len() - 3..];
+    format!("{}...{}", prefix, suffix)
+}
+
+async fn test_connection(config: &JuglansConfig) -> Result<bool> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()?;
+
+    let health_url = format!("{}/health", config.jug0.base_url);
+
+    match client.get(&health_url).send().await {
+        Ok(response) => Ok(response.status().is_success()),
+        Err(_) => Ok(false),
+    }
 }
 
 fn handle_check(path: Option<&Path>, show_all: bool, output_format: &str) -> Result<()> {
@@ -1153,6 +1290,9 @@ async fn main() -> Result<()> {
             }
             Commands::Delete { slug, r#type } => {
                 handle_delete(slug, r#type).await?;
+            }
+            Commands::Whoami { verbose, check_connection } => {
+                handle_whoami(*verbose, *check_connection).await?;
             }
         }
     } else if application_cli.file.is_some() {
