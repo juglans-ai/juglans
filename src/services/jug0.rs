@@ -48,6 +48,21 @@ pub struct ResourceInfo {
     pub resource_type: String,
 }
 
+/// User info from Jug0 server
+#[derive(Debug, Deserialize)]
+pub struct UserInfo {
+    pub id: String,
+    pub username: String,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub org_id: Option<String>,
+    #[serde(default)]
+    pub org_name: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct Jug0Client {
     http: Client,
@@ -359,6 +374,27 @@ impl Jug0Client {
         }
 
         Ok(())
+    }
+
+    /// 获取当前用户信息
+    pub async fn get_current_user(&self) -> Result<UserInfo> {
+        let url = format!("{}/api/auth/me", self.base_url);
+        let res = self
+            .http
+            .get(&url)
+            .header("X-API-KEY", &self.api_key)
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            return Err(anyhow!(
+                "Failed to get user info: {} (Check your API key)",
+                res.status()
+            ));
+        }
+
+        let user_info: UserInfo = res.json().await?;
+        Ok(user_info)
     }
 
     /// 注册 workflow 到 jug0

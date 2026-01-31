@@ -551,7 +551,41 @@ async fn handle_whoami(verbose: bool, check_connection: bool) -> Result<()> {
 
     println!("\n📋 Account Information\n");
 
-    // Basic info
+    // Try to get server user info
+    let jug0_client = Jug0Client::new(&config);
+    let server_user = if config.account.api_key.is_some() && !config.account.api_key.as_ref().unwrap().is_empty() {
+        match jug0_client.get_current_user().await {
+            Ok(user) => Some(user),
+            Err(e) => {
+                if verbose {
+                    println!("\x1b[33m⚠️  Unable to fetch server user info: {}\x1b[0m\n", e);
+                }
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Display server user info if available
+    if let Some(user) = &server_user {
+        println!("\x1b[1m🌐 Server Account (from Jug0)\x1b[0m");
+        println!("User ID:       {}", user.id);
+        println!("Username:      {}", user.username);
+        if let Some(email) = &user.email {
+            println!("Email:         {}", email);
+        }
+        if let Some(role) = &user.role {
+            println!("Role:          {}", role);
+        }
+        if let Some(org_id) = &user.org_id {
+            println!("Organization:  {} ({})", user.org_name.as_deref().unwrap_or(""), org_id);
+        }
+        println!();
+    }
+
+    // Local config info
+    println!("\x1b[1m💻 Local Configuration\x1b[0m");
     println!("User ID:       {}", config.account.id);
     println!("Name:          {}", config.account.name);
 
@@ -565,7 +599,12 @@ async fn handle_whoami(verbose: bool, check_connection: bool) -> Result<()> {
             println!("API Key:       \x1b[33m⚠️  Not configured\x1b[0m");
         } else {
             let masked = mask_api_key(api_key);
-            println!("API Key:       {} \x1b[32m(configured)\x1b[0m", masked);
+            let status = if server_user.is_some() {
+                "\x1b[32m✅ Valid\x1b[0m"
+            } else {
+                "\x1b[33m(not verified)\x1b[0m"
+            };
+            println!("API Key:       {} {}", masked, status);
         }
     } else {
         println!("API Key:       \x1b[33m⚠️  Not configured\x1b[0m");
