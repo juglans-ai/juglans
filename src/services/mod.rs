@@ -2,6 +2,7 @@
 pub mod agent_loader;
 pub mod interface;
 pub mod prompt_loader;
+pub mod tool_registry;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod config;

@@ -28,8 +28,8 @@ key_mcp = { "mcp" ~ ":" ~ list }
 key_skills = { "skills" ~ ":" ~ list }
 // 【新增】关联工作流文件
 key_workflow = { "workflow" ~ ":" ~ string }
-// 【新增】默认 tools 配置（支持 JSON 数组或字符串）
-key_tools = { "tools" ~ ":" ~ (json_array | string) }
+// 【新增】默认 tools 配置（支持 JSON 数组、字符串引用、或字符串数组引用）
+key_tools = { "tools" ~ ":" ~ (json_array | list | string) }
 
 // System Prompt can be a string OR p(slug="...")
 p_func = { "p" ~ "(" ~ "slug" ~ "=" ~ string ~ ")" }

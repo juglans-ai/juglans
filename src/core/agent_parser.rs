@@ -42,11 +42,26 @@ impl AgentParser {
                 Rule::key_model => agent.model = Self::parse_string(pair),
                 Rule::key_workflow => agent.workflow = Some(Self::parse_string(pair)),
                 Rule::key_tools => {
-                    // 支持 JSON 数组或字符串
+                    // 支持三种格式：JSON 数组（内联）、字符串（单个引用）、list（多个引用）
                     let inner = pair.into_inner().next().unwrap();
                     agent.tools = Some(match inner.as_rule() {
+                        // 内联 JSON 数组：tools: [{...}, {...}]
                         Rule::json_array => Self::parse_json_value(inner),
-                        Rule::string => inner.as_str().trim_matches('"').to_string(),
+
+                        // 单个引用：tools: "web-tools"
+                        // 使用 @ 前缀标记为引用，便于运行时识别
+                        Rule::string => {
+                            let slug = inner.as_str().trim_matches('"');
+                            format!("@{}", slug)
+                        },
+
+                        // 多个引用：tools: ["web-tools", "data-tools"]
+                        // 解析为字符串数组并序列化为 JSON
+                        Rule::list => {
+                            let slugs = Self::parse_list(inner.clone());
+                            serde_json::to_string(&slugs).unwrap_or_else(|_| "[]".to_string())
+                        },
+
                         _ => String::new(),
                     });
                 }
