@@ -30,7 +30,7 @@ use crate::services::tool_registry::ToolRegistry;
 lazy_static! {
     static ref CONTEXT_VAR_RE: Regex = Regex::new(r"\$([a-zA-Z0-9_.]+)").unwrap();
     static ref FUNC_CALL_RE: Regex =
-        Regex::new(r"^([a-zA-Z0-9_.]+)\((.*)\)(\.[a-zA-Z0-9_]+)?$").unwrap();
+        Regex::new(r"(?s)^([a-zA-Z0-9_.]+)\((.*)\)(\.[a-zA-Z0-9_]+)?$").unwrap();
 }
 
 pub struct WorkflowExecutor {

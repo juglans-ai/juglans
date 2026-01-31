@@ -80,10 +80,20 @@ enum Commands {
     Install,
     /// Push resources to the server
     Apply {
-        file: PathBuf,
+        /// Files or directories to apply (if empty, uses workspace config)
+        paths: Vec<PathBuf>,
         /// Force overwrite if resource already exists
         #[arg(long)]
         force: bool,
+        /// Preview changes without applying
+        #[arg(long)]
+        dry_run: bool,
+        /// Filter by resource type (workflow, agent, prompt, tool, all)
+        #[arg(long, short = 't')]
+        r#type: Option<String>,
+        /// Recursively scan directories
+        #[arg(long, short = 'r')]
+        recursive: bool,
     },
     /// Validate syntax of .jgflow, .jgagent, .jgprompt files (like cargo check)
     Check {
@@ -842,63 +852,254 @@ fn handle_check(path: Option<&Path>, show_all: bool, output_format: &str) -> Res
     Ok(())
 }
 
-async fn handle_apply(file_to_apply: &Path, force: bool) -> Result<()> {
+async fn handle_apply(
+    paths: Vec<PathBuf>,
+    force: bool,
+    dry_run: bool,
+    resource_type: Option<String>,
+    recursive: bool,
+) -> Result<()> {
     let local_config = JuglansConfig::load()?;
-    let jug0_api_ptr = Jug0Client::new(&local_config);
-    let raw_file_data = fs::read_to_string(file_to_apply)?;
-    let ext_str = file_to_apply
-        .extension()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
 
-    if force {
-        info!("🔄 Force mode enabled - will overwrite existing resources");
-    }
+    // 收集要处理的文件
+    let mut files_to_apply = Vec::new();
 
-    if ext_str == "jgagent" {
-        println!(
-            "✅ {}",
-            jug0_api_ptr
-                .apply_agent(&AgentParser::parse(&raw_file_data)?, force)
-                .await?
-        );
-    } else if ext_str == "jgprompt" {
-        println!(
-            "✅ {}",
-            jug0_api_ptr
-                .apply_prompt(&PromptParser::parse(&raw_file_data)?, force)
-                .await?
-        );
-    } else if ext_str == "jgflow" {
-        let mut workflow = GraphParser::parse(&raw_file_data)?;
+    if paths.is_empty() {
+        // 无参数：使用 workspace 配置
+        println!("📦 Using workspace configuration from juglans.toml");
 
-        // 如果没有 slug，从文件名生成
-        if workflow.slug.is_empty() {
-            workflow.slug = file_to_apply
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("unnamed")
-                .to_string();
+        if let Some(ref workspace) = local_config.workspace {
+            let patterns = match resource_type.as_deref() {
+                Some("workflow") => workspace.workflows.clone(),
+                Some("agent") => workspace.agents.clone(),
+                Some("prompt") => workspace.prompts.clone(),
+                Some("tool") => workspace.tools.clone(),
+                Some("all") | None => {
+                    let mut all = Vec::new();
+                    all.extend(workspace.workflows.clone());
+                    all.extend(workspace.agents.clone());
+                    all.extend(workspace.prompts.clone());
+                    all.extend(workspace.tools.clone());
+                    all
+                }
+                _ => return Err(anyhow!("Invalid resource type. Use: workflow, agent, prompt, tool, all")),
+            };
+
+            for pattern in patterns {
+                for entry in glob::glob(&pattern)? {
+                    let path = entry?;
+                    if !should_exclude(&path, &workspace.exclude) {
+                        files_to_apply.push(path);
+                    }
+                }
+            }
+        } else {
+            return Err(anyhow!("No workspace configuration found in juglans.toml"));
         }
-
-        // 构建 workflow endpoint URL
-        let endpoint_url = format!(
-            "http://{}:{}/api/chat",
-            local_config.server.host, local_config.server.port
-        );
-
-        println!(
-            "📦 Registering workflow '{}' with endpoint: {}",
-            workflow.slug, endpoint_url
-        );
-        println!(
-            "✅ {}",
-            jug0_api_ptr
-                .apply_workflow(&workflow, &raw_file_data, &endpoint_url, force)
-                .await?
-        );
+    } else {
+        // 有参数：扫描指定路径
+        for path in paths {
+            if path.is_file() {
+                files_to_apply.push(path);
+            } else if path.is_dir() {
+                scan_directory(&path, &mut files_to_apply, recursive, &resource_type)?;
+            } else {
+                // Glob 模式
+                for entry in glob::glob(path.to_str().unwrap_or(""))? {
+                    files_to_apply.push(entry?);
+                }
+            }
+        }
     }
+
+    if files_to_apply.is_empty() {
+        println!("⚠️  No files found to apply.");
+        return Ok(());
+    }
+
+    // 统计
+    let mut stats = ApplyStats::default();
+    for file in &files_to_apply {
+        if let Some(ext) = file.extension().and_then(|s| s.to_str()) {
+            match ext {
+                "jgflow" => stats.workflows += 1,
+                "jgagent" => stats.agents += 1,
+                "jgprompt" => stats.prompts += 1,
+                "json" => stats.tools += 1,
+                _ => {}
+            }
+        }
+    }
+
+    println!("\n📂 Found resources:");
+    if stats.workflows > 0 {
+        println!("  📄 {} workflow(s)", stats.workflows);
+    }
+    if stats.agents > 0 {
+        println!("  👤 {} agent(s)", stats.agents);
+    }
+    if stats.prompts > 0 {
+        println!("  📝 {} prompt(s)", stats.prompts);
+    }
+    if stats.tools > 0 {
+        println!("  🔧 {} tool definition(s)", stats.tools);
+    }
+
+    if dry_run {
+        println!("\n🔍 Dry run mode - preview only:\n");
+        for file in &files_to_apply {
+            println!("  ✓ {}", file.display());
+        }
+        println!("\n📊 Total: {} file(s)", files_to_apply.len());
+        println!("\nRun without --dry-run to apply.");
+        return Ok(());
+    }
+
+    // 实际执行
+    println!("\n📤 Applying resources...\n");
+
+    let jug0_api_ptr = Jug0Client::new(&local_config);
+    let mut success_count = 0;
+    let mut skip_count = 0;
+    let mut error_count = 0;
+
+    for file in &files_to_apply {
+        match apply_single_file(file, &jug0_api_ptr, &local_config, force).await {
+            Ok(ApplyResult::Success(msg)) => {
+                println!("  ✅ {}", msg);
+                success_count += 1;
+            }
+            Ok(ApplyResult::Skipped(msg)) => {
+                println!("  ⚠️  {}", msg);
+                skip_count += 1;
+            }
+            Err(e) => {
+                println!("  ❌ {}: {}", file.display(), e);
+                error_count += 1;
+            }
+        }
+    }
+
+    println!("\n📊 Summary:");
+    println!("  ✅ {} succeeded", success_count);
+    if skip_count > 0 {
+        println!("  ⚠️  {} skipped", skip_count);
+    }
+    if error_count > 0 {
+        println!("  ❌ {} failed", error_count);
+    }
+
+    if error_count > 0 {
+        std::process::exit(1);
+    }
+
     Ok(())
+}
+
+#[derive(Default)]
+struct ApplyStats {
+    workflows: usize,
+    agents: usize,
+    prompts: usize,
+    tools: usize,
+}
+
+enum ApplyResult {
+    Success(String),
+    Skipped(String),
+}
+
+fn should_exclude(path: &Path, exclude_patterns: &[String]) -> bool {
+    let path_str = path.to_str().unwrap_or("");
+    for pattern in exclude_patterns {
+        if glob::Pattern::new(pattern).ok().map_or(false, |p| p.matches(path_str)) {
+            return true;
+        }
+    }
+    false
+}
+
+fn scan_directory(
+    dir: &Path,
+    files: &mut Vec<PathBuf>,
+    recursive: bool,
+    resource_type: &Option<String>,
+) -> Result<()> {
+    let extensions = match resource_type.as_deref() {
+        Some("workflow") => vec!["jgflow"],
+        Some("agent") => vec!["jgagent"],
+        Some("prompt") => vec!["jgprompt"],
+        Some("tool") => vec!["json"],
+        Some("all") | None => vec!["jgflow", "jgagent", "jgprompt", "json"],
+        _ => vec![],
+    };
+
+    let pattern = if recursive {
+        format!("{}/**/*", dir.display())
+    } else {
+        format!("{}/*", dir.display())
+    };
+
+    for entry in glob::glob(&pattern)? {
+        let path = entry?;
+        if path.is_file() {
+            if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+                if extensions.contains(&ext) {
+                    files.push(path);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn apply_single_file(
+    file: &Path,
+    jug0_client: &Jug0Client,
+    config: &JuglansConfig,
+    force: bool,
+) -> Result<ApplyResult> {
+    let raw_file_data = fs::read_to_string(file)?;
+    let ext_str = file.extension().and_then(|s| s.to_str()).unwrap_or("");
+    let filename = file.file_name().and_then(|s| s.to_str()).unwrap_or("unknown");
+
+    match ext_str {
+        "jgagent" => {
+            let msg = jug0_client
+                .apply_agent(&AgentParser::parse(&raw_file_data)?, force)
+                .await?;
+            Ok(ApplyResult::Success(format!("agent: {} - {}", filename, msg)))
+        }
+        "jgprompt" => {
+            let msg = jug0_client
+                .apply_prompt(&PromptParser::parse(&raw_file_data)?, force)
+                .await?;
+            Ok(ApplyResult::Success(format!("prompt: {} - {}", filename, msg)))
+        }
+        "jgflow" => {
+            let mut workflow = GraphParser::parse(&raw_file_data)?;
+
+            if workflow.slug.is_empty() {
+                workflow.slug = file
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("unnamed")
+                    .to_string();
+            }
+
+            let endpoint_url = format!(
+                "http://{}:{}/api/chat",
+                config.server.host, config.server.port
+            );
+
+            let msg = jug0_client
+                .apply_workflow(&workflow, &raw_file_data, &endpoint_url, force)
+                .await?;
+            Ok(ApplyResult::Success(format!("workflow: {} - {}", filename, msg)))
+        }
+        _ => Err(anyhow!("Unsupported file type: {}", ext_str)),
+    }
 }
 
 #[tokio::main]
@@ -914,7 +1115,9 @@ async fn main() -> Result<()> {
         match sub_command_enum {
             Commands::Init { name } => handle_init(name)?,
             Commands::Install => handle_install().await?,
-            Commands::Apply { file, force } => handle_apply(file, *force).await?,
+            Commands::Apply { paths, force, dry_run, r#type, recursive } => {
+                handle_apply(paths.clone(), *force, *dry_run, r#type.clone(), *recursive).await?
+            }
             Commands::Check { path, all, format } => {
                 handle_check(path.as_deref(), *all, format)?;
             }

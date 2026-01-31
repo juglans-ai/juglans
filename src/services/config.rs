@@ -18,6 +18,17 @@ pub struct WorkspaceConfig {
     pub id: String,
     pub name: String,
     pub members: Option<Vec<String>>,
+    // 【新增】资源路径配置
+    #[serde(default)]
+    pub agents: Vec<String>,
+    #[serde(default)]
+    pub workflows: Vec<String>,
+    #[serde(default)]
+    pub prompts: Vec<String>,
+    #[serde(default)]
+    pub tools: Vec<String>,
+    #[serde(default)]
+    pub exclude: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -101,6 +112,11 @@ impl JuglansConfig {
                     id: "default_ws".to_string(),
                     name: "Default Workspace".to_string(),
                     members: Some(vec!["dev_user".to_string()]),
+                    agents: vec![],
+                    workflows: vec![],
+                    prompts: vec![],
+                    tools: vec![],
+                    exclude: vec![],
                 }),
                 jug0: default_jug0_config(),
                 server: ServerConfig::default(), // 使用默认
