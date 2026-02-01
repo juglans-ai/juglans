@@ -114,6 +114,11 @@ impl WorkflowExecutor {
         &self.tool_registry
     }
 
+    /// Replace the tool registry
+    pub fn set_tool_registry(&mut self, registry: Arc<ToolRegistry>) {
+        self.tool_registry = registry;
+    }
+
     pub async fn load_mcp_tools(&mut self, config: &JuglansConfig) {
         if config.mcp_servers.is_empty() {
             return;
@@ -298,6 +303,17 @@ impl WorkflowExecutor {
             Ok(Some(parsed_val))
         } else {
             Err(anyhow!("Function/Tool '{}' not found", name))
+        }
+    }
+
+    /// 尝试执行 MCP tool（供 Chat builtin 的 tool call loop 使用）
+    /// 如果 tool 不在 mcp_tools_map 中，返回 None
+    pub async fn execute_mcp_tool(&self, name: &str, args_json_str: &str) -> Option<String> {
+        let mcp_tool = self.mcp_tools_map.get(name)?;
+        let args: Value = serde_json::from_str(args_json_str).unwrap_or(json!({}));
+        match self.mcp_client.execute_tool(mcp_tool, args).await {
+            Ok(output) => Some(output),
+            Err(e) => Some(format!("MCP tool error: {}", e)),
         }
     }
 

@@ -1,21 +1,30 @@
 // src/core/context.rs
 use anyhow::{anyhow, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::oneshot;
+
+/// Client tool 执行结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolResultPayload {
+    pub tool_call_id: String,
+    pub content: String,
+}
 
 /// 工作流执行过程中的实时事件
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type", content = "content")]
 pub enum WorkflowEvent {
-    #[serde(rename = "token")]
     Token(String),
-    #[serde(rename = "status")]
     Status(String),
-    #[serde(rename = "error")]
     Error(String),
+    /// Client tool call — 发给前端执行，通过 result_tx 等待结果返回
+    ToolCall {
+        call_id: String,
+        tools: Vec<Value>,
+        result_tx: oneshot::Sender<Vec<ToolResultPayload>>,
+    },
 }
 
 /// A thread-safe, shared state for a single workflow execution.
@@ -120,6 +129,32 @@ impl WorkflowContext {
         if let Some(sender) = &self.event_sender {
             let _ = sender.send(event);
         }
+    }
+
+    /// 发送 client tool call 并等待前端返回结果
+    pub async fn emit_tool_call_and_wait(
+        &self,
+        call_id: String,
+        tools: Vec<Value>,
+        timeout_secs: u64,
+    ) -> Result<Vec<ToolResultPayload>> {
+        let (result_tx, result_rx) = oneshot::channel();
+        self.emit(WorkflowEvent::ToolCall {
+            call_id: call_id.clone(),
+            tools,
+            result_tx,
+        });
+
+        tokio::time::timeout(Duration::from_secs(timeout_secs), result_rx)
+            .await
+            .map_err(|_| {
+                anyhow!(
+                    "Client tool execution timed out after {}s (call_id: {})",
+                    timeout_secs,
+                    call_id
+                )
+            })?
+            .map_err(|_| anyhow!("Client tool result channel dropped (call_id: {})", call_id))
     }
 
     /// 【新增】获取 Token 专用 Sender 的适配器

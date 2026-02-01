@@ -5,6 +5,53 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-02-01
+
+### Added
+
+#### SSE Client Tool Bridge
+- **Client-side tool execution** - Tools not matched by builtin or MCP are automatically forwarded to the frontend via SSE for execution
+  - `WorkflowEvent::ToolCall` event in `context.rs` with oneshot channel for async response
+  - `emit_tool_call_and_wait()` method blocks workflow until frontend returns tool results
+  - `/api/chat/tool-result` endpoint on web server receives results from frontend
+  - `pending_tool_calls` map in WebState manages in-flight tool calls
+  - Tool resolution chain: Builtin → MCP → Client Bridge (automatic fallback)
+
+- **Terminal tool detection** - Tools returning `{ executed_on_client: true }` automatically end the LLM loop
+  - Prevents duplicate tool calls for terminal actions (e.g., `create_trade_suggestion`)
+  - Functional tools (e.g., `get_market_data`) continue the LLM loop normally
+
+#### Message State Control
+- **`state` parameter for `chat()` tool** - Fine-grained control over message visibility and persistence
+
+  | state | Context | SSE Output | Description |
+  |-------|---------|------------|-------------|
+  | `context_visible` | ✅ | ✅ | Default, normal message |
+  | `context_hidden` | ✅ | ❌ | AI sees it, user doesn't |
+  | `display_only` | ❌ | ✅ | User sees it, AI doesn't |
+  | `silent` | ❌ | ❌ | Neither |
+
+  - Backward compatible: `stateless="true"` maps to `state="silent"`
+  - Controls `token_sender` (SSE streaming) and `reply.output` (context persistence)
+
+#### Nested Workflow Execution
+- `execute_mcp_tool()` exposed as public method on `WorkflowExecutor`
+- Enables agents to trigger workflow execution within their tool call loops
+
+### Changed
+
+- Enhanced `WorkflowContext` with event emission system (`emit()`, `subscribe()`)
+- Web server SSE handler now processes `ToolCall` events alongside content/notify events
+- `chat()` builtin tool call loop handles both server-side (MCP/builtin) and client-side tool execution
+
+### Technical Details
+
+**New/Modified Files:**
+- `src/core/context.rs` - `ToolResultPayload`, `WorkflowEvent::ToolCall`, `emit_tool_call_and_wait()`
+- `src/builtins/ai.rs` - `state` parameter, terminal tool detection, client bridge fallback
+- `src/services/web_server.rs` - `pending_tool_calls`, `handle_tool_result`, SSE ToolCall handling
+- `src/core/executor.rs` - Public `execute_mcp_tool()` method
+
 ## [0.1.4] - 2026-01-31
 
 ### Added
@@ -109,6 +156,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Agent and prompt management
 - Basic builtins (chat, notify, etc.)
 
+[0.1.5]: https://github.com/juglans-ai/juglans/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/juglans-ai/juglans/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/juglans-ai/juglans/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/juglans-ai/juglans/compare/v0.1.1...v0.1.4

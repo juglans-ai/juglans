@@ -64,53 +64,74 @@ impl Chat {
         trimmed_content.to_string()
     }
 
+    /// 尝试在 BuiltinRegistry 中执行 tool，返回 None 表示未找到
+    async fn try_execute_builtin(
+        &self,
+        tool_name: &str,
+        args_str: &str,
+        ctx: &WorkflowContext,
+    ) -> Option<String> {
+        let weak_registry = self.builtin_registry.as_ref()?;
+        let registry_strong = weak_registry.upgrade()?;
+        let tool_instance = registry_strong.get(tool_name)?;
+
+        let args_map: HashMap<String, String> = match serde_json::from_str(args_str) {
+            Ok(map) => map,
+            Err(_) => HashMap::new(),
+        };
+
+        info!("  🔧 [Builtin Tool] Executing: {} ...", tool_name);
+
+        let result = match tool_instance.execute(&args_map, ctx).await {
+            Ok(Some(output_val)) => {
+                let s = match output_val {
+                    Value::String(s) => s,
+                    other => other.to_string(),
+                };
+                info!("  ✅ [Builtin Tool] Result: {:.80}...", s.replace("\n", " "));
+                s
+            }
+            Ok(None) => {
+                info!("  ✅ [Builtin Tool] Finished (No Output)");
+                "Tool executed successfully.".to_string()
+            }
+            Err(e) => {
+                error!("  ❌ [Builtin Tool] Error: {}", e);
+                format!("Error during tool execution: {}", e)
+            }
+        };
+        Some(result)
+    }
+
+    /// 尝试通过 Executor → MCP 执行 tool，返回 None 表示未找到
+    async fn try_execute_mcp(&self, tool_name: &str, args_str: &str) -> Option<String> {
+        let weak_registry = self.builtin_registry.as_ref()?;
+        let registry_strong = weak_registry.upgrade()?;
+        let executor = registry_strong.get_executor()?;
+
+        info!("  🔧 [MCP Tool] Attempting: {} ...", tool_name);
+        let result = executor.execute_mcp_tool(tool_name, args_str).await?;
+        info!("  ✅ [MCP Tool] Result: {:.80}...", result.replace("\n", " "));
+        Some(result)
+    }
+
+    /// 兼容旧调用：依次尝试 builtin → MCP，都失败则返回错误信息
     async fn execute_local_tool(
         &self,
         tool_name: &str,
         args_str: &str,
         ctx: &WorkflowContext,
     ) -> String {
-        if let Some(weak_registry) = &self.builtin_registry {
-            if let Some(registry_strong) = weak_registry.upgrade() {
-                if let Some(tool_instance) = registry_strong.get(tool_name) {
-                    let args_map: HashMap<String, String> = match serde_json::from_str(args_str) {
-                        Ok(map) => map,
-                        Err(_) => HashMap::new(),
-                    };
-
-                    println!("  🔧 [Local Tool] Executing: {} ...", tool_name);
-
-                    match tool_instance.execute(&args_map, ctx).await {
-                        Ok(Some(output_val)) => {
-                            let s = match output_val {
-                                Value::String(s) => s,
-                                other => other.to_string(),
-                            };
-                            println!("  ✅ [Local Tool] Result: {:.80}...", s.replace("\n", " "));
-                            s
-                        }
-                        Ok(None) => {
-                            println!("  ✅ [Local Tool] Finished (No Output)");
-                            "Tool executed successfully.".to_string()
-                        }
-                        Err(e) => {
-                            println!("  ❌ [Local Tool] Error: {}", e);
-                            format!("Error during tool execution: {}", e)
-                        }
-                    }
-                } else {
-                    format!(
-                        "Error: Tool '{}' is not registered in the local environment.",
-                        tool_name
-                    )
-                }
-            } else {
-                "Critical Error: Tool registry has been dropped from memory.".to_string()
-            }
-        } else {
-            "Configuration Error: Chat tool was not properly initialized with a registry reference."
-                .to_string()
+        if let Some(result) = self.try_execute_builtin(tool_name, args_str, ctx).await {
+            return result;
         }
+        if let Some(result) = self.try_execute_mcp(tool_name, args_str).await {
+            return result;
+        }
+        format!(
+            "Error: Tool '{}' is not registered (checked builtin and MCP).",
+            tool_name
+        )
     }
 }
 
@@ -134,6 +155,17 @@ impl Tool for Chat {
             .get("stateless")
             .map(|s| s.to_lowercase() == "true")
             .unwrap_or(false);
+
+        // 消息状态：控制 AI 上下文 + SSE 输出
+        // context_visible (默认): 写 context + SSE 输出
+        // context_hidden: 写 context, 不 SSE
+        // display_only: SSE 输出, 不写 context
+        // silent: 两者都不
+        let message_state = params.get("state").cloned().unwrap_or_else(|| {
+            if is_stateless_mode { "silent".to_string() } else { "context_visible".to_string() }
+        });
+        let should_stream = message_state == "context_visible" || message_state == "display_only";
+        let should_persist = message_state == "context_visible" || message_state == "context_hidden";
         let system_prompt_manual_override = params.get("system_prompt").cloned();
         let requested_format_mode = params
             .get("format")
@@ -376,8 +408,9 @@ impl Tool for Chat {
 
         let mut current_loop_session_id = active_session_id.clone();
 
-        // 【新增】从 context 获取 Token 适配器
+        // 从 context 获取 Token 适配器（根据 state 决定是否 SSE 输出）
         let token_sender = context.get_token_sender_adapter();
+        let effective_token_sender = if should_stream { token_sender } else { None };
 
         loop {
             let api_execution_result = self
@@ -387,7 +420,7 @@ impl Tool for Chat {
                     chat_messages_buffer.clone(),
                     custom_tools_json_schema.clone(),
                     current_loop_session_id.as_deref(),
-                    token_sender.clone(), // 【修改】透传 Sender
+                    effective_token_sender.clone(),
                 )
                 .await?;
 
@@ -395,7 +428,7 @@ impl Tool for Chat {
                 ChatOutput::Final { text, chat_id } => {
                     debug!("│   ✓ Response completed (session: {})", chat_id);
 
-                    if !is_stateless_mode {
+                    if should_persist {
                         context.set("reply.chat_id".to_string(), json!(chat_id))?;
 
                         let current_display_buffer = context
@@ -433,7 +466,10 @@ impl Tool for Chat {
 
                     chat_messages_buffer.clear();
 
-                    for call_request in calls {
+                    // 收集无法本地执行的 client tools
+                    let mut client_tools: Vec<Value> = Vec::new();
+
+                    for call_request in &calls {
                         let call_id = call_request["id"].as_str().unwrap_or("unknown_id");
 
                         let tool_function_name = call_request["name"]
@@ -450,22 +486,91 @@ impl Tool for Chat {
                                 .and_then(|v| v.as_str()))
                             .unwrap_or("{}");
 
-                        debug!(
-                            "│   ├─ Calling: {} ({})",
-                            tool_function_name, arguments_json_str
-                        );
+                        // 1. 尝试 builtin tool
+                        if let Some(result) = self.try_execute_builtin(tool_function_name, arguments_json_str, context).await {
+                            chat_messages_buffer.push(json!({
+                                "type": "tool_result",
+                                "role": "tool",
+                                "tool_call_id": call_id,
+                                "content": result
+                            }));
+                            continue;
+                        }
 
-                        let execution_result_payload = self
-                            .execute_local_tool(tool_function_name, arguments_json_str, context)
-                            .await;
+                        // 2. 尝试 MCP tool
+                        if let Some(result) = self.try_execute_mcp(tool_function_name, arguments_json_str).await {
+                            chat_messages_buffer.push(json!({
+                                "type": "tool_result",
+                                "role": "tool",
+                                "tool_call_id": call_id,
+                                "content": result
+                            }));
+                            continue;
+                        }
 
-                        chat_messages_buffer.push(json!({
-                            "type": "tool_result",
-                            "role": "tool",
-                            "tool_call_id": call_id,
-                            "content": execution_result_payload
-                        }));
+                        // 3. 都没有 → client tool，收集起来
+                        info!("│   ├─ [Client Tool Bridge] Queuing: {} for frontend execution", tool_function_name);
+                        client_tools.push(call_request.clone());
                     }
+
+                    // 如果有 client tools，通过 SSE 桥接发给前端并等待结果
+                    if !client_tools.is_empty() {
+                        let client_tool_names: Vec<&str> = client_tools.iter()
+                            .filter_map(|c| c["name"].as_str())
+                            .collect();
+                        info!("│   🌉 [Client Tool Bridge] Waiting for frontend: [{}]", client_tool_names.join(", "));
+
+                        let bridge_call_id = uuid::Uuid::new_v4().to_string();
+                        match context.emit_tool_call_and_wait(
+                            bridge_call_id,
+                            client_tools,
+                            120, // 120 秒超时
+                        ).await {
+                            Ok(results) => {
+                                info!("│   ✅ [Client Tool Bridge] Received {} results from frontend", results.len());
+
+                                // 检查是否所有结果都是 terminal（前端已渲染，无需继续 LLM loop）
+                                let all_terminal = results.iter().all(|r| {
+                                    serde_json::from_str::<Value>(&r.content)
+                                        .ok()
+                                        .and_then(|v| v.get("executed_on_client")?.as_bool())
+                                        .unwrap_or(false)
+                                });
+
+                                if all_terminal {
+                                    info!("│   🏁 [Client Tool Bridge] All client tools are terminal, ending loop");
+                                    // Terminal tools: 前端已渲染（如交易卡片），无需再问 LLM
+                                    return Ok(Some(json!("Client tools executed on frontend.")));
+                                }
+
+                                for result in results {
+                                    chat_messages_buffer.push(json!({
+                                        "type": "tool_result",
+                                        "role": "tool",
+                                        "tool_call_id": result.tool_call_id,
+                                        "content": result.content
+                                    }));
+                                }
+                            }
+                            Err(e) => {
+                                error!("│   ❌ [Client Tool Bridge] Error: {}", e);
+                                // 为所有 client tools 生成错误结果，让 LLM 知道
+                                for tool in &calls {
+                                    let cid = tool["id"].as_str().unwrap_or("unknown");
+                                    // 只为未处理的 client tools 添加错误
+                                    if !chat_messages_buffer.iter().any(|m| m["tool_call_id"].as_str() == Some(cid)) {
+                                        chat_messages_buffer.push(json!({
+                                            "type": "tool_result",
+                                            "role": "tool",
+                                            "tool_call_id": cid,
+                                            "content": format!("Error: {}", e)
+                                        }));
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     debug!("│   └─ Sending tool results back to LLM");
                 }
             }

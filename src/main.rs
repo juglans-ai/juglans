@@ -1093,6 +1093,19 @@ async fn handle_apply(
         return Ok(());
     }
 
+    // Sort files by dependency order: workflows → prompts → agents
+    // This ensures agents can reference workflows that were just created
+    files_to_apply.sort_by_key(|path| {
+        let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+        match ext {
+            "jgflow" => 0,    // Workflows first (no dependencies)
+            "jgprompt" => 1,  // Prompts second (agents reference them)
+            "jgagent" => 2,   // Agents last (depend on workflows and prompts)
+            "json" => 3,      // Tool definitions last (local only)
+            _ => 4,
+        }
+    });
+
     // 统计
     let mut stats = ApplyStats::default();
     for file in &files_to_apply {
@@ -1273,6 +1286,14 @@ async fn apply_single_file(
                 .apply_workflow(&workflow, &raw_file_data, &endpoint_url, force)
                 .await?;
             Ok(ApplyResult::Success(format!("workflow: {} - {}", filename, msg)))
+        }
+        "json" => {
+            // Tool definition files - skip for now as they don't need to be uploaded
+            // They are loaded locally by workflows when needed
+            Ok(ApplyResult::Skipped(format!(
+                "tool: {} - Tool definitions are loaded locally, no upload needed",
+                filename
+            )))
         }
         _ => Err(anyhow!("Unsupported file type: {}", ext_str)),
     }

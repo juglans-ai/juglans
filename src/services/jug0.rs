@@ -129,6 +129,24 @@ impl Jug0Client {
         Ok(body.id)
     }
 
+    pub async fn get_workflow_id(&self, slug: &str) -> Result<Uuid> {
+        let url = self.build_resource_url(slug, "workflows");
+        let res = self
+            .http
+            .get(&url)
+            .header("X-API-KEY", &self.api_key)
+            .send()
+            .await?;
+        if !res.status().is_success() {
+            return Err(anyhow!(
+                "Remote Resource Not Found: Workflow '{}' is missing.",
+                slug
+            ));
+        }
+        let body: WorkflowResponse = res.json().await?;
+        Ok(body.id)
+    }
+
     pub async fn apply_prompt(&self, prompt: &PromptResource, force: bool) -> Result<String> {
         let url_get = format!("{}/api/prompts/{}", self.base_url, prompt.slug);
         let res_get = self
@@ -154,14 +172,32 @@ impl Jug0Client {
             } else {
                 format!("{}/api/prompts/{}", self.base_url, existing.id)
             };
-            self.http
+            let res = self.http
                 .patch(&url)
                 .header("X-API-KEY", &self.api_key)
                 .json(&payload)
                 .send()
                 .await?;
-            Ok(format!("Successfully synchronized prompt: {}", prompt.slug))
-        } else {
+
+            // If PATCH fails with 404, fall through to create
+            if res.status() == 404 {
+                // Prompt exists but we don't own it, create our own
+            } else if !res.status().is_success() {
+                let status = res.status();
+                let error_text = res.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                return Err(anyhow!(
+                    "Failed to update prompt '{}': {} - {}",
+                    prompt.slug,
+                    status,
+                    error_text
+                ));
+            } else {
+                return Ok(format!("Successfully synchronized prompt: {}", prompt.slug));
+            }
+        }
+
+        // Create new prompt
+        {
             let mut create_payload = payload.clone();
             create_payload["slug"] = json!(prompt.slug);
             let url = if force {
@@ -169,16 +205,28 @@ impl Jug0Client {
             } else {
                 format!("{}/api/prompts", self.base_url)
             };
-            self.http
+            let res = self.http
                 .post(&url)
                 .header("X-API-KEY", &self.api_key)
                 .json(&create_payload)
                 .send()
                 .await?;
-            Ok(format!(
-                "Successfully registered new prompt: {}",
-                prompt.slug
-            ))
+
+        if !res.status().is_success() {
+            let status = res.status();
+            let error_text = res.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(anyhow!(
+                "Failed to create prompt '{}': {} - {}",
+                prompt.slug,
+                status,
+                error_text
+            ));
+        }
+
+        Ok(format!(
+            "Successfully registered new prompt: {}",
+            prompt.slug
+        ))
         }
     }
 
@@ -189,6 +237,66 @@ impl Jug0Client {
             self.get_prompt_id("system-default").await?
         };
 
+        // Resolve workflow_id if workflow reference is provided
+        let workflow_id = if let Some(workflow_ref) = &agent.workflow {
+            // Detect format: file path vs slug vs user/slug
+            let is_file_path = workflow_ref.ends_with(".jgflow")
+                || workflow_ref.starts_with("./")
+                || workflow_ref.starts_with("../");
+
+            if is_file_path {
+                // Legacy file path format - warn and try to extract slug
+                tracing::warn!(
+                    "⚠️  Agent '{}': workflow field uses deprecated file path format '{}'",
+                    agent.slug,
+                    workflow_ref
+                );
+
+                let extracted_slug = std::path::Path::new(workflow_ref)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("");
+
+                tracing::warn!(
+                    "   Please update to use workflow slug: workflow: \"{}\"",
+                    extracted_slug
+                );
+
+                if !extracted_slug.is_empty() {
+                    match self.get_workflow_id(extracted_slug).await {
+                        Ok(id) => Some(id),
+                        Err(_) => {
+                            tracing::warn!(
+                                "   Workflow '{}' not found. Agent will be created without workflow binding.",
+                                extracted_slug
+                            );
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
+            } else {
+                // Modern format: "slug" or "user/slug"
+                match self.get_workflow_id(workflow_ref).await {
+                    Ok(id) => Some(id),
+                    Err(_) => {
+                        tracing::warn!(
+                            "⚠️  Agent '{}': Workflow '{}' not found on server.",
+                            agent.slug,
+                            workflow_ref
+                        );
+                        tracing::warn!(
+                            "   Make sure the workflow is applied first."
+                        );
+                        None
+                    }
+                }
+            }
+        } else {
+            None
+        };
+
         let url_get = format!("{}/api/agents/{}", self.base_url, agent.slug);
         let res_get = self
             .http
@@ -197,7 +305,7 @@ impl Jug0Client {
             .send()
             .await?;
 
-        let payload = json!({
+        let mut payload = json!({
             "name": agent.name,
             "description": agent.description,
             "system_prompt_id": sys_prompt_id,
@@ -206,6 +314,18 @@ impl Jug0Client {
             "skills": agent.skills,
         });
 
+        // Add workflow_id if present
+        let workflow_suffix = if let Some(wf_id) = workflow_id {
+            payload["workflow_id"] = json!(wf_id);
+            let wf_ref = agent.workflow.as_deref().unwrap_or("?");
+            format!(" (workflow: {} → {})", wf_ref, wf_id)
+        } else if agent.workflow.is_some() {
+            let wf_ref = agent.workflow.as_deref().unwrap_or("?");
+            format!(" (⚠️ workflow '{}' not bound - not found on server)", wf_ref)
+        } else {
+            String::new()
+        };
+
         if res_get.status().is_success() {
             let existing: AgentResponse = res_get.json().await?;
             let url = if force {
@@ -213,14 +333,33 @@ impl Jug0Client {
             } else {
                 format!("{}/api/agents/{}", self.base_url, existing.id)
             };
-            self.http
+            let res = self.http
                 .patch(&url)
                 .header("X-API-KEY", &self.api_key)
                 .json(&payload)
                 .send()
                 .await?;
-            Ok(format!("Successfully synchronized agent: {}", agent.slug))
-        } else {
+
+            // If PATCH fails with 404, the agent exists but doesn't belong to us
+            // Fall through to create a new one
+            if res.status() == 404 {
+                // Agent exists but we don't own it, create our own
+            } else if !res.status().is_success() {
+                let status = res.status();
+                let error_text = res.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                return Err(anyhow!(
+                    "Failed to update agent '{}': {} - {}",
+                    agent.slug,
+                    status,
+                    error_text
+                ));
+            } else {
+                return Ok(format!("Successfully synchronized agent: {}{}", agent.slug, workflow_suffix));
+            }
+        }
+
+        // Create new agent (either GET failed or PATCH returned 404)
+        {
             let mut create_payload = payload.clone();
             create_payload["slug"] = json!(agent.slug);
             let url = if force {
@@ -228,13 +367,25 @@ impl Jug0Client {
             } else {
                 format!("{}/api/agents", self.base_url)
             };
-            self.http
+            let res = self.http
                 .post(&url)
                 .header("X-API-KEY", &self.api_key)
                 .json(&create_payload)
                 .send()
                 .await?;
-            Ok(format!("Successfully registered new agent: {}", agent.slug))
+
+        if !res.status().is_success() {
+            let status = res.status();
+            let error_text = res.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(anyhow!(
+                "Failed to create agent '{}': {} - {}",
+                agent.slug,
+                status,
+                error_text
+            ));
+        }
+
+        Ok(format!("Successfully registered new agent: {}{}", agent.slug, workflow_suffix))
         }
     }
 
@@ -413,10 +564,14 @@ impl Jug0Client {
             .send()
             .await?;
 
+        // Parse definition as JSON for JSONB column
+        let definition_json: Value = serde_json::from_str(definition)
+            .unwrap_or_else(|_| json!({"raw": definition}));
+
         let payload = json!({
             "name": if workflow.name.is_empty() { None } else { Some(&workflow.name) },
             "endpoint_url": endpoint_url,
-            "definition": definition,
+            "definition": definition_json,
             "is_active": true,
         });
 
@@ -427,17 +582,35 @@ impl Jug0Client {
             } else {
                 format!("{}/api/workflows/{}", self.base_url, existing.id)
             };
-            self.http
+            let res = self.http
                 .patch(&url)
                 .header("X-API-KEY", &self.api_key)
                 .json(&payload)
                 .send()
                 .await?;
-            Ok(format!(
-                "Successfully synchronized workflow: {}",
-                workflow.slug
-            ))
-        } else {
+
+            // If PATCH fails with 404, fall through to create
+            if res.status() == 404 {
+                // Workflow exists but we don't own it, create our own
+            } else if !res.status().is_success() {
+                let status = res.status();
+                let error_text = res.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                return Err(anyhow!(
+                    "Failed to update workflow '{}': {} - {}",
+                    workflow.slug,
+                    status,
+                    error_text
+                ));
+            } else {
+                return Ok(format!(
+                    "Successfully synchronized workflow: {}",
+                    workflow.slug
+                ));
+            }
+        }
+
+        // Create new workflow
+        {
             let mut create_payload = payload.clone();
             create_payload["slug"] = json!(workflow.slug);
             let url = if force {
@@ -445,16 +618,28 @@ impl Jug0Client {
             } else {
                 format!("{}/api/workflows", self.base_url)
             };
-            self.http
+            let res = self.http
                 .post(&url)
                 .header("X-API-KEY", &self.api_key)
                 .json(&create_payload)
                 .send()
                 .await?;
-            Ok(format!(
-                "Successfully registered new workflow: {}",
-                workflow.slug
-            ))
+
+        if !res.status().is_success() {
+            let status = res.status();
+            let error_text = res.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(anyhow!(
+                "Failed to create workflow '{}': {} - {}",
+                workflow.slug,
+                status,
+                error_text
+            ));
+        }
+
+        Ok(format!(
+            "Successfully registered new workflow: {}",
+            workflow.slug
+        ))
         }
     }
 }

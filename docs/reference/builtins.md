@@ -15,7 +15,8 @@ Juglans 提供多个内置工具，用于工作流中的各种操作。
 | `agent` | string | 是 | Agent 的 slug |
 | `message` | string | 是 | 发送的消息 |
 | `format` | string | 否 | 输出格式 ("text", "json") |
-| `stateless` | string | 否 | "true" 则不保存历史 |
+| `state` | string | 否 | 消息状态控制（见下表） |
+| `stateless` | string | 否 | ⚠️ 已弃用，使用 `state="silent"` 替代 |
 | `chat_id` | string | 否 | 对话 ID，用于复用会话上下文 |
 | `tools` | array | 否 | 自定义工具定义（覆盖 Agent 默认配置） |
 
@@ -35,11 +36,18 @@ Juglans 提供多个内置工具，用于工作流中的各种操作。
   format="json"
 )
 
-# 无状态调用
+# 无状态调用（已弃用，使用 state 替代）
 [analyze]: chat(
   agent="analyst",
   message=$input.data,
   stateless="true"
+)
+
+# 使用 state 参数
+[hidden]: chat(
+  agent="analyst",
+  message=$input.data,
+  state="context_hidden"
 )
 
 # 复用对话上下文
@@ -75,6 +83,43 @@ Juglans 提供多个内置工具，用于工作流中的各种操作。
 **输出：**
 
 返回 AI 的响应文本。如果 `format="json"`，返回解析后的 JSON 对象。
+
+**`state` 参数说明：**
+
+控制 `chat()` 输出的可见性和持久性：
+
+| state | 写入上下文 | SSE 输出 | 说明 |
+|-------|-----------|---------|------|
+| `context_visible` | ✅ | ✅ | 默认值，正常消息 |
+| `context_hidden` | ✅ | ❌ | AI 后续可见，不推送给用户 |
+| `display_only` | ❌ | ✅ | 推送给用户，AI 后续不可见 |
+| `silent` | ❌ | ❌ | 两者都不 |
+
+- **写入上下文**: 结果是否存入 `$reply.output`，影响后续节点是否能读取
+- **SSE 输出**: 生成的 token 是否通过 SSE 流式推送给前端
+
+```yaml
+# 后台分析，不显示给用户，但结果供后续节点使用
+[bg_analyze]: chat(
+  agent="analyst",
+  message=$input.data,
+  state="context_hidden"
+)
+
+# 展示给用户看，但不影响后续 AI 上下文
+[greeting]: chat(
+  agent="greeter",
+  message="Welcome!",
+  state="display_only"
+)
+
+# 完全静默
+[silent_check]: chat(
+  agent="validator",
+  message=$input.data,
+  state="silent"
+)
+```
 
 **工具配置说明：**
 

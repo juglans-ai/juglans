@@ -230,6 +230,91 @@ cors_origins = [
 cors_origins = ["*"]
 ```
 
+## Client Tool Bridge
+
+当 workflow 中 LLM 返回的 tool call 未匹配任何 builtin 或 MCP 工具时，自动通过 SSE 转发给前端执行。
+
+### 工具解析优先级
+
+```
+1. Builtin Registry  →  chat(), p(), notify(), fetch_url() 等
+2. MCP Tools         →  通过 MCP server 注册的工具
+3. Client Bridge     →  自动转发给前端（SSE）
+```
+
+### SSE ToolCall 事件
+
+当需要前端执行工具时，服务器发送 `tool_call` 事件：
+
+```
+event: tool_call
+data: {
+  "call_id": "unique-call-id",
+  "tools": [
+    {
+      "id": "call_abc123",
+      "name": "create_trade_suggestion",
+      "arguments": "{\"symbol\": \"AAPL\", \"action\": \"buy\"}"
+    }
+  ]
+}
+```
+
+### 返回工具结果
+
+前端执行完工具后，通过 POST 请求返回结果：
+
+#### POST /api/chat/tool-result
+
+```bash
+curl -X POST http://localhost:8080/api/chat/tool-result \
+  -H "Content-Type: application/json" \
+  -d '{
+    "call_id": "unique-call-id",
+    "results": [
+      {
+        "tool_call_id": "call_abc123",
+        "content": "{\"success\": true, \"executed_on_client\": true}"
+      }
+    ]
+  }'
+```
+
+### Terminal vs Functional 工具
+
+| 类型 | `executed_on_client` | LLM 循环 | 示例 |
+|------|---------------------|----------|------|
+| **Terminal** | `true` | 结束 | `create_trade_suggestion` |
+| **Functional** | `false` 或不存在 | 继续 | `get_market_data` |
+
+- **Terminal 工具**: 前端执行后直接结束（如创建 UI 组件），结果中包含 `executed_on_client: true`
+- **Functional 工具**: 前端执行后返回数据，LLM 继续处理（如获取实时数据）
+
+### 前端集成示例
+
+```javascript
+const eventSource = new EventSource('/api/chat/execute');
+
+eventSource.addEventListener('tool_call', async (event) => {
+  const { call_id, tools } = JSON.parse(event.data);
+
+  const results = [];
+  for (const tool of tools) {
+    const result = await executeClientTool(tool.name, JSON.parse(tool.arguments));
+    results.push({
+      tool_call_id: tool.id,
+      content: JSON.stringify(result),
+    });
+  }
+
+  await fetch('/api/chat/tool-result', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ call_id, results }),
+  });
+});
+```
+
 ## 流式响应
 
 ### SSE 事件类型
@@ -239,6 +324,7 @@ cors_origins = ["*"]
 | `node_start` | 节点开始执行 |
 | `node_complete` | 节点执行完成 |
 | `content` | 内容输出（LLM 生成的文本） |
+| `tool_call` | 需要前端执行的工具调用 |
 | `error` | 错误发生 |
 | `done` | 执行完成 |
 

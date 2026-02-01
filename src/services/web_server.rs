@@ -17,9 +17,10 @@ use serde_json::{json, Value};
 use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
@@ -27,7 +28,7 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::core::agent_parser::{AgentParser, AgentResource};
-use crate::core::context::{WorkflowContext, WorkflowEvent};
+use crate::core::context::{ToolResultPayload, WorkflowContext, WorkflowEvent};
 use crate::core::executor::WorkflowExecutor;
 use crate::core::parser::GraphParser;
 use crate::core::prompt_parser::{PromptParser, PromptResource};
@@ -79,6 +80,8 @@ struct WebState {
     pub port: u16,
     pub jug0_base_url: String,
     pub mcp_server_count: usize,
+    /// Pending client tool calls waiting for frontend results
+    pub pending_tool_calls: Arc<Mutex<HashMap<String, oneshot::Sender<Vec<ToolResultPayload>>>>>,
 }
 
 #[derive(Deserialize)]
@@ -124,8 +127,10 @@ pub struct ChatRequest {
 
     // Juglans 额外字段
     pub variables: Option<Value>,
-    /// 是否无状态模式（不继承 chat_id）
+    /// 是否无状态模式（不继承 chat_id）— 保留兼容
     pub stateless: Option<bool>,
+    /// 消息状态：context_visible | context_hidden | display_only | silent
+    pub state: Option<String>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -435,6 +440,7 @@ pub async fn start_web_server(
             .map(|c| c.jug0.base_url.clone())
             .unwrap_or_else(|| "N/A".to_string()),
         mcp_server_count: config.as_ref().map(|c| c.mcp_servers.len()).unwrap_or(0),
+        pending_tool_calls: Arc::new(Mutex::new(HashMap::new())),
     });
 
     let app = Router::new()
@@ -443,6 +449,7 @@ pub async fn start_web_server(
         .route("/api/prompts", get(list_local_prompts))
         .route("/api/workflows", get(list_local_workflows))
         .route("/api/chat", post(handle_chat))
+        .route("/api/chat/tool-result", post(handle_tool_result))
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
         .layer(Extension(state));
@@ -717,9 +724,27 @@ async fn handle_chat(
         .to_string_lossy()
         .to_string()]);
 
-    let executor = Arc::new(
-        WorkflowExecutor::new(Arc::new(prompt_registry), Arc::new(agent_registry), runtime).await,
-    );
+    let mut executor =
+        WorkflowExecutor::new(Arc::new(prompt_registry), Arc::new(agent_registry), runtime).await;
+
+    // 加载 tool definitions（从 project_root 下搜索 *.json tool files）
+    {
+        use crate::core::tool_loader::ToolLoader;
+        use crate::services::tool_registry::ToolRegistry;
+        let tool_pattern = state.project_root.join("**/*.json").to_string_lossy().to_string();
+        if let Ok(tools) = ToolLoader::load_from_glob(&tool_pattern, &state.project_root) {
+            if !tools.is_empty() {
+                let mut registry = ToolRegistry::new();
+                registry.register_all(tools);
+                executor.set_tool_registry(Arc::new(registry));
+            }
+        }
+    }
+    executor.load_mcp_tools(&config).await;
+
+    let executor = Arc::new(executor);
+    // 注入 executor 引用到 BuiltinRegistry，让 chat() 能解析 tool slug
+    executor.get_registry().set_executor(Arc::downgrade(&executor));
 
     let (tx, rx) = mpsc::unbounded_channel::<WorkflowEvent>();
     let ctx = WorkflowContext::with_sender(tx.clone());
@@ -745,31 +770,58 @@ async fn handle_chat(
     let stateless_flag = is_stateless;
     let tools_json = custom_tools.map(|t| serde_json::to_string(&t).unwrap_or_default());
     let sys_prompt = system_prompt_override;
+    let project_root = state.project_root.clone();
 
     tokio::spawn(async move {
-        let result = if let Some(wf_path) = &agent_meta.workflow {
-            let full_wf_path = if Path::new(wf_path).is_absolute() {
-                PathBuf::from(wf_path)
+        let result = if let Some(wf_ref) = &agent_meta.workflow {
+            // 判断是文件路径还是 slug
+            let is_file_path = wf_ref.ends_with(".jgflow")
+                || wf_ref.starts_with("./")
+                || wf_ref.starts_with("../")
+                || Path::new(wf_ref).is_absolute();
+
+            let wf_content = if is_file_path {
+                // 文件路径格式：按现有逻辑解析
+                let full_wf_path = if Path::new(wf_ref).is_absolute() {
+                    PathBuf::from(wf_ref)
+                } else {
+                    agent_dir.join(wf_ref)
+                };
+                debug!("📂 Resolving workflow file: {:?}", full_wf_path);
+                fs::read_to_string(&full_wf_path).map_err(|e| {
+                    anyhow::anyhow!("Workflow File Error: {} (tried {:?})", e, full_wf_path)
+                })
             } else {
-                agent_dir.join(wf_path)
+                // Slug 格式：在 project_root 下搜索 **/{slug}.jgflow
+                debug!("🔍 Resolving workflow by slug: '{}' in {:?}", wf_ref, project_root);
+                let pattern = project_root
+                    .join(format!("**/{}.jgflow", wf_ref))
+                    .to_string_lossy()
+                    .to_string();
+                let found = glob::glob(&pattern)
+                    .ok()
+                    .and_then(|mut paths| paths.find_map(|p| p.ok()));
+                match found {
+                    Some(path) => {
+                        info!("📂 Found workflow '{}' at {:?}", wf_ref, path);
+                        fs::read_to_string(&path).map_err(|e| {
+                            anyhow::anyhow!("Workflow File Error: {} (tried {:?})", e, path)
+                        })
+                    }
+                    None => Err(anyhow::anyhow!(
+                        "Workflow '{}' not found in workspace {:?}",
+                        wf_ref,
+                        project_root
+                    )),
+                }
             };
 
-            debug!("📂 Resolving workflow file: {:?}", full_wf_path);
-
-            match fs::read_to_string(&full_wf_path) {
+            match wf_content {
                 Ok(content) => match GraphParser::parse(&content) {
                     Ok(graph) => executor.execute_graph(Arc::new(graph), &ctx).await,
-                    Err(e) => Err(anyhow::anyhow!(
-                        "Workflow Parse Error (in {:?}): {}",
-                        full_wf_path,
-                        e
-                    )),
+                    Err(e) => Err(anyhow::anyhow!("Workflow Parse Error: {}", e)),
                 },
-                Err(e) => Err(anyhow::anyhow!(
-                    "Workflow File Error: {} (tried {:?})",
-                    e,
-                    full_wf_path
-                )),
+                Err(e) => Err(e),
             }
         } else {
             // 直接 chat 模式
@@ -777,9 +829,12 @@ async fn handle_chat(
             params.insert("agent".to_string(), agent_meta.slug.clone());
             params.insert("message".to_string(), "$input.message".to_string());
 
-            // 传递 stateless 参数
+            // 传递 stateless / state 参数
             if stateless_flag {
                 params.insert("stateless".to_string(), "true".to_string());
+            }
+            if let Some(ref state_val) = req.state {
+                params.insert("state".to_string(), state_val.clone());
             }
 
             // 传递自定义 tools
@@ -805,16 +860,70 @@ async fn handle_chat(
     });
 
     // SSE 事件格式对齐 Jug0
-    let stream = UnboundedReceiverStream::new(rx).map(|event| {
+    let pending_calls = state.pending_tool_calls.clone();
+    let stream = UnboundedReceiverStream::new(rx).map(move |event| {
         let json_event = match event {
             // 对齐 Jug0: { "type": "content", "text": "..." }
             WorkflowEvent::Token(t) => json!({ "type": "content", "text": t }),
             // Juglans 特有状态 -> meta 事件
             WorkflowEvent::Status(s) => json!({ "type": "meta", "status": s }),
             WorkflowEvent::Error(e) => json!({ "type": "error", "message": e }),
+            // Client tool call → 存储 result_tx 并发送 SSE event
+            WorkflowEvent::ToolCall { call_id, tools, result_tx } => {
+                if let Ok(mut map) = pending_calls.lock() {
+                    map.insert(call_id.clone(), result_tx);
+                }
+                json!({
+                    "type": "tool_call",
+                    "call_id": call_id,
+                    "tools": tools,
+                })
+            }
         };
         Ok(Event::default().data(json_event.to_string()))
     });
 
     Ok(Sse::new(stream))
+}
+
+// --- Tool Result Bridge Endpoint ---
+
+#[derive(Deserialize)]
+struct ToolResultRequest {
+    call_id: String,
+    results: Vec<ToolResultPayload>,
+}
+
+async fn handle_tool_result(
+    Extension(state): Extension<Arc<WebState>>,
+    Json(payload): Json<ToolResultRequest>,
+) -> Json<Value> {
+    let sender = {
+        let mut map = match state.pending_tool_calls.lock() {
+            Ok(map) => map,
+            Err(_) => {
+                return Json(json!({ "error": "Internal lock error" }));
+            }
+        };
+        map.remove(&payload.call_id)
+    };
+
+    match sender {
+        Some(tx) => {
+            info!(
+                "🌉 [Tool Result] Received {} results for call_id: {}",
+                payload.results.len(),
+                payload.call_id
+            );
+            let _ = tx.send(payload.results);
+            Json(json!({ "ok": true }))
+        }
+        None => {
+            warn!(
+                "🌉 [Tool Result] No pending call found for call_id: {} (may have timed out)",
+                payload.call_id
+            );
+            Json(json!({ "error": "No pending tool call found for this call_id" }))
+        }
+    }
 }
