@@ -53,6 +53,26 @@ pub struct ServerConfig {
     pub port: u16,
 }
 
+// 【新增】Debug 配置部分
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct DebugConfig {
+    /// 显示节点执行信息
+    #[serde(default)]
+    pub show_nodes: bool,
+
+    /// 显示上下文变量
+    #[serde(default)]
+    pub show_context: bool,
+
+    /// 显示条件评估详情
+    #[serde(default)]
+    pub show_conditions: bool,
+
+    /// 显示变量解析过程
+    #[serde(default)]
+    pub show_variables: bool,
+}
+
 fn default_server_host() -> String {
     "127.0.0.1".to_string()
 }
@@ -77,6 +97,10 @@ pub struct JuglansConfig {
 
     #[serde(default)]
     pub env: std::collections::HashMap<String, String>,
+
+    // 【新增】Debug 配置
+    #[serde(default)]
+    pub debug: DebugConfig,
 }
 
 fn default_jug0_config() -> Jug0Config {
@@ -119,9 +143,10 @@ impl JuglansConfig {
                     exclude: vec![],
                 }),
                 jug0: default_jug0_config(),
-                server: ServerConfig::default(), // 使用默认
+                server: ServerConfig::default(),
                 mcp_servers: vec![],
                 env: Default::default(),
+                debug: DebugConfig::default(),
             });
         }
 

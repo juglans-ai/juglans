@@ -45,13 +45,26 @@ impl Tool for SetContext {
         params: &HashMap<String, String>,
         context: &WorkflowContext,
     ) -> Result<Option<Value>> {
-        let path = params.get("path").ok_or_else(|| anyhow!("Missing path"))?;
-        let value_str = params
-            .get("value")
-            .ok_or_else(|| anyhow!("Missing value"))?;
-        let value = serde_json::from_str(value_str).unwrap_or(json!(value_str));
-        let stripped_path = path.strip_prefix("$ctx.").unwrap_or(path).trim_matches('"');
-        context.set(stripped_path.to_string(), value)?;
+        // 支持两种模式：
+        // 1. 传统模式：set_context(path="key", value="val")
+        // 2. 多字段模式：set_context(key1=$input.val1, key2=$input.val2)
+
+        if let (Some(path), Some(value_str)) = (params.get("path"), params.get("value")) {
+            // 传统模式
+            let value = serde_json::from_str(value_str).unwrap_or(json!(value_str));
+            let stripped_path = path.strip_prefix("$ctx.").unwrap_or(path).trim_matches('"');
+            context.set(stripped_path.to_string(), value)?;
+        } else {
+            // 多字段模式：每个 key=value 对都设置到 ctx 中
+            for (key, value_str) in params {
+                // 跳过保留字段
+                if key == "path" || key == "value" {
+                    continue;
+                }
+                let value = serde_json::from_str(value_str).unwrap_or(json!(value_str));
+                context.set(key.clone(), value)?;
+            }
+        }
         Ok(None)
     }
 }

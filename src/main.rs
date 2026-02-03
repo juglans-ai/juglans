@@ -231,10 +231,11 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
 
             let runtime_impl: Arc<dyn JuglansRuntime> = Arc::new(Jug0Client::new(&local_config));
 
-            let mut executor_instance_obj = WorkflowExecutor::new(
+            let mut executor_instance_obj = WorkflowExecutor::new_with_debug(
                 Arc::new(prompt_registry_inst),
                 Arc::new(agent_registry_inst),
                 runtime_impl,
+                local_config.debug.clone(),
             )
             .await;
 
@@ -242,8 +243,18 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
             executor_instance_obj.load_tools(&workflow_definition_obj).await;
 
             let shared_executor_engine = Arc::new(executor_instance_obj);
+
+            // 【新增】注入 executor 引用到 registry（用于嵌套 workflow 执行）
             shared_executor_engine
-                .run(workflow_definition_obj, &local_config)
+                .get_registry()
+                .set_executor(Arc::downgrade(&shared_executor_engine));
+
+            // 解析 CLI 输入
+            let input_value: Option<serde_json::Value> = resolve_input_data(cli)?
+                .and_then(|s| serde_json::from_str(&s).ok());
+
+            shared_executor_engine
+                .run_with_input(workflow_definition_obj, &local_config, input_value)
                 .await?;
         }
 
@@ -302,10 +313,11 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
                 active_workflow_ptr = Some(Arc::new(workflow_parsed_data));
             }
 
-            let mut executor_temp = WorkflowExecutor::new(
+            let mut executor_temp = WorkflowExecutor::new_with_debug(
                 Arc::new(local_p_store),
                 Arc::new(local_a_store),
                 shared_runtime_ptr,
+                global_system_config.debug.clone(),
             )
             .await;
 

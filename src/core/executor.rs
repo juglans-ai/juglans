@@ -21,7 +21,7 @@ use crate::core::context::WorkflowContext;
 use crate::core::graph::{NodeType, WorkflowGraph};
 use crate::core::parser::GraphParser;
 use crate::services::agent_loader::AgentRegistry;
-use crate::services::config::JuglansConfig;
+use crate::services::config::{DebugConfig, JuglansConfig};
 use crate::services::interface::JuglansRuntime;
 use crate::services::mcp::{McpClient, McpTool};
 use crate::services::prompt_loader::PromptRegistry;
@@ -39,6 +39,7 @@ pub struct WorkflowExecutor {
     mcp_tools_map: HashMap<String, McpTool>,
     tool_registry: Arc<ToolRegistry>,
     rhai_engine: Engine,
+    debug_config: DebugConfig,
 }
 
 impl WorkflowExecutor {
@@ -46,6 +47,15 @@ impl WorkflowExecutor {
         prompt_registry: Arc<PromptRegistry>,
         agent_registry: Arc<AgentRegistry>,
         runtime: Arc<dyn JuglansRuntime>,
+    ) -> Self {
+        Self::new_with_debug(prompt_registry, agent_registry, runtime, DebugConfig::default()).await
+    }
+
+    pub async fn new_with_debug(
+        prompt_registry: Arc<PromptRegistry>,
+        agent_registry: Arc<AgentRegistry>,
+        runtime: Arc<dyn JuglansRuntime>,
+        debug_config: DebugConfig,
     ) -> Self {
         let mut engine = Engine::new_raw();
         engine.set_max_operations(1_000_000);
@@ -59,6 +69,7 @@ impl WorkflowExecutor {
             mcp_tools_map: HashMap::new(),
             tool_registry: Arc::new(ToolRegistry::new()),
             rhai_engine: engine,
+            debug_config,
         }
     }
 
@@ -209,15 +220,18 @@ impl WorkflowExecutor {
 
             if is_pure_variable {
                 // 纯变量引用：返回原始 JSON 类型（保留 boolean, number 等）
+                // 如果变量不存在，返回 null（而不是报错），使条件路由更直观
                 let path = &clean_param_no_quotes[1..]; // 去掉 $
                 let path = if path.starts_with("ctx.") {
                     &path[4..]
                 } else {
                     path
                 };
-                return context
-                    .resolve_path(path)?
-                    .ok_or_else(|| anyhow!("Variable '{}' not found in context", path));
+                let resolved = context.resolve_path(path)?.unwrap_or(Value::Null);
+                if self.debug_config.show_variables {
+                    info!("🔍 [Debug] Resolve: ${} → {:?}", path, resolved);
+                }
+                return Ok(resolved);
             }
 
             // 包含表达式：替换变量后用 Rhai 评估
@@ -323,7 +337,11 @@ impl WorkflowExecutor {
         context: &WorkflowContext,
     ) -> Result<bool> {
         let val = self.process_parameter(script, context).await?;
-        Ok(val.as_bool().unwrap_or(false))
+        let result = val.as_bool().unwrap_or(false);
+        if self.debug_config.show_conditions {
+            info!("🔀 [Debug] Condition '{}' → {} (raw: {:?})", script, result, val);
+        }
+        Ok(result)
     }
 
     async fn run_single_node(
@@ -340,6 +358,10 @@ impl WorkflowExecutor {
         };
 
         debug!("│ → [{}]{}", node.id, status_suffix);
+
+        if self.debug_config.show_nodes {
+            info!("📦 [Debug] Node [{}]: {:?}", node.id, node.node_type);
+        }
 
         match &node.node_type {
             NodeType::Literal(val) => {
@@ -416,12 +438,33 @@ impl WorkflowExecutor {
         workflow: Arc<WorkflowGraph>,
         config: &JuglansConfig,
     ) -> Result<()> {
+        self.run_with_input(workflow, config, None).await
+    }
+
+    pub async fn run_with_input(
+        self: Arc<Self>,
+        workflow: Arc<WorkflowGraph>,
+        config: &JuglansConfig,
+        input: Option<Value>,
+    ) -> Result<()> {
         info!(
             "🚀 Starting Execution: {} (v{})",
             workflow.name, workflow.version
         );
         debug!("👤 User: {}", config.account.name);
         let context = WorkflowContext::new();
+
+        // 设置输入数据到 ctx.input
+        if let Some(input_val) = input {
+            if let Some(obj) = input_val.as_object() {
+                for (key, val) in obj {
+                    context.set(format!("input.{}", key), val.clone())?;
+                }
+            }
+            // 同时设置完整的 input 对象
+            context.set("input".to_string(), input_val)?;
+        }
+
         info!("\n--- Execution Log ---");
         self.execute_graph(workflow, &context).await?;
         info!("🎉 Workflow finished successfully.");
@@ -648,6 +691,14 @@ impl WorkflowExecutor {
                                     .unwrap();
                             }
                         }
+
+                        // 显示上下文变化
+                        if self_clone.debug_config.show_context {
+                            if let Ok(ctx_val) = context_clone.get_as_value() {
+                                info!("📋 [Debug] Context after [{}]: {}", node.id, serde_json::to_string_pretty(&ctx_val).unwrap_or_default());
+                            }
+                        }
+
                         completed_nodes_clone.lock().unwrap().insert(node_idx);
                         for edge in workflow_clone.graph.edges(node_idx) {
                             let (edge_info, successor_idx) = (edge.weight(), edge.target());

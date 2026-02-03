@@ -515,6 +515,18 @@ impl Tool for Chat {
 
                     // 如果有 client tools，通过 SSE 桥接发给前端并等待结果
                     if !client_tools.is_empty() {
+                        // 去重：name + arguments 完全相同的调用只保留一个
+                        let mut seen = std::collections::HashSet::new();
+                        let deduped_tools: Vec<Value> = client_tools.into_iter().filter(|t| {
+                            let key = format!(
+                                "{}:{}",
+                                t["name"].as_str().unwrap_or(""),
+                                t["arguments"].as_str().unwrap_or("")
+                            );
+                            seen.insert(key)
+                        }).collect();
+                        let client_tools = deduped_tools;
+
                         let client_tool_names: Vec<&str> = client_tools.iter()
                             .filter_map(|c| c["name"].as_str())
                             .collect();
@@ -528,6 +540,14 @@ impl Tool for Chat {
                         ).await {
                             Ok(results) => {
                                 info!("│   ✅ [Client Tool Bridge] Received {} results from frontend", results.len());
+                                for r in &results {
+                                    info!("│   📦 [Client Tool Bridge] tool_call_id={}, content={}", r.tool_call_id, r.content);
+                                    let parsed = serde_json::from_str::<Value>(&r.content);
+                                    info!("│   📦 [Client Tool Bridge] parsed={:?}, executed_on_client={:?}",
+                                        parsed.is_ok(),
+                                        parsed.as_ref().ok().and_then(|v| v.get("executed_on_client"))
+                                    );
+                                }
 
                                 // 检查是否所有结果都是 terminal（前端已渲染，无需继续 LLM loop）
                                 let all_terminal = results.iter().all(|r| {
@@ -537,6 +557,7 @@ impl Tool for Chat {
                                         .unwrap_or(false)
                                 });
 
+                                info!("│   📦 [Client Tool Bridge] all_terminal={}", all_terminal);
                                 if all_terminal {
                                     info!("│   🏁 [Client Tool Bridge] All client tools are terminal, ending loop");
                                     // Terminal tools: 前端已渲染（如交易卡片），无需再问 LLM

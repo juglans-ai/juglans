@@ -725,7 +725,7 @@ async fn handle_chat(
         .to_string()]);
 
     let mut executor =
-        WorkflowExecutor::new(Arc::new(prompt_registry), Arc::new(agent_registry), runtime).await;
+        WorkflowExecutor::new_with_debug(Arc::new(prompt_registry), Arc::new(agent_registry), runtime, config.debug.clone()).await;
 
     // 加载 tool definitions（从 project_root 下搜索 *.json tool files）
     {
