@@ -3,6 +3,7 @@
 
 use axum::{
     extract::{Extension, Query},
+    http::HeaderMap,
     response::{
         sse::{Event, Sse},
         Html,
@@ -652,9 +653,20 @@ async fn list_local_workflows(
 }
 
 async fn handle_chat(
+    headers: HeaderMap,
     Extension(state): Extension<Arc<WebState>>,
     Json(req): Json<ChatRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>, Json<Value>> {
+    // Extract X-Execution-Token if present (forwarded from jug0)
+    let execution_token = headers
+        .get("X-Execution-Token")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    if execution_token.is_some() {
+        info!("🔐 [Web] Received X-Execution-Token from jug0, will use for subsequent jug0 calls");
+    }
+
     let mut agent_registry = AgentRegistry::new();
     let agent_pattern = state
         .project_root
@@ -715,7 +727,14 @@ async fn handle_chat(
         .to_path_buf();
 
     let config = JuglansConfig::load().map_err(|e| Json(json!({"error": e.to_string()})))?;
-    let runtime: Arc<dyn JuglansRuntime> = Arc::new(Jug0Client::new(&config));
+
+    // Create Jug0Client and inject execution token if present
+    let jug0_client = Jug0Client::new(&config);
+    if let Some(ref token) = execution_token {
+        jug0_client.set_execution_token(Some(token.clone()));
+        debug!("🔐 [Web] Injected execution token into Jug0Client");
+    }
+    let runtime: Arc<dyn JuglansRuntime> = Arc::new(jug0_client);
 
     let mut prompt_registry = PromptRegistry::new();
     let _ = prompt_registry.load_from_paths(&[state

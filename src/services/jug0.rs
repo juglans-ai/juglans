@@ -6,6 +6,7 @@ use futures::stream::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
 use uuid::Uuid;
@@ -68,6 +69,9 @@ pub struct Jug0Client {
     http: Client,
     base_url: String,
     api_key: String,
+    /// Execution token injected from jug0 when forwarding workflow requests.
+    /// When set, this takes priority over api_key for authentication.
+    execution_token: Arc<RwLock<Option<String>>>,
 }
 
 impl Jug0Client {
@@ -90,7 +94,38 @@ impl Jug0Client {
             http: http_client,
             base_url: base_url_str,
             api_key: api_key_str,
+            execution_token: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Set execution token (called by web_server when receiving forwarded requests from jug0).
+    /// When set, this token takes priority over api_key for authenticating with jug0.
+    pub fn set_execution_token(&self, token: Option<String>) {
+        if let Ok(mut guard) = self.execution_token.write() {
+            *guard = token;
+        }
+    }
+
+    /// Get the current execution token (if set).
+    pub fn get_execution_token(&self) -> Option<String> {
+        self.execution_token.read().ok().and_then(|guard| guard.clone())
+    }
+
+    /// Build a request with the appropriate authentication header.
+    /// Priority: execution_token > api_key
+    fn build_auth_request(&self, method: reqwest::Method, url: &str) -> reqwest::RequestBuilder {
+        let mut builder = self.http.request(method, url);
+
+        if let Some(token) = self.get_execution_token() {
+            // Use execution token (forwarded from jug0, represents original caller)
+            tracing::debug!("🔐 Using X-Execution-Token for jug0 request");
+            builder = builder.header("X-Execution-Token", token);
+        } else {
+            // Use api_key (local development or CLI mode)
+            builder = builder.header("X-API-KEY", &self.api_key);
+        }
+
+        builder
     }
 
     /// Check if slug is in owner/slug format (GitHub-style)
@@ -649,9 +684,7 @@ impl JuglansRuntime for Jug0Client {
     async fn fetch_prompt(&self, slug: &str) -> Result<String> {
         let url = self.build_resource_url(slug, "prompts");
         let res = self
-            .http
-            .get(&url)
-            .header("X-API-KEY", &self.api_key)
+            .build_auth_request(reqwest::Method::GET, &url)
             .send()
             .await?;
 
@@ -689,9 +722,7 @@ impl JuglansRuntime for Jug0Client {
         });
 
         let res = self
-            .http
-            .post(&url)
-            .header("X-API-KEY", &self.api_key)
+            .build_auth_request(reqwest::Method::POST, &url)
             .json(&payload)
             .send()
             .await?;
@@ -761,10 +792,9 @@ impl JuglansRuntime for Jug0Client {
             }
         }
 
+        // Use execution token if available (forwarded from jug0), otherwise fall back to api_key
         let res = self
-            .http
-            .post(&url)
-            .header("X-API-KEY", &self.api_key)
+            .build_auth_request(reqwest::Method::POST, &url)
             .json(&payload)
             .send()
             .await?;
