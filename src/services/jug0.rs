@@ -64,6 +64,35 @@ pub struct UserInfo {
     pub org_name: Option<String>,
 }
 
+/// Handle lookup response from jug0 (GET /api/handles/:handle)
+#[derive(Debug, Clone, Deserialize)]
+pub struct HandleLookup {
+    pub handle: String,
+    pub target_type: String,
+    pub target_id: Uuid,
+}
+
+/// Remote agent detail from jug0 (GET /api/agents/:id_or_slug)
+#[derive(Debug, Clone, Deserialize)]
+pub struct RemoteAgentDetail {
+    pub id: Uuid,
+    pub slug: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub default_model: Option<String>,
+    pub temperature: Option<f64>,
+    pub username: Option<String>,
+    pub system_prompt: Option<RemotePromptDetail>,
+}
+
+/// Remote prompt detail (embedded in agent response)
+#[derive(Debug, Clone, Deserialize)]
+pub struct RemotePromptDetail {
+    pub id: Uuid,
+    pub slug: String,
+    pub content: String,
+}
+
 #[derive(Clone)]
 pub struct Jug0Client {
     http: Client,
@@ -144,6 +173,50 @@ impl Jug0Client {
             // Legacy: /api/{resource_type}/:slug
             format!("{}/api/{}/{}", self.base_url, resource_type, slug)
         }
+    }
+
+    /// Get agent details by handle or slug
+    /// @handle → resolve via handles API → GET /api/agents/:uuid
+    /// slug   → GET /api/agents/:slug directly
+    pub async fn get_agent(&self, handle_or_slug: &str) -> Result<RemoteAgentDetail> {
+        // @handle: resolve through handles table first
+        let agent_identifier = if let Some(handle) = handle_or_slug.strip_prefix('@') {
+            let url = format!("{}/api/handles/{}", self.base_url, handle);
+            let res = self
+                .build_auth_request(reqwest::Method::GET, &url)
+                .send()
+                .await?;
+
+            if !res.status().is_success() {
+                return Err(anyhow!("Handle @{} not found", handle));
+            }
+
+            let lookup: HandleLookup = res.json().await?;
+            if lookup.target_type != "agent" {
+                return Err(anyhow!("@{} is not an agent (type: {})", handle, lookup.target_type));
+            }
+            lookup.target_id.to_string()
+        } else {
+            handle_or_slug.to_string()
+        };
+
+        let url = format!("{}/api/agents/{}", self.base_url, agent_identifier);
+        let res = self
+            .build_auth_request(reqwest::Method::GET, &url)
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            let status = res.status();
+            let error_text = res.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(anyhow!(
+                "Failed to get agent '{}': {} - {}",
+                handle_or_slug, status, error_text
+            ));
+        }
+
+        let agent: RemoteAgentDetail = res.json().await?;
+        Ok(agent)
     }
 
     pub async fn get_prompt_id(&self, slug: &str) -> Result<Uuid> {
@@ -273,59 +346,28 @@ impl Jug0Client {
         };
 
         // Resolve workflow_id if workflow reference is provided
+        // Supports both file path format ("../workflows/trading.jgflow") and slug format ("trading")
         let workflow_id = if let Some(workflow_ref) = &agent.workflow {
-            // Detect format: file path vs slug vs user/slug
-            let is_file_path = workflow_ref.ends_with(".jgflow")
-                || workflow_ref.starts_with("./")
-                || workflow_ref.starts_with("../");
-
-            if is_file_path {
-                // Legacy file path format - warn and try to extract slug
-                tracing::warn!(
-                    "⚠️  Agent '{}': workflow field uses deprecated file path format '{}'",
-                    agent.slug,
-                    workflow_ref
-                );
-
-                let extracted_slug = std::path::Path::new(workflow_ref)
+            let slug = if workflow_ref.ends_with(".jgflow")
+                || workflow_ref.contains('/')
+                || workflow_ref.contains('\\')
+            {
+                std::path::Path::new(workflow_ref)
                     .file_stem()
                     .and_then(|s| s.to_str())
-                    .unwrap_or("");
-
-                tracing::warn!(
-                    "   Please update to use workflow slug: workflow: \"{}\"",
-                    extracted_slug
-                );
-
-                if !extracted_slug.is_empty() {
-                    match self.get_workflow_id(extracted_slug).await {
-                        Ok(id) => Some(id),
-                        Err(_) => {
-                            tracing::warn!(
-                                "   Workflow '{}' not found. Agent will be created without workflow binding.",
-                                extracted_slug
-                            );
-                            None
-                        }
-                    }
-                } else {
-                    None
-                }
+                    .unwrap_or(workflow_ref)
             } else {
-                // Modern format: "slug" or "user/slug"
-                match self.get_workflow_id(workflow_ref).await {
-                    Ok(id) => Some(id),
-                    Err(_) => {
-                        tracing::warn!(
-                            "⚠️  Agent '{}': Workflow '{}' not found on server.",
-                            agent.slug,
-                            workflow_ref
-                        );
-                        tracing::warn!(
-                            "   Make sure the workflow is applied first."
-                        );
-                        None
-                    }
+                workflow_ref.as_str()
+            };
+
+            match self.get_workflow_id(slug).await {
+                Ok(id) => Some(id),
+                Err(_) => {
+                    tracing::warn!(
+                        "Agent '{}': workflow '{}' not found on server, skipping binding.",
+                        agent.slug, slug
+                    );
+                    None
                 }
             }
         } else {
@@ -348,6 +390,11 @@ impl Jug0Client {
             "temperature": agent.temperature,
             "skills": agent.skills,
         });
+
+        // Add username if present (auto-registers @handle in jug0)
+        if let Some(ref username) = agent.username {
+            payload["username"] = json!(username);
+        }
 
         // Add workflow_id if present
         let workflow_suffix = if let Some(wf_id) = workflow_id {
@@ -375,10 +422,21 @@ impl Jug0Client {
                 .send()
                 .await?;
 
-            // If PATCH fails with 404, the agent exists but doesn't belong to us
-            // Fall through to create a new one
+            // If PATCH by ID fails with 404, GET may have returned a different org's agent
+            // Retry PATCH by slug (which will match our own agent in the same org)
             if res.status() == 404 {
-                // Agent exists but we don't own it, create our own
+                let url_retry = format!("{}/api/agents/{}", self.base_url, agent.slug);
+                let res_retry = self.http
+                    .patch(&url_retry)
+                    .header("X-API-KEY", &self.api_key)
+                    .json(&payload)
+                    .send()
+                    .await?;
+
+                if res_retry.status().is_success() {
+                    return Ok(format!("Successfully synchronized agent: {}{}", agent.slug, workflow_suffix));
+                }
+                // Still failed, fall through to create
             } else if !res.status().is_success() {
                 let status = res.status();
                 let error_text = res.text().await.unwrap_or_else(|_| "Unknown error".to_string());
@@ -738,6 +796,89 @@ impl JuglansRuntime for Jug0Client {
         Ok(results)
     }
 
+    async fn fetch_chat_history(&self, chat_id: &str, include_all: bool) -> Result<Vec<Value>> {
+        let mut url = format!("{}/api/chats/{}/history", self.base_url, chat_id);
+        if include_all {
+            url.push_str("?include_all=true");
+        }
+
+        let res = self
+            .build_auth_request(reqwest::Method::GET, &url)
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            let status = res.status();
+            let txt = res.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "Jug0 Network Error (Fetch Chat History '{}'): {} - {}",
+                chat_id,
+                status,
+                txt
+            ));
+        }
+
+        #[derive(Deserialize)]
+        struct HistoryResponse {
+            messages: Vec<Value>,
+        }
+
+        let resp: HistoryResponse = res.json().await?;
+        Ok(resp.messages)
+    }
+
+    async fn create_message(
+        &self,
+        chat_id: &str,
+        role: &str,
+        content: &str,
+        state: &str,
+    ) -> Result<()> {
+        let url = format!("{}/api/chats/{}/messages", self.base_url, chat_id);
+        let payload = json!({
+            "role": role,
+            "message_type": "chat",
+            "state": state,
+            "parts": [{ "type": "text", "content": content }]
+        });
+
+        let res = self
+            .build_auth_request(reqwest::Method::POST, &url)
+            .json(&payload)
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            let status = res.status();
+            tracing::warn!("Failed to persist reply message: {}", status);
+        }
+
+        Ok(())
+    }
+
+    async fn update_message_state(
+        &self,
+        chat_id: &str,
+        message_id: i32,
+        state: &str,
+    ) -> Result<()> {
+        let url = format!("{}/api/chats/{}/messages/{}", self.base_url, chat_id, message_id);
+        let payload = json!({ "state": state });
+
+        let res = self
+            .build_auth_request(reqwest::Method::PATCH, &url)
+            .json(&payload)
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            let status = res.status();
+            tracing::warn!("Failed to update user message state: {}", status);
+        }
+
+        Ok(())
+    }
+
     async fn chat(
         &self,
         mut agent_config: Value,
@@ -745,6 +886,8 @@ impl JuglansRuntime for Jug0Client {
         tools_def: Option<Vec<Value>>,
         chat_id: Option<&str>,
         token_sender: Option<UnboundedSender<String>>,
+        state: Option<&str>,
+        history: Option<&str>,
     ) -> Result<ChatOutput> {
         // 验证 agent_config 包含必须字段
         if let Some(agent_obj) = agent_config.as_object() {
@@ -789,6 +932,16 @@ impl JuglansRuntime for Jug0Client {
         if let Some(id) = chat_id {
             if !id.is_empty() {
                 payload["chat_id"] = json!(id);
+            }
+        }
+
+        if let Some(s) = state {
+            payload["state"] = json!(s);
+        }
+        if let Some(h) = history {
+            // 尝试解析为 JSON（false 或 数组），否则忽略
+            if let Ok(parsed) = serde_json::from_str::<Value>(h) {
+                payload["history"] = parsed;
             }
         }
 

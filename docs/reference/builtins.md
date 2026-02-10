@@ -282,11 +282,359 @@ Juglans 提供多个内置工具，用于工作流中的各种操作。
 
 ---
 
+### sh()
+
+> ⚠️ **已弃用** — `sh()` 现在是 `bash()` 的别名，保持向后兼容。推荐使用 `bash()` 替代。参见[开发者工具 > bash()](#bash)。
+
+**旧语法仍然有效：**
+
+```yaml
+[files]: sh(cmd="ls -la")    # 等同于 bash(command="ls -la")
+```
+
+---
+
+## 开发者工具
+
+Claude Code 风格的代码操作工具集，注册为 `"devtools"` slug。可在 .jgflow 中直接调用，也可通过 .jgagent 的 `tools: ["devtools"]` 被 LLM 自动使用。
+
+```yaml
+# Agent 中启用
+slug: "code-agent"
+tools: ["devtools"]
+
+# 也可与其他工具集组合
+tools: ["devtools", "web-tools"]
+```
+
+---
+
+### read_file()
+
+读取文件内容，返回带行号的格式。
+
+**参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `file_path` | string | 是 | 文件路径（绝对或相对） |
+| `offset` | integer | 否 | 起始行号，1-based（默认 1） |
+| `limit` | integer | 否 | 最大返回行数（默认 2000） |
+
+**示例：**
+
+```yaml
+# 读取整个文件
+[read]: read_file(file_path="./src/main.rs")
+
+# 读取指定范围
+[read]: read_file(file_path="./src/main.rs", offset=50, limit=100)
+```
+
+**输出：**
+
+```json
+{
+  "content": "     1\tuse std::io;\n     2\tfn main() {...",
+  "total_lines": 150,
+  "lines_returned": 100,
+  "offset": 50
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `content` | string | 带行号的文件内容（cat -n 格式，单行最长 2000 字符） |
+| `total_lines` | number | 文件总行数 |
+| `lines_returned` | number | 实际返回行数 |
+| `offset` | number | 起始行号 |
+
+---
+
+### write_file()
+
+写入文件（覆盖），自动创建父目录。
+
+**参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `file_path` | string | 是 | 文件路径 |
+| `content` | string | 是 | 文件内容 |
+
+**示例：**
+
+```yaml
+[write]: write_file(file_path="./output/result.json", content=$ctx.result)
+```
+
+**输出：**
+
+```json
+{
+  "status": "ok",
+  "file_path": "./output/result.json",
+  "lines_written": 25,
+  "bytes_written": 1024
+}
+```
+
+---
+
+### edit_file()
+
+精确字符串替换。`old_string` 必须在文件中唯一，否则需要 `replace_all=true`。
+
+**参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `file_path` | string | 是 | 文件路径 |
+| `old_string` | string | 是 | 要替换的文本（必须唯一） |
+| `new_string` | string | 是 | 替换后的文本 |
+| `replace_all` | boolean | 否 | 替换所有匹配（默认 false） |
+
+**示例：**
+
+```yaml
+# 精确替换
+[edit]: edit_file(
+  file_path="./src/config.rs",
+  old_string="version = \"1.0\"",
+  new_string="version = \"2.0\""
+)
+
+# 全局替换
+[rename]: edit_file(
+  file_path="./src/main.rs",
+  old_string="old_name",
+  new_string="new_name",
+  replace_all="true"
+)
+```
+
+**输出：**
+
+```json
+{
+  "status": "ok",
+  "file_path": "./src/config.rs",
+  "replacements": 1
+}
+```
+
+**错误情况：**
+- `old_string` 未找到 → 报错
+- `old_string` 出现多次且 `replace_all=false` → 报错（要求提供更多上下文使匹配唯一）
+
+---
+
+### glob()
+
+文件模式匹配，返回匹配路径列表。
+
+**参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `pattern` | string | 是 | Glob 模式（如 `**/*.rs`, `src/**/*.json`） |
+| `path` | string | 否 | 搜索目录（默认当前目录） |
+
+**示例：**
+
+```yaml
+[find]: glob(pattern="**/*.rs")
+[find_src]: glob(pattern="*.ts", path="./src")
+```
+
+**输出：**
+
+```json
+{
+  "matches": ["./src/main.rs", "./src/lib.rs"],
+  "count": 2,
+  "pattern": "./**/*.rs"
+}
+```
+
+---
+
+### grep()
+
+正则搜索文件内容。递归搜索目录中的文件，返回匹配行和上下文。
+
+**参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `pattern` | string | 是 | 正则表达式 |
+| `path` | string | 否 | 搜索路径（文件或目录，默认当前目录） |
+| `include` | string | 否 | 文件过滤 glob（如 `*.rs`, `*.{ts,tsx}`） |
+| `context_lines` | integer | 否 | 匹配行前后的上下文行数（默认 0） |
+| `max_matches` | integer | 否 | 最大匹配数（默认 50） |
+
+**示例：**
+
+```yaml
+# 搜索 TODO
+[todos]: grep(pattern="TODO|FIXME", path="./src")
+
+# 搜索特定文件类型
+[search]: grep(pattern="fn main", include="*.rs", context_lines=2)
+```
+
+**输出：**
+
+```json
+{
+  "matches": [
+    {
+      "file": "./src/main.rs",
+      "line": 10,
+      "match": "fn main() {",
+      "context": "     9\tuse std::io;\n    10\tfn main() {\n    11\t    println!(\"hello\");"
+    }
+  ],
+  "total_matches": 1,
+  "files_searched": 15,
+  "truncated": false
+}
+```
+
+---
+
+### bash()
+
+执行 Shell 命令，带超时控制和输出截断。替代旧 `sh()` 工具。
+
+**参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `command` | string | 是 | 要执行的命令（也接受 `cmd` 参数，向后兼容） |
+| `timeout` | integer | 否 | 超时毫秒（默认 120000，最大 600000） |
+| `description` | string | 否 | 命令描述（用于日志） |
+
+**示例：**
+
+```yaml
+# 执行命令
+[build]: bash(command="cargo build --release")
+
+# 带超时
+[test]: bash(command="cargo test", timeout=300000)
+
+# 向后兼容旧语法
+[files]: bash(cmd="ls -la")
+```
+
+**输出：**
+
+```json
+{
+  "stdout": "命令标准输出...",
+  "stderr": "错误输出（如有）...",
+  "exit_code": 0,
+  "ok": true
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `stdout` | string | 标准输出（超过 30000 字符会截断） |
+| `stderr` | string | 标准错误输出 |
+| `exit_code` | number | 退出码（0 表示成功） |
+| `ok` | boolean | 命令是否成功执行 |
+
+**安全提示：**
+
+避免直接执行用户输入的命令，防止命令注入攻击：
+
+```yaml
+# 危险：不要这样做
+[bad]: bash(command=$input.user_command)
+
+# 安全：使用固定命令，参数验证
+[safe]: bash(command="ls " + sanitize($input.directory))
+```
+
+> **注意**：`sh()` 是 `bash()` 的别名，`sh(cmd="ls")` 等同于 `bash(command="ls")`。
+
+---
+
 ## 网络工具
+
+### fetch()
+
+HTTP 请求工具（推荐使用）。
+
+**参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `url` | string | 是 | 目标 URL |
+| `method` | string | 否 | HTTP 方法 (默认 "GET") |
+| `body` | object/string | 否 | 请求体（自动 JSON 序列化） |
+| `headers` | object | 否 | 自定义请求头 |
+
+**示例：**
+
+```yaml
+# GET 请求
+[get]: fetch(url="https://api.example.com/data")
+
+# POST 请求
+[post]: fetch(
+  url="https://api.example.com/submit",
+  method="POST",
+  body=$input.data
+)
+
+# 带请求头
+[auth_get]: fetch(
+  url="https://api.example.com/protected",
+  headers={"Authorization": "Bearer " + $ctx.token}
+)
+
+# PUT 请求
+[update]: fetch(
+  url="https://api.example.com/items/1",
+  method="PUT",
+  body={"name": "updated", "value": $input.value}
+)
+```
+
+**输出：**
+
+```json
+{
+  "status": 200,
+  "ok": true,
+  "data": { ... }
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `status` | number | HTTP 状态码 |
+| `ok` | boolean | 状态码在 200-299 范围内为 true |
+| `data` | any | 响应内容（自动解析 JSON，否则返回字符串） |
+
+**错误处理：**
+
+```yaml
+[api]: fetch(url=$input.api_url)
+[api] -> [process]
+[api] on error -> [handle_error]
+
+[handle_error]: notify(message="API 请求失败: " + $error.message)
+```
+
+---
 
 ### fetch_url()
 
-获取 URL 内容。
+获取 URL 内容（兼容旧版，推荐使用 `fetch()`）。
 
 **参数：**
 

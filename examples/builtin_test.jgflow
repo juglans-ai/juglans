@@ -1,0 +1,16 @@
+name: "Builtin Functions Test"
+version: "0.1.0"
+
+entry: [shell_test]
+exit: [done]
+
+# Test sh() function
+[shell_test]: sh(cmd="echo hello world")
+
+# Test fetch() function (using a public API)
+[fetch_test]: fetch(url="https://httpbin.org/get")
+
+# Done
+[done]: notify(message="All builtin tests completed!")
+
+[shell_test] -> [fetch_test] -> [done]

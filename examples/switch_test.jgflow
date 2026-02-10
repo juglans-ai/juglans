@@ -1,0 +1,20 @@
+name: "Switch Routing Test"
+version: "0.1.0"
+
+entry: [classify]
+exit: [handle_question, handle_task, handle_other]
+
+# Classifier node that sets the intent
+[classify]: set_context(path="intent", value="question")
+
+# Handler nodes
+[handle_question]: notify(message="Handling a question!")
+[handle_task]: notify(message="Handling a task!")
+[handle_other]: notify(message="Handling something else!")
+
+# Switch routing based on intent
+[classify] -> switch $intent {
+    "question": [handle_question]
+    "task": [handle_task]
+    default: [handle_other]
+}

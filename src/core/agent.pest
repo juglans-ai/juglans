@@ -35,10 +35,12 @@ key_model = { "model" ~ ":" ~ string }
 key_temp = { "temperature" ~ ":" ~ number }
 key_mcp = { "mcp" ~ ":" ~ list }
 key_skills = { "skills" ~ ":" ~ list }
-// 【新增】关联工作流文件
+// 关联工作流文件
 key_workflow = { "workflow" ~ ":" ~ string }
-// 【新增】默认 tools 配置（支持 JSON 数组、字符串引用、或字符串数组引用）
+// 默认 tools 配置（支持 JSON 数组、字符串引用、或字符串数组引用）
 key_tools = { "tools" ~ ":" ~ (json_array | list | string) }
+// @username for this agent (auto-registers handle in jug0)
+key_username = { "username" ~ ":" ~ string }
 
 // System Prompt can be a string, p(slug="..."), or multiline block scalar
 p_func = { "p" ~ "(" ~ "slug" ~ "=" ~ string ~ ")" }
@@ -47,6 +49,6 @@ key_system = { "system_prompt" ~ ":" ~ (multiline_string | string | p_func) }
 // Agent Definition
 agent_def = {
     SOI ~
-    (key_slug | key_name | key_desc | key_model | key_temp | key_mcp | key_skills | key_system | key_workflow | key_tools)+
+    (key_slug | key_name | key_desc | key_model | key_temp | key_mcp | key_skills | key_system | key_workflow | key_tools | key_username)+
     ~ EOI
 }

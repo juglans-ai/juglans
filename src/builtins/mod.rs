@@ -7,13 +7,22 @@ use std::sync::{Arc, RwLock};
 use tracing::debug;
 
 use crate::core::context::WorkflowContext;
+use crate::core::tool_loader::ToolResource;
 use crate::services::agent_loader::AgentRegistry;
-use crate::services::interface::JuglansRuntime; // 【修改】引用 Trait
+use crate::services::interface::JuglansRuntime;
 use crate::services::prompt_loader::PromptRegistry;
+use crate::services::tool_registry::ToolRegistry;
 
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
+
+    /// 返回 OpenAI function calling 格式的 tool schema
+    /// 实现此方法的工具可被 LLM 自动发现和调用
+    fn schema(&self) -> Option<Value> {
+        None
+    }
+
     async fn execute(
         &self,
         params: &HashMap<String, String>,
@@ -44,11 +53,25 @@ impl BuiltinRegistry {
         }
 
         reg!(network::FetchUrl);
+        reg!(network::Fetch);
         reg!(system::Timer);
         reg!(system::Notify);
+        reg!(system::Reply::new(runtime.clone()));
         reg!(system::SetContext);
+        reg!(system::FeishuWebhook);
+
+        // Devtools (Claude Code 风格)
+        reg!(devtools::ReadFile);
+        reg!(devtools::WriteFile);
+        reg!(devtools::EditFile);
+        reg!(devtools::GlobSearch);
+        reg!(devtools::GrepSearch);
+        reg!(devtools::Bash);
+        // "sh" 别名：向后兼容旧 sh(cmd=...) 语法
+        tool_map.insert("sh".to_string(), Arc::new(Box::new(devtools::Bash)));
         reg!(ai::Prompt::new(prompts.clone(), runtime.clone()));
         reg!(ai::MemorySearch::new(runtime.clone()));
+        reg!(ai::History::new(runtime.clone()));
 
         let registry_arc = Arc::new(Self {
             tools: RwLock::new(tool_map),
@@ -70,6 +93,27 @@ impl BuiltinRegistry {
 
     pub fn get(&self, name: &str) -> Option<Arc<Box<dyn Tool>>> {
         self.tools.read().ok()?.get(name).cloned()
+    }
+
+    /// 收集所有实现了 schema() 的 builtin 工具的 OpenAI 格式 schema
+    pub fn list_schemas(&self) -> Vec<Value> {
+        let guard = self.tools.read().unwrap();
+        guard.values().filter_map(|tool| tool.schema()).collect()
+    }
+
+    /// 将内置 devtools 的 schema 注册到 ToolRegistry 中
+    /// 使 devtools 可通过 "devtools" slug 被 resolve_tools() 发现
+    pub fn register_devtools_to_registry(&self, tool_registry: &mut ToolRegistry) {
+        let schemas = self.list_schemas();
+        if !schemas.is_empty() {
+            let resource = ToolResource {
+                slug: "devtools".to_string(),
+                name: "Built-in Developer Tools".to_string(),
+                description: Some("Read, Write, Edit, Glob, Grep, Bash".to_string()),
+                tools: schemas,
+            };
+            tool_registry.register(resource);
+        }
     }
 
     /// 注入 WorkflowExecutor 引用（避免循环依赖）
@@ -158,5 +202,6 @@ impl BuiltinRegistry {
 }
 
 pub mod ai;
+pub mod devtools;
 pub mod network;
 pub mod system;

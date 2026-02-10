@@ -151,21 +151,19 @@ impl Tool for Chat {
             .get("message")
             .ok_or_else(|| anyhow!("Chat Tool Error: Mandatory parameter 'message' is missing."))?;
 
-        let is_stateless_mode = params
-            .get("stateless")
-            .map(|s| s.to_lowercase() == "true")
-            .unwrap_or(false);
-
-        // 消息状态：控制 AI 上下文 + SSE 输出
-        // context_visible (默认): 写 context + SSE 输出
-        // context_hidden: 写 context, 不 SSE
-        // display_only: SSE 输出, 不写 context
-        // silent: 两者都不
-        let message_state = params.get("state").cloned().unwrap_or_else(|| {
-            if is_stateless_mode { "silent".to_string() } else { "context_visible".to_string() }
-        });
-        let should_stream = message_state == "context_visible" || message_state == "display_only";
-        let should_persist = message_state == "context_visible" || message_state == "context_hidden";
+        // 消息状态：支持组合语法 input:output
+        // 单值: state="silent" → input=silent, output=silent
+        // 组合: state="context_hidden:context_visible" → input=hidden, output=visible
+        let state_raw = params.get("state").cloned()
+            .unwrap_or_else(|| "context_visible".to_string());
+        let (input_state, output_state) = match state_raw.split_once(':') {
+            Some((i, o)) => (i.to_string(), o.to_string()),
+            None => (state_raw.clone(), state_raw.clone()),
+        };
+        // should_stream 基于 output_state（AI 回复是否对用户可见）
+        let should_stream = output_state == "context_visible" || output_state == "display_only";
+        // should_persist 基于 input_state（是否继承 chat_id）
+        let should_persist = input_state == "context_visible" || input_state == "context_hidden";
         let system_prompt_manual_override = params.get("system_prompt").cloned();
         let requested_format_mode = params
             .get("format")
@@ -207,16 +205,43 @@ impl Tool for Chat {
                     return Err(anyhow!("BuiltinRegistry not set for Chat builtin"));
                 }
             } else if let Ok(slugs) = serde_json::from_str::<Vec<String>>(schema_raw) {
-                // 多个引用：["web-tools", "data-tools"]
+                // 多个引用：["devtools", "web-tools", "data-tools"]
                 debug!("Resolving tool references: {:?}", slugs);
 
                 if let Some(builtin_reg_weak) = &self.builtin_registry {
                     if let Some(builtin_reg) = builtin_reg_weak.upgrade() {
-                        if let Some(executor) = builtin_reg.get_executor() {
+                        // 尝试通过 ToolRegistry 解析
+                        let resolve_result = if let Some(executor) = builtin_reg.get_executor() {
                             let tool_registry = executor.get_tool_registry();
-                            tool_registry.resolve_tools(&slugs)?
+                            tool_registry.resolve_tools(&slugs).ok()
                         } else {
-                            return Err(anyhow!("Executor not available for tool resolution"));
+                            None
+                        };
+
+                        if let Some(tools) = resolve_result {
+                            tools
+                        } else {
+                            // Fallback: 逐个解析 slug，支持 "devtools" 从 builtin schemas 获取
+                            let mut all_tools = Vec::new();
+                            let tool_registry_opt = builtin_reg.get_executor()
+                                .map(|e| e.get_tool_registry().clone());
+
+                            for slug in &slugs {
+                                // 先尝试 ToolRegistry
+                                if let Some(ref registry) = tool_registry_opt {
+                                    if let Some(resource) = registry.get(slug) {
+                                        all_tools.extend(resource.tools.clone());
+                                        continue;
+                                    }
+                                }
+                                // Fallback: "devtools" → builtin schemas
+                                if slug == "devtools" {
+                                    all_tools.extend(builtin_reg.list_schemas());
+                                } else {
+                                    return Err(anyhow!("Tool resource '{}' not found", slug));
+                                }
+                            }
+                            all_tools
                         }
                     } else {
                         return Err(anyhow!("BuiltinRegistry not available"));
@@ -247,6 +272,8 @@ impl Tool for Chat {
 
         info!("│   Message content: {}", user_message_body);
 
+        let history_param = params.get("history").map(|s| s.as_str());
+
         let mut chat_messages_buffer = vec![json!({
             "type": "text",
             "role": "user",
@@ -261,7 +288,7 @@ impl Tool for Chat {
                 debug!("Using explicit chat_id from parameters: {}", explicit_id);
                 Some(explicit_id.clone())
             }
-        } else if !is_stateless_mode {
+        } else if should_persist {
             if let Ok(Some(ctx_val)) = context.resolve_path("reply.chat_id") {
                 if let Some(ctx_str) = ctx_val.as_str() {
                     debug!("Inheriting chat_id from context: {}", ctx_str);
@@ -273,7 +300,7 @@ impl Tool for Chat {
                 None
             }
         } else {
-            debug!("Stateless mode active: Starting fresh session.");
+            debug!("Non-persist state ({}): Starting fresh session.", input_state);
             None
         };
 
@@ -398,9 +425,17 @@ impl Tool for Chat {
         } else {
             debug!("│   Using remote agent: {}", agent_slug_str);
             let mut base_config = json!({ "slug": agent_slug_str });
-            if let Some(override_val) = system_prompt_manual_override {
-                if let Some(map) = base_config.as_object_mut() {
+            if let Some(map) = base_config.as_object_mut() {
+                if let Some(override_val) = system_prompt_manual_override {
                     map.insert("system_prompt".to_string(), json!(override_val));
+                }
+                if let Some(model) = params.get("model") {
+                    map.insert("model".to_string(), json!(model));
+                }
+                if let Some(temp) = params.get("temperature") {
+                    if let Ok(t) = temp.parse::<f64>() {
+                        map.insert("temperature".to_string(), json!(t));
+                    }
                 }
             }
             base_config
@@ -421,6 +456,8 @@ impl Tool for Chat {
                     custom_tools_json_schema.clone(),
                     current_loop_session_id.as_deref(),
                     effective_token_sender.clone(),
+                    Some(&state_raw),
+                    history_param,
                 )
                 .await?;
 
@@ -637,6 +674,48 @@ impl Tool for MemorySearch {
         let search_results = self.runtime.search_memories(query_text, limit_val).await?;
 
         Ok(Some(json!(search_results)))
+    }
+}
+
+pub struct History {
+    runtime: Arc<dyn JuglansRuntime>,
+}
+
+impl History {
+    pub fn new(runtime: Arc<dyn JuglansRuntime>) -> Self {
+        Self { runtime }
+    }
+}
+
+#[async_trait]
+impl Tool for History {
+    fn name(&self) -> &str {
+        "history"
+    }
+
+    async fn execute(
+        &self,
+        params: &HashMap<String, String>,
+        _context: &WorkflowContext,
+    ) -> Result<Option<Value>> {
+        let chat_id = params
+            .get("chat_id")
+            .ok_or_else(|| anyhow!("history() requires 'chat_id' parameter"))?;
+
+        let include_all = params
+            .get("include_all")
+            .map(|v| v.to_lowercase() == "true")
+            .unwrap_or(false);
+
+        info!("📚 Fetching chat history for: {} (include_all: {})", chat_id, include_all);
+
+        let messages = self.runtime
+            .fetch_chat_history(chat_id, include_all)
+            .await?;
+
+        info!("📚 Retrieved {} messages", messages.len());
+
+        Ok(Some(json!(messages)))
     }
 }
 

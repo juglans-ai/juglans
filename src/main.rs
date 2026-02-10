@@ -1,8 +1,10 @@
 // src/main.rs
 #![cfg(not(target_arch = "wasm32"))]
 
+mod adapters;
 mod builtins;
 mod core;
+mod runtime;
 mod services;
 mod templates;
 mod ui;
@@ -16,7 +18,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use core::agent_parser::AgentParser;
 use ui::{render::render_markdown, render::show_welcome, render::show_shortcuts, MultilineInput};
@@ -147,6 +149,17 @@ enum Commands {
         #[arg(long)]
         check_connection: bool,
     },
+    /// Start bot adapter (telegram, feishu)
+    Bot {
+        /// Platform: telegram, feishu
+        platform: String,
+        /// Agent slug to use (overrides config default)
+        #[arg(long)]
+        agent: Option<String>,
+        /// Port for webhook-based platforms (feishu)
+        #[arg(long)]
+        port: Option<u16>,
+    },
 }
 
 /// Resolve input data from --input or --input-file
@@ -241,6 +254,7 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
 
             executor_instance_obj.load_mcp_tools(&local_config).await;
             executor_instance_obj.load_tools(&workflow_definition_obj).await;
+            executor_instance_obj.init_python_runtime(&workflow_definition_obj)?;
 
             let shared_executor_engine = Arc::new(executor_instance_obj);
 
@@ -326,6 +340,9 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
             // Load tools from workflow if present
             if let Some(ref wf_arc) = active_workflow_ptr {
                 executor_temp.load_tools(wf_arc).await;
+                if let Err(e) = executor_temp.init_python_runtime(wf_arc) {
+                    warn!("Failed to initialize Python runtime: {}", e);
+                }
             }
 
             let primary_executor_ptr = Arc::new(executor_temp);
@@ -462,6 +479,143 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
         }
 
         _ => return Err(anyhow!("Unsupported JWL file type: .{}", file_ext_name)),
+    }
+
+    Ok(())
+}
+
+/// Handle remote agent via @handle (e.g., `juglans @jarvis`)
+async fn handle_remote_agent(cli: &Cli, handle: &str) -> Result<()> {
+    use crate::services::jug0::RemoteAgentDetail;
+
+    info!("🌐 Connecting to remote agent: {}", handle);
+
+    // Load config
+    let config = JuglansConfig::load()?;
+    let jug0_client = Jug0Client::new(&config);
+
+    // Fetch agent from jug0
+    let agent_detail = jug0_client.get_agent(handle).await?;
+
+    let agent_name = agent_detail.name.clone().unwrap_or_else(|| handle.to_string());
+    let agent_slug = agent_detail.slug.clone();
+
+    // Show welcome
+    show_welcome(&agent_name, &agent_slug, false);
+
+    // Create runtime
+    let runtime: Arc<dyn JuglansRuntime> = Arc::new(jug0_client);
+
+    // Empty registries (remote agent, no local files)
+    let prompt_registry = Arc::new(PromptRegistry::new());
+    let agent_registry = Arc::new(AgentRegistry::new());
+
+    let mut executor = WorkflowExecutor::new_with_debug(
+        prompt_registry,
+        agent_registry,
+        runtime,
+        config.debug.clone(),
+    )
+    .await;
+
+    executor.load_mcp_tools(&config).await;
+
+    let executor_ptr = Arc::new(executor);
+    executor_ptr
+        .get_registry()
+        .set_executor(Arc::downgrade(&executor_ptr));
+
+    let context = WorkflowContext::new();
+    let resolved_cli_input = resolve_input_data(cli)?;
+
+    let mut input_widget = MultilineInput::new();
+
+    // Build system prompt from remote agent
+    let system_prompt = agent_detail
+        .system_prompt
+        .as_ref()
+        .map(|p| p.content.clone());
+
+    loop {
+        let user_input = if let Some(ref cmd_input) = resolved_cli_input {
+            cmd_input.clone()
+        } else {
+            let chat_id = context
+                .resolve_path("reply.chat_id")
+                .ok()
+                .flatten()
+                .and_then(|v| v.as_str().map(|s| s.to_string()));
+
+            match input_widget.prompt(&agent_name, chat_id.as_deref())? {
+                Some(input) => {
+                    let trimmed = input.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    if trimmed == "help" {
+                        show_shortcuts();
+                        continue;
+                    }
+                    if trimmed == "exit" || trimmed == "quit" {
+                        println!("\nGoodbye!");
+                        break;
+                    }
+                    trimmed.to_string()
+                }
+                None => {
+                    println!("\nGoodbye!");
+                    break;
+                }
+            }
+        };
+
+        if user_input.is_empty() {
+            continue;
+        }
+
+        // Build chat parameters
+        let mut params = HashMap::new();
+        params.insert("agent".to_string(), agent_slug.clone());
+        params.insert("message".to_string(), user_input);
+
+        if let Some(ref model) = agent_detail.default_model {
+            params.insert("model".to_string(), model.clone());
+        }
+        if let Some(ref sp) = system_prompt {
+            params.insert("system_prompt".to_string(), sp.clone());
+        }
+        if let Some(temp) = agent_detail.temperature {
+            params.insert("temperature".to_string(), temp.to_string());
+        }
+
+        // Execute chat
+        context.set("reply.output".to_string(), json!(""))?;
+        context.set("reply.status".to_string(), json!("processing"))?;
+
+        match executor_ptr
+            .execute_tool_internal("chat", &params, &context)
+            .await
+        {
+            Ok(Some(result)) => {
+                if let Some(text) = result.as_str() {
+                    render_markdown(text);
+                    println!();
+                } else if let Some(obj) = result.as_object() {
+                    if let Some(text) = obj.get("response").and_then(|v| v.as_str()) {
+                        render_markdown(text);
+                        println!();
+                    }
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                error!("❌ Chat error: {}", e);
+            }
+        }
+
+        if resolved_cli_input.is_some() {
+            break;
+        }
     }
 
     Ok(())
@@ -1311,6 +1465,45 @@ async fn apply_single_file(
     }
 }
 
+async fn handle_bot(platform: &str, agent_override: Option<String>, port: Option<u16>) -> Result<()> {
+    let config = JuglansConfig::load()?;
+    let current_dir = env::current_dir()?;
+    let project_root = find_project_root(&current_dir)?;
+
+    match platform {
+        "telegram" => {
+            let agent_slug = agent_override
+                .or_else(|| {
+                    config.bot.as_ref()
+                        .and_then(|b| b.telegram.as_ref())
+                        .map(|t| t.agent.clone())
+                })
+                .unwrap_or_else(|| "default".to_string());
+            adapters::telegram::start(config, project_root, agent_slug).await?;
+        }
+        "feishu" | "lark" => {
+            let agent_slug = agent_override
+                .or_else(|| {
+                    config.bot.as_ref()
+                        .and_then(|b| b.feishu.as_ref())
+                        .map(|f| f.agent.clone())
+                })
+                .unwrap_or_else(|| "default".to_string());
+            let feishu_port = port.unwrap_or_else(|| {
+                config.bot.as_ref()
+                    .and_then(|b| b.feishu.as_ref())
+                    .map(|f| f.port)
+                    .unwrap_or(9000)
+            });
+            adapters::feishu::start(config, project_root, agent_slug, feishu_port).await?;
+        }
+        _ => {
+            return Err(anyhow!("Unknown platform '{}'. Supported: telegram, feishu", platform));
+        }
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
@@ -1366,9 +1559,18 @@ async fn main() -> Result<()> {
             Commands::Whoami { verbose, check_connection } => {
                 handle_whoami(*verbose, *check_connection).await?;
             }
+            Commands::Bot { platform, agent, port } => {
+                handle_bot(platform, agent.clone(), *port).await?;
+            }
         }
-    } else if application_cli.file.is_some() {
-        handle_file_logic(&application_cli).await?;
+    } else if let Some(ref file_path) = application_cli.file {
+        // Check if it's a @handle (remote agent)
+        let file_str = file_path.to_string_lossy();
+        if file_str.starts_with('@') {
+            handle_remote_agent(&application_cli, &file_str).await?;
+        } else {
+            handle_file_logic(&application_cli).await?;
+        }
     } else {
         println!("JWL Language Runtime (Multipurpose CLI)\nUse --help for command list.");
     }

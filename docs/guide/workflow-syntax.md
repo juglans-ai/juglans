@@ -198,6 +198,50 @@ exit: [success, failure]
 
 **分支汇聚行为：** 当多个条件分支汇聚到同一节点时，使用 **OR 语义**（任意一个前驱完成即可执行），而非 AND 语义（等待所有前驱）。未执行的分支会被自动标记为不可达。详见[条件分支指南](./conditionals.md#分支汇聚语义)。
 
+### Switch 路由
+
+多分支选择，只执行一个匹配的分支（与条件边不同）：
+
+```yaml
+[classify]: chat(agent="classifier", message=$input)
+
+# switch 块：只走一个分支
+[classify] -> switch $output.intent {
+    "question": [answer]
+    "task": [execute]
+    default: [fallback]
+}
+```
+
+**语法说明**：
+- `switch $variable { ... }` - 基于变量值匹配
+- 每个 case 格式：`"value": [target_node]`
+- `default:` - 处理未匹配情况（可选但推荐）
+
+**与条件边的区别**：
+
+| 特性 | 条件边 (`if`) | Switch |
+|------|--------------|--------|
+| 执行分支 | 可同时执行多个 | 只执行一个 |
+| 语法 | 多行 | 单块 |
+| 默认处理 | 需要额外边 | `default` 关键字 |
+
+```yaml
+# 条件边：可能同时执行多个
+[node] if $ctx.a -> [path_a]
+[node] if $ctx.b -> [path_b]  # a 和 b 可能都执行
+[node] -> [default]            # 无条件边也会执行
+
+# Switch：只执行第一个匹配
+[node] -> switch $ctx.type {
+    "a": [path_a]
+    "b": [path_b]
+    default: [path_default]    # 只有这三个中的一个会执行
+}
+```
+
+---
+
 ### 错误处理
 
 ```yaml

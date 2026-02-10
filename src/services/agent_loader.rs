@@ -84,4 +84,12 @@ impl AgentRegistry {
         debug!("  ✓ Agent registered: {} from {:?}", agent.slug, path);
         self.agents.insert(agent.slug.clone(), (agent, path));
     }
+
+    /// Find agent by username (@handle)
+    pub fn get_by_username(&self, username: &str) -> Option<&AgentResource> {
+        self.agents
+            .values()
+            .find(|(agent, _)| agent.username.as_deref() == Some(username))
+            .map(|(a, _)| a)
+    }
 }

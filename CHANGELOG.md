@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-02-10
+
+### Added
+
+#### Claude Code-style Developer Tools
+- **6 built-in developer tools** auto-registered as `"devtools"` slug in ToolRegistry
+  - `read_file` - Read files with line numbers, offset/limit support
+  - `write_file` - Write/overwrite files, auto-create parent directories
+  - `edit_file` - Exact string replacement with uniqueness check
+  - `glob` - File pattern matching (e.g., `**/*.rs`)
+  - `grep` - Regex content search with context lines
+  - `bash` - Shell execution with timeout, replaces old `sh()` tool
+
+- **Tool trait `schema()` method** - Builtin tools can expose OpenAI function calling schemas for LLM discovery
+- **`BuiltinRegistry.list_schemas()`** - Collect all builtin tool schemas
+- **`BuiltinRegistry.register_devtools_to_registry()`** - Auto-register devtools to ToolRegistry at executor init
+- **Builtin fallback in `chat()` tool** - When ToolRegistry lookup fails, falls back to builtin schemas for "devtools" slug
+
+### Changed
+- `bash` tool replaces `sh` (old syntax `sh(cmd="...")` still works via alias)
+- Tool resolution now includes devtools schemas in ToolRegistry
+
+### Technical Details
+
+**New Files:**
+- `src/builtins/devtools.rs` - 6 developer tools with OpenAI function calling schemas
+
+**Modified Files:**
+- `src/builtins/mod.rs` - Tool trait `schema()`, `list_schemas()`, `register_devtools_to_registry()`, tool registration
+- `src/builtins/system.rs` - Removed old Shell struct
+- `src/builtins/ai.rs` - Builtin fallback for slug resolution
+- `src/core/executor.rs` - Auto-register devtools schema to ToolRegistry at init
+
 ## [0.1.5] - 2026-02-01
 
 ### Added
@@ -156,6 +189,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Agent and prompt management
 - Basic builtins (chat, notify, etc.)
 
+[0.2.2]: https://github.com/juglans-ai/juglans/compare/v0.2.1...v0.2.2
 [0.1.5]: https://github.com/juglans-ai/juglans/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/juglans-ai/juglans/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/juglans-ai/juglans/compare/v0.1.2...v0.1.3

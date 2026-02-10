@@ -1,6 +1,6 @@
 [package]
 name = "juglans" # 【修改】从 jwl_compiler 改为 juglans
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 default-run = "juglans"
 description = "Compiler and runtime for Juglans Workflow Language (JWL)"

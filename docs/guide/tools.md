@@ -122,6 +122,46 @@ tools: ["web-tools", "data-tools"]
 
 Agent 的默认工具会自动附加到所有 `chat()` 调用，除非 workflow 中显式覆盖。
 
+## 内置开发者工具 (devtools)
+
+Juglans 内置 6 个 Claude Code 风格的开发者工具，自动注册为 `"devtools"` slug。无需创建 JSON 文件，直接引用即可。
+
+### 在 Agent 中使用
+
+```yaml
+slug: "code-assistant"
+model: "deepseek-chat"
+tools: ["devtools"]
+
+# 可与其他工具集组合
+# tools: ["devtools", "web-tools"]
+```
+
+### 在 Workflow 中使用
+
+devtools 作为内置工具可直接在节点中调用，无需在 `tools:` 字段中声明：
+
+```yaml
+# 直接作为节点调用
+[read]: read_file(file_path="./src/main.rs")
+[search]: grep(pattern="TODO|FIXME", path="./src")
+[review]: chat(agent="reviewer", message="Review:\n$read.output.content")
+[read] -> [search] -> [review]
+```
+
+### 包含的工具
+
+| 工具 | 说明 |
+|------|------|
+| `read_file` | 读取文件，返回带行号的内容 |
+| `write_file` | 写入文件，自动创建父目录 |
+| `edit_file` | 精确字符串替换 |
+| `glob` | 文件模式匹配 |
+| `grep` | 正则搜索文件内容 |
+| `bash` | 执行 Shell 命令（别名: `sh`） |
+
+详细参数参见 [内置工具参考](../reference/builtins.md#开发者工具)。
+
 ## 优先级规则
 
 ```

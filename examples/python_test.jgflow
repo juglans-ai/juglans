@@ -1,0 +1,19 @@
+name: "Python Integration Test"
+version: "0.1.0"
+
+# Import Python modules
+python: ["json", "os"]
+
+entry: [start]
+exit: [end]
+
+# Test: Call json.dumps with kwargs
+[start]: json.dumps(obj={"test": 123, "hello": "world"}, indent=2)
+
+# Test: Call os.getcwd (no arguments)
+[pwd]: os.getcwd()
+
+# Final output - using notify which is a builtin
+[end]: notify(message="Python test completed")
+
+[start] -> [pwd] -> [end]

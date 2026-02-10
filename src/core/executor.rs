@@ -20,6 +20,7 @@ use crate::builtins::BuiltinRegistry;
 use crate::core::context::WorkflowContext;
 use crate::core::graph::{NodeType, WorkflowGraph};
 use crate::core::parser::GraphParser;
+use crate::runtime::python::PythonRuntime;
 use crate::services::agent_loader::AgentRegistry;
 use crate::services::config::{DebugConfig, JuglansConfig};
 use crate::services::interface::JuglansRuntime;
@@ -40,6 +41,10 @@ pub struct WorkflowExecutor {
     tool_registry: Arc<ToolRegistry>,
     rhai_engine: Engine,
     debug_config: DebugConfig,
+    /// Python runtime for executing external Python calls
+    python_runtime: Option<Arc<Mutex<PythonRuntime>>>,
+    /// Imported Python modules (from workflow python: [...] declaration)
+    python_imports: Vec<String>,
 }
 
 impl WorkflowExecutor {
@@ -63,13 +68,19 @@ impl WorkflowExecutor {
 
         let registry_arc = BuiltinRegistry::new(prompt_registry, agent_registry, runtime);
 
+        // 将 devtools schema 自动注册到 ToolRegistry（slug: "devtools"）
+        let mut tool_registry = ToolRegistry::new();
+        registry_arc.register_devtools_to_registry(&mut tool_registry);
+
         Self {
             builtin_registry: registry_arc,
             mcp_client: McpClient::new(),
             mcp_tools_map: HashMap::new(),
-            tool_registry: Arc::new(ToolRegistry::new()),
+            tool_registry: Arc::new(tool_registry),
             rhai_engine: engine,
             debug_config,
+            python_runtime: None,
+            python_imports: Vec::new(),
         }
     }
 
@@ -158,6 +169,78 @@ impl WorkflowExecutor {
                 Err(e) => warn!("  ❌ Failed to connect to [{}]: {}", server_conf.name, e),
             }
         }
+    }
+
+    /// Initialize Python runtime if the workflow has python imports
+    pub fn init_python_runtime(&mut self, workflow: &WorkflowGraph) -> Result<()> {
+        if workflow.python_imports.is_empty() {
+            return Ok(());
+        }
+
+        info!(
+            "🐍 Initializing Python runtime with {} import(s)...",
+            workflow.python_imports.len()
+        );
+
+        // Store the imports for later resolution
+        self.python_imports = workflow.python_imports.clone();
+
+        // Create Python runtime with 1 worker for now
+        // TODO: Make worker count configurable
+        let mut runtime = PythonRuntime::new(1)?;
+        runtime.set_imports(workflow.python_imports.clone());
+        self.python_runtime = Some(Arc::new(Mutex::new(runtime)));
+
+        info!("  ✅ Python runtime initialized with imports: {:?}", workflow.python_imports);
+        Ok(())
+    }
+
+    /// Check if a tool name is a Python module call
+    fn is_python_call(&self, name: &str) -> bool {
+        if self.python_imports.is_empty() {
+            return false;
+        }
+
+        // Check if the tool name starts with any imported module
+        for import in &self.python_imports {
+            // Handle file imports (e.g., "./utils.py" -> "utils")
+            let module_name = if import.ends_with(".py") {
+                import.rsplit('/').next()
+                    .map(|f| f.trim_end_matches(".py"))
+                    .unwrap_or(import)
+            } else {
+                import.as_str()
+            };
+
+            if name == module_name || name.starts_with(&format!("{}.", module_name)) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Execute a Python function call
+    fn execute_python_call(
+        &self,
+        name: &str,
+        params: &HashMap<String, String>,
+    ) -> Result<Option<Value>> {
+        let runtime = self.python_runtime.as_ref()
+            .ok_or_else(|| anyhow!("Python runtime not initialized"))?;
+
+        let mut rt = runtime.lock()
+            .map_err(|e| anyhow!("Failed to lock Python runtime: {}", e))?;
+
+        // Convert params to kwargs
+        let mut kwargs: HashMap<String, Value> = HashMap::new();
+        for (k, v) in params {
+            // Try to parse as JSON, fall back to string
+            let val = serde_json::from_str(v).unwrap_or(Value::String(v.clone()));
+            kwargs.insert(k.clone(), val);
+        }
+
+        let result = rt.call(name, Vec::new(), kwargs)?;
+        Ok(Some(result))
     }
 
     async fn process_parameter(&self, param_str: &str, context: &WorkflowContext) -> Result<Value> {
@@ -251,10 +334,10 @@ impl WorkflowExecutor {
                         Value::String(s) => format!("\"{}\"", s.replace("\"", "\\\"")), // 转义引号
                         Value::Bool(b) => b.to_string(),
                         Value::Number(n) => n.to_string(),
-                        Value::Null => "null".to_string(),
+                        Value::Null => "()".to_string(), // Rhai 用 () 表示 null/unit
                         Value::Array(_) | Value::Object(_) => v.to_string(),
                     })
-                    .unwrap_or_else(|| "null".to_string())
+                    .unwrap_or_else(|| "()".to_string()) // 变量不存在时也返回 Rhai 的 unit
             });
 
             // 用 Rhai 评估表达式
@@ -301,9 +384,13 @@ impl WorkflowExecutor {
         params: &HashMap<String, String>,
         context: &WorkflowContext,
     ) -> Result<Option<Value>> {
+        // 1. Check built-in tools first
         if let Some(tool) = self.builtin_registry.get(name) {
-            tool.execute(params, context).await
-        } else if let Some(mcp_tool) = self.mcp_tools_map.get(name) {
+            return tool.execute(params, context).await;
+        }
+
+        // 2. Check MCP tools
+        if let Some(mcp_tool) = self.mcp_tools_map.get(name) {
             let mut args = serde_json::Map::new();
             for (k, v) in params {
                 let val = serde_json::from_str(v).unwrap_or(Value::String(v.clone()));
@@ -314,10 +401,16 @@ impl WorkflowExecutor {
                 .execute_tool(mcp_tool, Value::Object(args))
                 .await?;
             let parsed_val = serde_json::from_str(&output_str).unwrap_or(Value::String(output_str));
-            Ok(Some(parsed_val))
-        } else {
-            Err(anyhow!("Function/Tool '{}' not found", name))
+            return Ok(Some(parsed_val));
         }
+
+        // 3. Check Python imports
+        if self.is_python_call(name) {
+            debug!("🐍 Executing Python call: {}", name);
+            return self.execute_python_call(name, params);
+        }
+
+        Err(anyhow!("Function/Tool '{}' not found", name))
     }
 
     /// 尝试执行 MCP tool（供 Chat builtin 的 tool call loop 使用）
@@ -429,6 +522,15 @@ impl WorkflowExecutor {
                     loop_count += 1;
                 }
                 Ok(None)
+            }
+            NodeType::ExternalCall { call_path, args, kwargs } => {
+                // TODO: Implement Python worker call
+                // For now, this is a placeholder until we implement the Python runtime
+                debug!("│   ExternalCall: {} args={:?} kwargs={:?}", call_path, args, kwargs);
+                Err(anyhow!(
+                    "Python runtime not yet implemented. Cannot execute external call: {}",
+                    call_path
+                ))
             }
         }
     }
@@ -686,8 +788,16 @@ impl WorkflowExecutor {
                             Err(e) => {
                                 warn!("  [Output] Error for [{}]: {}", node.id, e);
                                 error!("  ❌ Failed: {}", e);
+                                // Set node-specific error
                                 context_clone
                                     .set(format!("{}.error", node.id), json!(e.to_string()))
+                                    .unwrap();
+                                // Set global $error variable for convenient access in error handlers
+                                context_clone
+                                    .set("error".to_string(), json!({
+                                        "node": node.id,
+                                        "message": e.to_string()
+                                    }))
                                     .unwrap();
                             }
                         }
@@ -700,9 +810,39 @@ impl WorkflowExecutor {
                         }
 
                         completed_nodes_clone.lock().unwrap().insert(node_idx);
+
+                        // Check if this node has a switch route
+                        let switch_result: Option<String> = if let Some(switch_route) = workflow_clone.switch_routes.get(&node.id) {
+                            // Evaluate the switch subject
+                            let subject_value = if switch_route.subject.is_empty() {
+                                // No subject means we use the node output
+                                context_clone.resolve_path("output").ok().flatten()
+                            } else {
+                                let clean_subject = switch_route.subject.trim_start_matches('$');
+                                context_clone.resolve_path(clean_subject).ok().flatten()
+                            };
+
+                            // Convert to string for comparison
+                            let subject_str = match &subject_value {
+                                Some(Value::String(s)) => s.clone(),
+                                Some(Value::Number(n)) => n.to_string(),
+                                Some(Value::Bool(b)) => b.to_string(),
+                                Some(v) => v.to_string(),
+                                None => String::new(),
+                            };
+
+                            info!("  🔀 Switch on '{}' = '{}'", switch_route.subject, subject_str);
+                            Some(subject_str)
+                        } else {
+                            None
+                        };
+
+                        let mut switch_matched = false;
+
                         for edge in workflow_clone.graph.edges(node_idx) {
                             let (edge_info, successor_idx) = (edge.weight(), edge.target());
                             let mut proceed = false;
+
                             if edge_info.is_error_path {
                                 if !node_succeeded {
                                     proceed = true;
@@ -712,7 +852,46 @@ impl WorkflowExecutor {
                                     );
                                 }
                             } else if node_succeeded {
-                                if let Some(condition) = &edge_info.condition {
+                                // Handle switch case edges
+                                if let Some(ref switch_value) = switch_result {
+                                    if let Some(ref case_value) = edge_info.switch_case {
+                                        // This is a switch case - compare values
+                                        if case_value == switch_value && !switch_matched {
+                                            proceed = true;
+                                            switch_matched = true;
+                                            info!(
+                                                "  -> Switch case '{}' matched, taking path to [{}]",
+                                                case_value,
+                                                workflow_clone.graph[successor_idx].id
+                                            );
+                                        }
+                                    } else if edge_info.switch_case.is_none() && workflow_clone.switch_routes.contains_key(&node.id) {
+                                        // This is the default case - only take if no other case matched
+                                        // We'll handle this after checking all cases
+                                    } else if edge_info.condition.is_some() {
+                                        // Regular conditional edge
+                                        if let Some(condition) = &edge_info.condition {
+                                            if self_clone
+                                                .evaluate_condition_async(condition, &context_clone)
+                                                .await
+                                                .unwrap_or(false)
+                                            {
+                                                proceed = true;
+                                                info!(
+                                                    "  -> Condition TRUE, taking path to [{}]",
+                                                    workflow_clone.graph[successor_idx].id
+                                                );
+                                            }
+                                        }
+                                    } else {
+                                        // Unconditional edge (shouldn't happen with switch)
+                                        proceed = true;
+                                        info!(
+                                            "  -> Taking unconditional path to [{}]",
+                                            workflow_clone.graph[successor_idx].id
+                                        );
+                                    }
+                                } else if let Some(condition) = &edge_info.condition {
                                     if self_clone
                                         .evaluate_condition_async(condition, &context_clone)
                                         .await
@@ -728,7 +907,6 @@ impl WorkflowExecutor {
                                             "  -> Condition FALSE, skipping path to [{}]",
                                             workflow_clone.graph[successor_idx].id
                                         );
-                                        // 不做任何处理，让死锁检测逻辑处理不可达节点
                                     }
                                 } else {
                                     proceed = true;
@@ -749,6 +927,31 @@ impl WorkflowExecutor {
                                         );
                                         ready_queue_clone.lock().unwrap().push_back(successor_idx);
                                     }
+                                }
+                            }
+                        }
+
+                        // Handle default switch case if no case matched
+                        if switch_result.is_some() && !switch_matched {
+                            for edge in workflow_clone.graph.edges(node_idx) {
+                                let (edge_info, successor_idx) = (edge.weight(), edge.target());
+                                if edge_info.switch_case.is_none() && !edge_info.is_error_path && edge_info.condition.is_none() {
+                                    info!(
+                                        "  -> Switch default, taking path to [{}]",
+                                        workflow_clone.graph[successor_idx].id
+                                    );
+                                    let mut degrees_guard = in_degrees_clone.lock().unwrap();
+                                    if let Some(degree) = degrees_guard.get_mut(&successor_idx) {
+                                        *degree -= 1;
+                                        if *degree == 0 {
+                                            info!(
+                                                "Node [{}] is now ready to run.",
+                                                workflow_clone.graph[successor_idx].id
+                                            );
+                                            ready_queue_clone.lock().unwrap().push_back(successor_idx);
+                                        }
+                                    }
+                                    break; // Only take one default
                                 }
                             }
                         }

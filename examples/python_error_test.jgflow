@@ -1,0 +1,22 @@
+name: "Python Error Handling Test"
+version: "0.1.0"
+
+python: ["json"]
+
+entry: [start]
+exit: [success, error_handled]
+
+# This will fail because we're passing invalid JSON
+[start]: json.loads(s="this is not valid json")
+
+# Success path (won't be reached)
+[success]: notify(message="Success!")
+
+# Error handler - access the error from start node
+[error_handled]: notify(message="Error caught: check start.error in context")
+
+# Normal path
+[start] -> [success]
+
+# Error path
+[start] on error -> [error_handled]

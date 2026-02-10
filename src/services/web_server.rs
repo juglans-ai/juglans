@@ -114,11 +114,20 @@ pub struct WorkflowApiModel {
     pub created_at: String,
 }
 
+/// Chat ID input - can be UUID (existing chat) or @handle (start chat with agent)
+#[derive(Deserialize, Clone, Debug)]
+#[serde(untagged)]
+pub enum ChatIdInput {
+    Uuid(Uuid),
+    Handle(String),
+}
+
 // 兼容 Jug0 的 Chat 请求结构
 #[derive(Deserialize, Clone)]
 pub struct ChatRequest {
     // jug0 标准字段
-    pub chat_id: Option<Uuid>,
+    /// Chat ID: UUID for existing chat, or @handle to start with agent
+    pub chat_id: Option<ChatIdInput>,
     pub messages: Option<Vec<MessagePart>>,
     pub agent: Option<AgentConfigInput>,
     pub model: Option<String>,
@@ -128,10 +137,10 @@ pub struct ChatRequest {
 
     // Juglans 额外字段
     pub variables: Option<Value>,
-    /// 是否无状态模式（不继承 chat_id）— 保留兼容
-    pub stateless: Option<bool>,
     /// 消息状态：context_visible | context_hidden | display_only | silent
     pub state: Option<String>,
+    /// jug0 传入的用户消息 ID（workflow 模式下用于回溯更新用户消息状态）
+    pub user_message_id: Option<i32>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -677,8 +686,21 @@ async fn handle_chat(
         .load_from_paths(&[agent_pattern])
         .map_err(|e| Json(json!({"error": e.to_string()})))?;
 
+    // Resolve @handle to agent if chat_id is a handle
+    let handle_agent_slug = match &req.chat_id {
+        Some(ChatIdInput::Handle(h)) => {
+            let handle_name = h.strip_prefix('@').unwrap_or(h);
+            // Find agent by username in the registry
+            agent_registry.get_by_username(handle_name).map(|a| a.slug.clone())
+        }
+        _ => None,
+    };
+
     // 提取 agent slug（兼容 jug0 格式）
-    let agent_slug = if let Some(ref agent_config) = req.agent {
+    // Priority: @handle > agent.slug > agent.id > default
+    let agent_slug = if let Some(slug) = handle_agent_slug {
+        slug
+    } else if let Some(ref agent_config) = req.agent {
         agent_config
             .slug
             .clone()
@@ -701,10 +723,12 @@ async fn handle_chat(
     };
 
     // 提取 chat_id（用于继承会话）
-    let chat_id_str = req.chat_id.map(|id| id.to_string());
-
-    // 是否无状态模式
-    let is_stateless = req.stateless.unwrap_or(false) || req.chat_id.is_none();
+    // Only extract UUID, @handle means new chat
+    let chat_id_str = match &req.chat_id {
+        Some(ChatIdInput::Uuid(id)) => Some(id.to_string()),
+        Some(ChatIdInput::Handle(_)) => None,  // @handle = new chat
+        None => None,
+    };
 
     // 提取自定义 tools
     let custom_tools = req
@@ -769,14 +793,31 @@ async fn handle_chat(
     let ctx = WorkflowContext::with_sender(tx.clone());
 
     // 设置输入上下文
-    ctx.set("input.message".to_string(), json!(message_text))
+    ctx.set("input.message".to_string(), json!(message_text.clone()))
         .ok();
+
+    // 尝试解析消息内容为 JSON，如果成功则展开到 $input.*
+    // 这样 workflow 可以直接用 $input.event_type 等字段进行路由
+    if let Ok(parsed) = serde_json::from_str::<Value>(&message_text) {
+        if let Some(obj) = parsed.as_object() {
+            for (k, v) in obj {
+                ctx.set(format!("input.{}", k), v.clone()).ok();
+            }
+            debug!("📦 [Web] Parsed message JSON into $input.* fields: {:?}", obj.keys().collect::<Vec<_>>());
+        }
+    }
 
     // 如果有 chat_id，存入上下文供后续继承
     if let Some(ref cid) = chat_id_str {
         ctx.set("reply.chat_id".to_string(), json!(cid)).ok();
     }
 
+    // 如果有 user_message_id，存入上下文供 reply()/chat() 回溯更新用户消息状态
+    if let Some(umid) = req.user_message_id {
+        ctx.set("reply.user_message_id".to_string(), json!(umid)).ok();
+    }
+
+    // variables 字段会覆盖从 message 解析的值（优先级更高）
     if let Some(vars) = req.variables {
         if let Some(obj) = vars.as_object() {
             for (k, v) in obj {
@@ -786,7 +827,6 @@ async fn handle_chat(
     }
 
     // 构建 chat 参数
-    let stateless_flag = is_stateless;
     let tools_json = custom_tools.map(|t| serde_json::to_string(&t).unwrap_or_default());
     let sys_prompt = system_prompt_override;
     let project_root = state.project_root.clone();
@@ -848,10 +888,7 @@ async fn handle_chat(
             params.insert("agent".to_string(), agent_meta.slug.clone());
             params.insert("message".to_string(), "$input.message".to_string());
 
-            // 传递 stateless / state 参数
-            if stateless_flag {
-                params.insert("stateless".to_string(), "true".to_string());
-            }
+            // 传递 state 参数
             if let Some(ref state_val) = req.state {
                 params.insert("state".to_string(), state_val.clone());
             }
@@ -878,28 +915,40 @@ async fn handle_chat(
         }
     });
 
-    // SSE 事件格式对齐 Jug0
+    // SSE 事件格式对齐 Jug0 (使用标准 SSE event 类型)
     let pending_calls = state.pending_tool_calls.clone();
     let stream = UnboundedReceiverStream::new(rx).map(move |event| {
-        let json_event = match event {
-            // 对齐 Jug0: { "type": "content", "text": "..." }
-            WorkflowEvent::Token(t) => json!({ "type": "content", "text": t }),
-            // Juglans 特有状态 -> meta 事件
-            WorkflowEvent::Status(s) => json!({ "type": "meta", "status": s }),
-            WorkflowEvent::Error(e) => json!({ "type": "error", "message": e }),
-            // Client tool call → 存储 result_tx 并发送 SSE event
+        match event {
+            // Token 流: 与 jug0 一致的 content 格式
+            WorkflowEvent::Token(t) => {
+                Ok(Event::default().data(json!({ "type": "content", "text": t }).to_string()))
+            }
+            // Status → event: meta (workflow 状态更新)
+            WorkflowEvent::Status(s) => {
+                Ok(Event::default()
+                    .event("meta")
+                    .data(json!({ "type": "meta", "status": s }).to_string()))
+            }
+            // Error → event: error
+            WorkflowEvent::Error(e) => {
+                Ok(Event::default()
+                    .event("error")
+                    .data(json!({ "type": "error", "message": e }).to_string()))
+            }
+            // Tool call → event: tool_call
             WorkflowEvent::ToolCall { call_id, tools, result_tx } => {
                 if let Ok(mut map) = pending_calls.lock() {
                     map.insert(call_id.clone(), result_tx);
                 }
-                json!({
-                    "type": "tool_call",
-                    "call_id": call_id,
-                    "tools": tools,
-                })
+                Ok(Event::default()
+                    .event("tool_call")
+                    .data(json!({
+                        "type": "tool_call",
+                        "call_id": call_id,
+                        "tools": tools,
+                    }).to_string()))
             }
-        };
-        Ok(Event::default().data(json_event.to_string()))
+        }
     });
 
     Ok(Sse::new(stream))

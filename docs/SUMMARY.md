@@ -26,6 +26,7 @@
 ## Integrations
 * [Jug0](integrations/jug0.md)
 * [MCP](integrations/mcp.md)
+* [Python](integrations/python.md)
 * [Web Server](integrations/web-server.md)
 
 ## Reference

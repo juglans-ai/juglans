@@ -142,6 +142,25 @@ model: "deepseek-chat"
 tools: "[{\"type\":\"function\",\"function\":{\"name\":\"calculator\",\"description\":\"执行数学计算\"}}]"
 ```
 
+### Slug 引用格式（推荐）
+
+引用已注册的工具集，支持组合多个 toolbox：
+
+```yaml
+slug: "code-agent"
+model: "deepseek-chat"
+
+# 使用内置开发者工具
+tools: ["devtools"]
+
+# 或组合多个工具集
+# tools: ["devtools", "web-tools", "data-tools"]
+```
+
+其中：
+- `"devtools"` — 内置的 6 个开发者工具（read_file, write_file, edit_file, glob, grep, bash），自动可用
+- 其他 slug（如 `"web-tools"`）— 来自 `tools/*.json` 文件，需要在 workflow 中通过 `tools: ["./tools/*.json"]` 导入
+
 ### 工具优先级
 
 当工作流中的 `chat()` 调用同时指定了 `tools` 参数时，工作流中的配置优先：

@@ -1,5 +1,5 @@
 // src/core/parser.rs
-use crate::core::graph::{Action, Edge, Node, NodeType, WorkflowGraph};
+use crate::core::graph::{Action, Edge, Node, NodeType, SwitchCase, SwitchRoute, WorkflowGraph};
 use anyhow::{anyhow, Context, Result};
 use pest::iterators::Pair;
 use pest::Parser;
@@ -120,6 +120,7 @@ impl GraphParser {
                 Rule::node_def => Self::parse_node(inner, workflow)?,
                 Rule::chain_edge_def => Self::parse_chain_edge(inner, workflow)?,
                 Rule::complex_edge_def => Self::parse_complex_edge(inner, workflow)?,
+                Rule::switch_edge_def => Self::parse_switch_edge(inner, workflow)?,
                 Rule::EOI => {}
                 _ => {}
             }
@@ -147,7 +148,7 @@ impl GraphParser {
             "version" => workflow.version = Self::parse_text_value_raw(val_node),
             "author" => workflow.author = Self::parse_text_value_raw(val_node),
             "description" => workflow.description = Self::parse_text_value_raw(val_node),
-            "entry" | "exit" | "libs" | "prompts" | "agents" | "tools" => {
+            "entry" | "exit" | "libs" | "prompts" | "agents" | "tools" | "python" => {
                 let string_vec = Self::parse_string_list_helper(val_node)?;
                 match key_str {
                     "entry" => workflow.entry_node = string_vec.get(0).cloned().unwrap_or_default(),
@@ -156,6 +157,7 @@ impl GraphParser {
                     "prompts" => workflow.prompt_patterns = string_vec,
                     "agents" => workflow.agent_patterns = string_vec,
                     "tools" => workflow.tool_patterns = string_vec,
+                    "python" => workflow.python_imports = string_vec,
                     _ => {}
                 }
             }
@@ -335,6 +337,78 @@ impl GraphParser {
         Ok(())
     }
 
+    /// Parse switch edge definition: [node] -> switch $var { "case1": [target1], default: [target2] }
+    fn parse_switch_edge(pair: Pair<Rule>, workflow: &mut WorkflowGraph) -> Result<()> {
+        let mut it = pair.into_inner();
+
+        // First is the source node_id
+        let from_node = it.next().ok_or_else(|| anyhow!("Switch edge missing source node"))?;
+        let from_id = from_node.into_inner().next().unwrap().as_str().to_string();
+
+        // Next is the switch subject (optional) and body
+        let mut subject = String::new();
+        let mut cases: Vec<SwitchCase> = Vec::new();
+
+        for item in it {
+            match item.as_rule() {
+                Rule::switch_subject => {
+                    subject = item.as_str().trim().to_string();
+                }
+                Rule::switch_body => {
+                    for case_item in item.into_inner() {
+                        if case_item.as_rule() == Rule::switch_case {
+                            let mut case_it = case_item.into_inner();
+                            let case_value_or_default = case_it.next().unwrap();
+
+                            let case_value = if case_value_or_default.as_rule() == Rule::switch_default {
+                                None
+                            } else {
+                                // It's a switch_case_value (string, number, boolean, or variable_ref)
+                                let val_str = case_value_or_default.as_str().trim();
+                                // Remove quotes from strings
+                                let clean_val = if val_str.starts_with('"') && val_str.ends_with('"') {
+                                    val_str[1..val_str.len()-1].to_string()
+                                } else {
+                                    val_str.to_string()
+                                };
+                                Some(clean_val)
+                            };
+
+                            let target_node = case_it.next().ok_or_else(|| {
+                                anyhow!("Switch case missing target node for value: {:?}", case_value)
+                            })?;
+                            let target_id = target_node.into_inner().next()
+                                .ok_or_else(|| anyhow!("Invalid target node in switch case"))?
+                                .as_str().to_string();
+
+                            cases.push(SwitchCase {
+                                value: case_value.clone(),
+                                target: target_id.clone(),
+                            });
+
+                            // Create edge with switch_case marker
+                            let edge = Edge {
+                                condition: None,
+                                is_error_path: false,
+                                switch_case: case_value,
+                            };
+                            Self::commit_edge_to_graph(workflow, &from_id, &target_id, edge)?;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Store the switch route
+        workflow.switch_routes.insert(from_id.clone(), SwitchRoute {
+            subject,
+            cases,
+        });
+
+        Ok(())
+    }
+
     fn commit_edge_to_graph(
         workflow: &mut WorkflowGraph,
         f_id: &str,
@@ -356,5 +430,88 @@ impl GraphParser {
 
         workflow.graph.add_edge(f_idx, t_idx, e_obj);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_python_imports_parsing() {
+        let content = r#"
+name: "Python Workflow"
+python: ["pandas", "sklearn.ensemble", "./utils.py"]
+entry: [load]
+
+[load]: pandas.read_csv(path="data.csv")
+[train]: sklearn.ensemble.RandomForestClassifier()
+
+[load] -> [train]
+"#;
+        let graph = GraphParser::parse(content).unwrap();
+
+        assert_eq!(graph.python_imports.len(), 3);
+        assert!(graph.python_imports.contains(&"pandas".to_string()));
+        assert!(graph.python_imports.contains(&"sklearn.ensemble".to_string()));
+        assert!(graph.python_imports.contains(&"./utils.py".to_string()));
+    }
+
+    #[test]
+    fn test_scoped_identifier_call() {
+        let content = r#"
+name: "Scoped Call Test"
+python: ["pandas"]
+entry: [load]
+
+[load]: pandas.read_csv(path="data.csv", encoding="utf-8")
+"#;
+        let graph = GraphParser::parse(content).unwrap();
+
+        // Verify the node was parsed correctly
+        let node = graph.graph.node_weights().next().unwrap();
+        assert_eq!(node.id, "load");
+
+        if let NodeType::Task(action) = &node.node_type {
+            assert_eq!(action.name, "pandas.read_csv");
+            assert_eq!(action.params.get("path"), Some(&"\"data.csv\"".to_string()));
+            assert_eq!(action.params.get("encoding"), Some(&"\"utf-8\"".to_string()));
+        } else {
+            panic!("Expected Task node type");
+        }
+    }
+
+    #[test]
+    fn test_switch_syntax_parsing() {
+        let content = r#"
+name: "Switch Test"
+entry: [start]
+
+[start]: notify(message="start")
+[case_a]: notify(message="A")
+[case_b]: notify(message="B")
+[fallback]: notify(message="default")
+
+[start] -> switch $type {
+    "a": [case_a]
+    "b": [case_b]
+    default: [fallback]
+}
+"#;
+        let graph = GraphParser::parse(content).unwrap();
+
+        // Verify switch route was created
+        assert!(graph.switch_routes.contains_key("start"));
+        let switch_route = graph.switch_routes.get("start").unwrap();
+        assert_eq!(switch_route.subject.trim(), "$type");
+        assert_eq!(switch_route.cases.len(), 3);
+
+        // Verify cases
+        assert_eq!(switch_route.cases[0].value, Some("a".to_string()));
+        assert_eq!(switch_route.cases[0].target, "case_a");
+        assert_eq!(switch_route.cases[1].value, Some("b".to_string()));
+        assert_eq!(switch_route.cases[1].target, "case_b");
+        assert_eq!(switch_route.cases[2].value, None); // default
+        assert_eq!(switch_route.cases[2].target, "fallback");
     }
 }

@@ -31,8 +31,10 @@ json_array = { "[" ~ (value ~ ("," ~ value)*)? ~ ","? ~ "]" }
 value = _{ json_object | json_array | string | number | boolean | null }
 
 // --- 元数据定义 (Metadata) ---
-// 定义工作流头部允许的键名，增加了 prompts、agents 和 tools 用于本地资源导入
-meta_key = { "name" | "version" | "author" | "description" | "entry" | "exit" | "libs" | "prompts" | "agents" | "tools" }
+// 定义工作流头部允许的键名
+// - prompts/agents/tools: 本地资源导入
+// - python: Python 模块导入（支持系统模块、.py 文件、glob 模式）
+meta_key = { "name" | "version" | "author" | "description" | "entry" | "exit" | "libs" | "prompts" | "agents" | "tools" | "python" }
 meta_list_item = { string | identifier }
 meta_val_list = { "[" ~ (meta_list_item ~ ("," ~ meta_list_item)*)? ~ ","? ~ "]" }
 metadata = { meta_key ~ ":" ~ (string | meta_val_list) }
@@ -87,8 +89,17 @@ chain_edge_def = { node_id ~ (simple_arrow ~ node_id)+ }
 // 复杂的单步定义（带条件或错误分支）
 complex_edge_def = { node_id ~ (edge_error | edge_condition) ~ "->" ~ node_id }
 
+// --- Switch 表达式（多分支路由，只执行一个分支） ---
+// 语法：[node] -> switch $var { "case1": [target1], "case2": [target2], default: [fallback] }
+switch_case_value = { string | number | boolean | variable_ref }
+switch_default = { "default" }
+switch_case = { (switch_case_value | switch_default) ~ ":" ~ node_id }
+switch_body = { "{" ~ (switch_case ~ ","?)* ~ "}" }
+switch_subject = { variable_ref | (!"{"  ~ ANY)+ }
+switch_edge_def = { node_id ~ "->" ~ "switch" ~ switch_subject? ~ switch_body }
+
 // 统一边定义规则
-edge_def = _{ complex_edge_def | chain_edge_def }
+edge_def = _{ switch_edge_def | complex_edge_def | chain_edge_def }
 
 // --- 根语法单元 ---
 workflow = { SOI ~ (metadata | node_def | edge_def)* ~ EOI }

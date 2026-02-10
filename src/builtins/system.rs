@@ -1,10 +1,12 @@
 // src/builtins/system.rs
 use super::Tool;
-use crate::core::context::WorkflowContext;
+use crate::core::context::{WorkflowContext, WorkflowEvent};
+use crate::services::interface::JuglansRuntime;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 pub struct Timer;
 #[async_trait]
@@ -94,3 +96,145 @@ impl Tool for Notify {
         Ok(Some(json!({ "status": "sent", "content": msg })))
     }
 }
+
+/// reply(message="内容", state="context_visible") - 直接返回内容，不调用 AI
+/// 用于系统事件处理等场景，需要返回固定文本但不走 LLM
+/// 支持 state 参数控制 SSE/持久化，包括组合语法 input:output
+pub struct Reply {
+    runtime: Arc<dyn JuglansRuntime>,
+}
+
+impl Reply {
+    pub fn new(runtime: Arc<dyn JuglansRuntime>) -> Self {
+        Self { runtime }
+    }
+}
+
+#[async_trait]
+impl Tool for Reply {
+    fn name(&self) -> &str {
+        "reply"
+    }
+    async fn execute(
+        &self,
+        params: &HashMap<String, String>,
+        context: &WorkflowContext,
+    ) -> Result<Option<Value>> {
+        let message = params.get("message").map(|s| s.as_str()).unwrap_or("");
+
+        // 支持组合语法 input:output（与 chat() 一致）
+        let state_raw = params.get("state").map(|s| s.as_str()).unwrap_or("context_visible");
+        let (input_state, output_state) = match state_raw.split_once(':') {
+            Some((i, o)) => (i, o),
+            None => (state_raw, state_raw),
+        };
+
+        // should_stream 基于 output_state
+        let should_stream = output_state == "context_visible" || output_state == "display_only";
+
+        // SSE 输出
+        if should_stream {
+            context.emit(WorkflowEvent::Token(message.to_string()));
+        }
+
+        // 持久化 reply 消息到 jug0（用 output_state 控制 reply 自身的持久化）
+        let should_persist_reply = output_state == "context_visible" || output_state == "context_hidden";
+        if should_persist_reply {
+            if let Ok(Some(chat_id_val)) = context.resolve_path("reply.chat_id") {
+                if let Some(chat_id) = chat_id_val.as_str() {
+                    let _ = self.runtime.create_message(chat_id, "assistant", message, output_state).await;
+                }
+            }
+        }
+
+        // 用 input_state 回溯更新原始用户消息状态
+        if let (Ok(Some(chat_id_val)), Ok(Some(umid_val))) = (
+            context.resolve_path("reply.chat_id"),
+            context.resolve_path("reply.user_message_id"),
+        ) {
+            if let (Some(chat_id), Some(umid)) = (chat_id_val.as_str(), umid_val.as_i64()) {
+                let _ = self.runtime.update_message_state(chat_id, umid as i32, input_state).await;
+            }
+        }
+
+        // 更新 reply.output（与 chat() 一致）
+        let current = context.resolve_path("reply.output")
+            .ok()
+            .flatten()
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_default();
+        context.set("reply.output".to_string(), json!(format!("{}{}", current, message)))?;
+
+        Ok(Some(json!({
+            "content": message,
+            "status": "sent"
+        })))
+    }
+}
+
+/// feishu_webhook(message="内容") - 通过飞书 Webhook 推送消息到群
+/// 从 juglans.toml [bot.feishu] webhook_url 读取地址
+pub struct FeishuWebhook;
+
+#[async_trait]
+impl Tool for FeishuWebhook {
+    fn name(&self) -> &str {
+        "feishu_webhook"
+    }
+
+    async fn execute(
+        &self,
+        params: &HashMap<String, String>,
+        context: &WorkflowContext,
+    ) -> Result<Option<Value>> {
+        let message = params
+            .get("message")
+            .ok_or_else(|| anyhow!("feishu_webhook() requires 'message' parameter"))?;
+
+        // 优先从参数获取 webhook_url，否则从 context 获取（bot 启动时注入）
+        let webhook_url = if let Some(url) = params.get("webhook_url") {
+            url.clone()
+        } else if let Ok(Some(url_val)) = context.resolve_path("bot.feishu_webhook_url") {
+            url_val.as_str().unwrap_or("").to_string()
+        } else {
+            // 尝试从配置文件加载
+            match crate::services::config::JuglansConfig::load() {
+                Ok(config) => {
+                    config.bot.as_ref()
+                        .and_then(|b| b.feishu.as_ref())
+                        .and_then(|f| f.webhook_url.clone())
+                        .ok_or_else(|| anyhow!("No webhook_url in [bot.feishu] config"))?
+                }
+                Err(_) => return Err(anyhow!("Cannot load config for feishu webhook_url")),
+            }
+        };
+
+        // 直接调用飞书 webhook API
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(&webhook_url)
+            .json(&json!({
+                "msg_type": "text",
+                "content": {
+                    "text": message
+                }
+            }))
+            .send()
+            .await?;
+
+        let status = resp.status();
+        let body: Value = resp.json().await.unwrap_or(json!({}));
+        let ok = body["code"].as_i64() == Some(0) || status.is_success();
+
+        if !ok {
+            return Err(anyhow!("Feishu webhook error: {:?}", body));
+        }
+
+        Ok(Some(json!({
+            "status": "sent",
+            "content": message
+        })))
+    }
+}
+
+// Shell 已被 devtools::Bash 替代（注册为 "bash" + "sh" 别名）

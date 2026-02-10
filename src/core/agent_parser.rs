@@ -18,9 +18,11 @@ pub struct AgentResource {
     pub system_prompt: String,
     pub system_prompt_slug: Option<String>,
     pub workflow: Option<String>,
-    pub tools: Option<String>, // 【新增】JSON 格式的 tools 配置
+    pub tools: Option<String>,
     pub mcp: Vec<String>,
     pub skills: Vec<String>,
+    /// @username for this agent (auto-registers handle in jug0)
+    pub username: Option<String>,
 }
 
 pub struct AgentParser;
@@ -71,6 +73,7 @@ impl AgentParser {
                 }
                 Rule::key_mcp => agent.mcp = Self::parse_list(pair),
                 Rule::key_skills => agent.skills = Self::parse_list(pair),
+                Rule::key_username => agent.username = Some(Self::parse_string(pair)),
                 Rule::key_system => {
                     let inner = pair.into_inner().next().unwrap();
                     match inner.as_rule() {

@@ -73,6 +73,46 @@ pub struct DebugConfig {
     pub show_variables: bool,
 }
 
+// Bot 配置
+#[derive(Debug, Deserialize, Clone)]
+pub struct BotConfig {
+    pub telegram: Option<TelegramBotConfig>,
+    pub feishu: Option<FeishuBotConfig>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct TelegramBotConfig {
+    pub token: String,
+    #[serde(default = "default_bot_agent")]
+    pub agent: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct FeishuBotConfig {
+    /// 事件订阅模式（双向）
+    pub app_id: Option<String>,
+    pub app_secret: Option<String>,
+    /// Webhook 模式（单向推送）
+    pub webhook_url: Option<String>,
+    #[serde(default = "default_bot_agent")]
+    pub agent: String,
+    #[serde(default = "default_feishu_port")]
+    pub port: u16,
+    /// API base URL: "https://open.feishu.cn" (默认) 或 "https://open.larksuite.com" (Lark 国际版)
+    #[serde(default = "default_feishu_base_url")]
+    pub base_url: String,
+}
+
+fn default_bot_agent() -> String {
+    "default".to_string()
+}
+fn default_feishu_port() -> u16 {
+    9000
+}
+fn default_feishu_base_url() -> String {
+    "https://open.feishu.cn".to_string()
+}
+
 fn default_server_host() -> String {
     "127.0.0.1".to_string()
 }
@@ -101,6 +141,9 @@ pub struct JuglansConfig {
     // 【新增】Debug 配置
     #[serde(default)]
     pub debug: DebugConfig,
+
+    // Bot 配置
+    pub bot: Option<BotConfig>,
 }
 
 fn default_jug0_config() -> Jug0Config {
@@ -147,6 +190,7 @@ impl JuglansConfig {
                 mcp_servers: vec![],
                 env: Default::default(),
                 debug: DebugConfig::default(),
+                bot: None,
             });
         }
 
