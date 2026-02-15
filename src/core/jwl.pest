@@ -19,6 +19,10 @@ identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
 // 支持命名空间的复合标识符 (例如：System.log, McpServer.tool)
 scoped_identifier = @{ identifier ~ ("." ~ identifier)* }
 
+// 【新增】支持命名空间的节点 ID（例如：auth.start, trading.extract）
+// 用于边定义中引用导入子工作流的节点
+namespaced_id = @{ identifier ~ ("." ~ identifier)* }
+
 // JWL 特有的变量引用语法，以 $ 开头
 variable_ref = @{ "$" ~ (ASCII_ALPHANUMERIC | "_" | ".")+ }
 
@@ -32,29 +36,41 @@ value = _{ json_object | json_array | string | number | boolean | null }
 
 // --- 元数据定义 (Metadata) ---
 // 定义工作流头部允许的键名
+// - flows: 子工作流导入映射（用于跨工作流图合并）
 // - prompts/agents/tools: 本地资源导入
 // - python: Python 模块导入（支持系统模块、.py 文件、glob 模式）
-meta_key = { "name" | "version" | "author" | "description" | "entry" | "exit" | "libs" | "prompts" | "agents" | "tools" | "python" }
+meta_key = { "slug" | "name" | "version" | "author" | "description" | "entry" | "exit" | "libs" | "flows" | "prompts" | "agents" | "tools" | "python" }
 meta_list_item = { string | identifier }
 meta_val_list = { "[" ~ (meta_list_item ~ ("," ~ meta_list_item)*)? ~ ","? ~ "]" }
-metadata = { meta_key ~ ":" ~ (string | meta_val_list) }
+// 【新增】对象映射值，用于 flows: { alias: "path" } 格式
+meta_map_pair = { identifier ~ ":" ~ string }
+meta_val_map = { "{" ~ (meta_map_pair ~ ","?)* ~ "}" }
+metadata = { meta_key ~ ":" ~ (string | meta_val_list | meta_val_map) }
 
 // --- 节点定义 (Nodes) ---
-// 节点 ID 格式为 [id_name]
+// 节点 ID 格式为 [id_name]（定义时只允许简单标识符）
 node_id = { "[" ~ identifier ~ "]" }
+
+// 【新增】节点引用格式（边定义中使用，支持命名空间）
+// 支持 [start] 和 [auth.start] 两种形式
+node_ref = { "[" ~ namespaced_id ~ "]" }
 
 // 【核心修复】递归嵌套内容规则
 // 用于平衡嵌套的括号对，确保内部的逗号或括号不会中断外层解析
 // 支持 () [] {} 三种类型的括号嵌套
-nested_content = { 
+nested_content = {
     "(" ~ (nested_content | string | (!")" ~ ANY))* ~ ")" |
     "[" ~ (nested_content | string | (!"]" ~ ANY))* ~ "]" |
     "{" ~ (nested_content | string | (!"}" ~ ANY))* ~ "}"
 }
 
+// 比较运算符（允许在表达式中使用 ==, !=, >=, <=）
+comparison_op = { "==" | "!=" | ">=" | "<=" }
+
 // 【核心修复】表达式规则
 // 参数的值可以是字符串、嵌套内容或者是不包含分隔符（, 或 )）的任意文本
-expression = { (nested_content | string | (!"," ~ !")" ~ ANY))+ }
+// 注意：裸 = 号被禁止（用于检测漏写逗号），比较运算符通过 comparison_op 允许
+expression = { (nested_content | string | comparison_op | (!"," ~ !")" ~ !"=" ~ ANY))+ }
 
 // 任务参数定义：key=value
 param_pair = { identifier ~ "=" ~ expression }
@@ -82,21 +98,21 @@ edge_condition = { "if" ~ (!"->" ~ ANY)+ }
 // 错误处理路径：[A] on error -> [B]
 edge_error = { "on error" }
 
-// 链式定义：[A] -> [B] -> [C]
+// 链式定义：[A] -> [B] -> [C]（支持命名空间节点引用如 [auth.start]）
 simple_arrow = { "->" }
-chain_edge_def = { node_id ~ (simple_arrow ~ node_id)+ }
+chain_edge_def = { node_ref ~ (simple_arrow ~ node_ref)+ }
 
-// 复杂的单步定义（带条件或错误分支）
-complex_edge_def = { node_id ~ (edge_error | edge_condition) ~ "->" ~ node_id }
+// 复杂的单步定义（带条件或错误分支，支持命名空间节点引用）
+complex_edge_def = { node_ref ~ (edge_error | edge_condition) ~ "->" ~ node_ref }
 
 // --- Switch 表达式（多分支路由，只执行一个分支） ---
 // 语法：[node] -> switch $var { "case1": [target1], "case2": [target2], default: [fallback] }
 switch_case_value = { string | number | boolean | variable_ref }
 switch_default = { "default" }
-switch_case = { (switch_case_value | switch_default) ~ ":" ~ node_id }
+switch_case = { (switch_case_value | switch_default) ~ ":" ~ node_ref }
 switch_body = { "{" ~ (switch_case ~ ","?)* ~ "}" }
 switch_subject = { variable_ref | (!"{"  ~ ANY)+ }
-switch_edge_def = { node_id ~ "->" ~ "switch" ~ switch_subject? ~ switch_body }
+switch_edge_def = { node_ref ~ "->" ~ "switch" ~ switch_subject? ~ switch_body }
 
 // 统一边定义规则
 edge_def = _{ switch_edge_def | complex_edge_def | chain_edge_def }

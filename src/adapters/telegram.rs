@@ -111,6 +111,8 @@ pub async fn start(config: JuglansConfig, project_root: PathBuf, agent_slug: Str
 
                 tokio::spawn(async move {
                     let platform_msg = PlatformMessage {
+                        event_type: "message".into(),
+                        event_data: serde_json::json!({ "text": &text }),
                         platform_user_id: user_id,
                         platform_chat_id: chat_id.to_string(),
                         text,
@@ -127,7 +129,7 @@ pub async fn start(config: JuglansConfig, project_root: PathBuf, agent_slug: Str
                         .send()
                         .await;
 
-                    match run_agent_for_message(&config, &project_root, &agent_slug, &platform_msg)
+                    match run_agent_for_message(&config, &project_root, &agent_slug, &platform_msg, None)
                         .await
                     {
                         Ok(reply) => {

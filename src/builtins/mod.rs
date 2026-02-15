@@ -83,9 +83,13 @@ impl BuiltinRegistry {
         let mut chat_tool = ai::Chat::new(agents, prompts, runtime);
         chat_tool.set_registry(Arc::downgrade(&registry_arc));
 
+        let mut exec_wf_tool = ai::ExecuteWorkflow::new();
+        exec_wf_tool.set_registry(Arc::downgrade(&registry_arc));
+
         {
             let mut guard = registry_arc.tools.write().expect("Lock poisoned");
             guard.insert("chat".to_string(), Arc::new(Box::new(chat_tool)));
+            guard.insert("execute_workflow".to_string(), Arc::new(Box::new(exec_wf_tool)));
         }
 
         registry_arc

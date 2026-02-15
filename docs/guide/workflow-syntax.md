@@ -34,6 +34,7 @@ exit: [end_node]
 | `version` | string | 否 | 版本号 |
 | `author` | string | 否 | 作者 |
 | `description` | string | 否 | 描述 |
+| `flows` | object | 否 | 工作流导入映射（见[工作流组合](./workflow-composition.md)） |
 
 ## 资源导入
 
@@ -65,6 +66,23 @@ prompts: ["/absolute/path/to/prompts/*.jgprompt"]
 - 相对路径：相对于 `.jgflow` 文件所在目录
 - 绝对路径：以 `/` 开头的路径
 - Glob 通配符：`*` 匹配文件名，`**` 匹配子目录
+
+### 工作流导入
+
+使用 `flows:` 将其他 `.jgflow` 文件的节点合并到当前工作流中，实现跨文件分支：
+
+```yaml
+flows: {
+  auth: "./workflows/auth.jgflow"
+  trading: "./workflows/trading.jgflow"
+}
+
+# 引用子工作流节点
+[route] if $ctx.need_auth -> [auth.start]
+[auth.done] -> [next_step]
+```
+
+子工作流的节点以别名为命名空间前缀合并到父 DAG（如 `auth.start`、`auth.verify`），变量引用自动转换。详见[工作流组合指南](./workflow-composition.md)。
 
 ### 本地 vs 远程资源
 
@@ -138,6 +156,15 @@ exit: [success, failure]
 [MyNode]             # 有效
 ```
 
+在边定义中，还可以使用命名空间格式引用导入的子工作流节点：
+
+```yaml
+[auth.start]         # 引用 auth 子工作流的 start 节点
+[trading.done]       # 引用 trading 子工作流的 done 节点
+```
+
+命名空间节点由 `flows:` 导入产生，详见[工作流组合](./workflow-composition.md)。
+
 ### 工具调用
 
 ```yaml
@@ -194,6 +221,15 @@ exit: [success, failure]
 # 布尔值
 [check] if $ctx.is_valid -> [proceed]
 [check] if !$ctx.is_valid -> [reject]
+```
+
+**跨工作流分支：** 条件边的目标可以是子工作流节点：
+
+```yaml
+[route] if $output.type == "auth" -> [auth.start]
+[route] if $output.type == "trade" -> [trading.start]
+[auth.done] -> [done]
+[trading.done] -> [done]
 ```
 
 **分支汇聚行为：** 当多个条件分支汇聚到同一节点时，使用 **OR 语义**（任意一个前驱完成即可执行），而非 AND 语义（等待所有前驱）。未执行的分支会被自动标记为不可达。详见[条件分支指南](./conditionals.md#分支汇聚语义)。
@@ -434,7 +470,7 @@ exit: [success, failure]
 ## 最佳实践
 
 1. **命名清晰** - 使用描述性的节点 ID
-2. **模块化** - 将复杂逻辑拆分为多个工作流
+2. **模块化** - 使用 `flows:` 将复杂逻辑拆分为多个工作流文件（见[工作流组合](./workflow-composition.md)）
 3. **错误处理** - 为关键节点添加 `on error` 路径
 4. **注释** - 使用 `#` 添加注释说明
 5. **版本控制** - 使用 `version` 字段跟踪变更

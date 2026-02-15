@@ -86,6 +86,10 @@ pub struct WorkflowGraph {
     pub python_imports: Vec<String>,
     // 【新增】Switch 路由表 (source_node_id -> SwitchRoute)
     pub switch_routes: HashMap<String, SwitchRoute>,
+    // 【新增】Flow 导入映射 (alias -> relative_path)，用于跨工作流图合并
+    pub flow_imports: HashMap<String, String>,
+    // 【新增】待解析的边（引用了命名空间节点，需要在 flow 合并后才能 commit）
+    pub pending_edges: Vec<(String, String, Edge)>,
 }
 
 impl Default for WorkflowGraph {
@@ -107,6 +111,8 @@ impl Default for WorkflowGraph {
             tool_patterns: Vec::new(),
             python_imports: Vec::new(),
             switch_routes: HashMap::new(),
+            flow_imports: HashMap::new(),
+            pending_edges: Vec::new(),
         }
     }
 }

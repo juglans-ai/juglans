@@ -19,6 +19,8 @@ pub enum WorkflowEvent {
     Token(String),
     Status(String),
     Error(String),
+    /// Meta 信息 — 转发 jug0 的 meta 事件到前端（chat_id, user_message_id 等）
+    Meta(Value),
     /// Client tool call — 发给前端执行，通过 result_tx 等待结果返回
     ToolCall {
         call_id: String,
@@ -166,6 +168,21 @@ impl WorkflowContext {
         tokio::spawn(async move {
             while let Some(token) = rx.recv().await {
                 let _ = event_sender.send(WorkflowEvent::Token(token));
+            }
+        });
+
+        Some(tx)
+    }
+
+    /// 获取 Meta 专用 Sender 的适配器
+    /// 将 Value 类型转化为 WorkflowEvent::Meta 类型
+    pub fn get_meta_sender_adapter(&self) -> Option<UnboundedSender<Value>> {
+        let event_sender = self.event_sender.clone()?;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
+
+        tokio::spawn(async move {
+            while let Some(meta) = rx.recv().await {
+                let _ = event_sender.send(WorkflowEvent::Meta(meta));
             }
         });
 

@@ -828,6 +828,10 @@ async fn handle_chat(
 
     // 构建 chat 参数
     let tools_json = custom_tools.map(|t| serde_json::to_string(&t).unwrap_or_default());
+    // 将前端 client tools 注入 context，供 workflow 内 chat() builtin 及 DSL 访问
+    if let Some(ref tools_str) = tools_json {
+        ctx.set("input.tools".to_string(), json!(tools_str)).ok();
+    }
     let sys_prompt = system_prompt_override;
     let project_root = state.project_root.clone();
 
@@ -928,6 +932,12 @@ async fn handle_chat(
                 Ok(Event::default()
                     .event("meta")
                     .data(json!({ "type": "meta", "status": s }).to_string()))
+            }
+            // Meta → event: meta (chat_id, user_message_id 等)
+            WorkflowEvent::Meta(data) => {
+                Ok(Event::default()
+                    .event("meta")
+                    .data(data.to_string()))
             }
             // Error → event: error
             WorkflowEvent::Error(e) => {

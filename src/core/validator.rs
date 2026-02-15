@@ -1,6 +1,7 @@
 // src/core/validator.rs
 use petgraph::algo::{is_cyclic_directed, toposort};
 use petgraph::Direction;
+use regex::Regex;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
@@ -69,6 +70,14 @@ pub struct WorkflowValidator;
 impl WorkflowValidator {
     /// Validate a workflow graph and return all issues found
     pub fn validate(graph: &WorkflowGraph) -> ValidationResult {
+        Self::validate_with_scope(graph, &HashSet::new())
+    }
+
+    /// Validate with additional variable prefixes from parent scope (e.g. foreach item)
+    fn validate_with_scope(
+        graph: &WorkflowGraph,
+        parent_vars: &HashSet<String>,
+    ) -> ValidationResult {
         let mut result = ValidationResult::new();
 
         // Check 1: Entry node exists
@@ -90,7 +99,16 @@ impl WorkflowValidator {
         Self::check_node_references(graph, &mut result);
 
         // Check 7: Validate nested workflows (foreach, loop)
-        Self::check_nested_workflows(graph, &mut result);
+        Self::check_nested_workflows(graph, parent_vars, &mut result);
+
+        // Check 8: Validate variable reference prefixes
+        Self::check_variable_references(graph, parent_vars, &mut result);
+
+        // Check 9: Validate switch routes
+        Self::check_switch_routes(graph, &mut result);
+
+        // Check 10: Validate edge conditions
+        Self::check_edge_conditions(graph, &mut result);
 
         result
     }
@@ -233,35 +251,30 @@ impl WorkflowValidator {
 
     /// Check node references for known tools
     fn check_node_references(graph: &WorkflowGraph, result: &mut ValidationResult) {
-        // Known built-in tools
+        // Known built-in tools (must match BuiltinRegistry::new() in builtins/mod.rs)
         let known_tools: HashSet<&str> = [
-            // Core AI tools
+            // AI tools
             "chat",
-            "prompt",
             "p",
-            // HTTP & IO
-            "http",
-            "log",
-            "emit",
-            // Context & State
-            "set",
-            "get",
-            "script",
-            // Control flow
-            "if",
-            "switch",
-            "parallel",
-            "sleep",
-            "retry",
-            "cache",
-            // Data transformation
-            "json_parse",
-            "json_stringify",
-            "template",
-            "transform",
-            "render",
-            // Notifications
+            "memory_search",
+            "history",
+            // Network tools
+            "fetch_url",
+            "fetch",
+            // System tools
+            "timer",
             "notify",
+            "reply",
+            "set_context",
+            "feishu_webhook",
+            // Devtools
+            "read_file",
+            "write_file",
+            "edit_file",
+            "glob",
+            "grep",
+            "bash",
+            "sh",
         ]
         .iter()
         .copied()
@@ -298,40 +311,242 @@ impl WorkflowValidator {
     ) {
         match tool_name {
             "chat" => {
+                if !params.contains_key("message") {
+                    result.add_error(
+                        "E007",
+                        "chat() requires 'message' parameter",
+                        Some(node_id),
+                    );
+                }
                 if !params.contains_key("agent") && !params.contains_key("system_prompt") {
                     result.add_warning(
                         "W005",
-                        "chat tool should have 'agent' or 'system_prompt' parameter",
+                        "chat() should have 'agent' or 'system_prompt' parameter",
                         Some(node_id),
                     );
                 }
             }
-            "prompt" => {
-                if !params.contains_key("slug") && !params.contains_key("content") {
+            "p" => {
+                if !params.contains_key("slug") && !params.contains_key("file") {
                     result.add_error(
-                        "E005",
-                        "prompt tool requires 'slug' or 'content' parameter",
+                        "E008",
+                        "p() requires 'slug' or 'file' parameter",
                         Some(node_id),
                     );
                 }
             }
-            "http" => {
+            "memory_search" => {
+                if !params.contains_key("query") {
+                    result.add_error(
+                        "E009",
+                        "memory_search() requires 'query' parameter",
+                        Some(node_id),
+                    );
+                }
+            }
+            "history" => {
+                if !params.contains_key("chat_id") {
+                    result.add_error(
+                        "E010",
+                        "history() requires 'chat_id' parameter",
+                        Some(node_id),
+                    );
+                }
+            }
+            "fetch" | "fetch_url" => {
                 if !params.contains_key("url") {
-                    result.add_error("E006", "http tool requires 'url' parameter", Some(node_id));
+                    result.add_error(
+                        "E011",
+                        &format!("{}() requires 'url' parameter", tool_name),
+                        Some(node_id),
+                    );
+                }
+            }
+            "read_file" => {
+                if !params.contains_key("file_path") {
+                    result.add_error(
+                        "E012",
+                        "read_file() requires 'file_path' parameter",
+                        Some(node_id),
+                    );
+                }
+            }
+            "write_file" => {
+                if !params.contains_key("file_path") {
+                    result.add_error(
+                        "E012",
+                        "write_file() requires 'file_path' parameter",
+                        Some(node_id),
+                    );
+                }
+                if !params.contains_key("content") {
+                    result.add_error(
+                        "E012",
+                        "write_file() requires 'content' parameter",
+                        Some(node_id),
+                    );
+                }
+            }
+            "edit_file" => {
+                for req in &["file_path", "old_string", "new_string"] {
+                    if !params.contains_key(*req) {
+                        result.add_error(
+                            "E012",
+                            &format!("edit_file() requires '{}' parameter", req),
+                            Some(node_id),
+                        );
+                    }
+                }
+            }
+            "bash" | "sh" => {
+                if !params.contains_key("command") && !params.contains_key("cmd") {
+                    result.add_error(
+                        "E013",
+                        &format!("{}() requires 'command' or 'cmd' parameter", tool_name),
+                        Some(node_id),
+                    );
+                }
+            }
+            "feishu_webhook" => {
+                if !params.contains_key("message") {
+                    result.add_error(
+                        "E014",
+                        "feishu_webhook() requires 'message' parameter",
+                        Some(node_id),
+                    );
+                }
+            }
+            "notify" => {
+                if !params.contains_key("message") && !params.contains_key("status") {
+                    result.add_error(
+                        "E015",
+                        "notify() requires 'message' or 'status' parameter",
+                        Some(node_id),
+                    );
                 }
             }
             _ => {}
         }
     }
 
+    /// Check variable reference prefixes in task parameters
+    fn check_variable_references(
+        graph: &WorkflowGraph,
+        parent_vars: &HashSet<String>,
+        result: &mut ValidationResult,
+    ) {
+        let mut valid_prefixes: HashSet<String> =
+            ["input", "output", "ctx", "reply", "error", "config", "bot"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+
+        // Include variables from parent scope (e.g. foreach item variables)
+        valid_prefixes.extend(parent_vars.iter().cloned());
+
+        // Collect all node IDs as valid variable prefixes (for $node_id.output references)
+        // Also add namespace root prefixes (e.g., "trading" from "trading.extract")
+        for idx in graph.graph.node_indices() {
+            let node = &graph.graph[idx];
+            valid_prefixes.insert(node.id.clone());
+            if let Some(root) = node.id.split('.').next() {
+                valid_prefixes.insert(root.to_string());
+            }
+            if let NodeType::Foreach { item, .. } = &node.node_type {
+                valid_prefixes.insert(item.clone());
+            }
+        }
+
+        let var_re = Regex::new(r"\$([a-zA-Z_][a-zA-Z0-9_.]*)").unwrap();
+
+        for idx in graph.graph.node_indices() {
+            let node = &graph.graph[idx];
+            if let NodeType::Task(action) = &node.node_type {
+                for (_param_name, param_value) in &action.params {
+                    for cap in var_re.captures_iter(param_value) {
+                        let var_path = &cap[1];
+                        let root = var_path.split('.').next().unwrap_or("");
+                        if !valid_prefixes.contains(root) {
+                            result.add_warning(
+                                "W006",
+                                &format!(
+                                    "Variable '${}' has unknown prefix '{}'. Known: $input, $output, $ctx, $reply, $error, $config",
+                                    var_path, root
+                                ),
+                                Some(&node.id),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Check switch routes for missing default case and duplicate values
+    fn check_switch_routes(graph: &WorkflowGraph, result: &mut ValidationResult) {
+        for (source_id, route) in &graph.switch_routes {
+            // Check for missing default case
+            let has_default = route.cases.iter().any(|c| c.value.is_none());
+            if !has_default {
+                result.add_warning(
+                    "W007",
+                    &format!(
+                        "Switch at [{}] has no 'default' case. Unmatched values will have no route.",
+                        source_id
+                    ),
+                    Some(source_id),
+                );
+            }
+
+            // Check for duplicate case values
+            let mut seen: HashSet<&str> = HashSet::new();
+            for case in &route.cases {
+                if let Some(ref val) = case.value {
+                    if !seen.insert(val.as_str()) {
+                        result.add_warning(
+                            "W008",
+                            &format!(
+                                "Switch at [{}] has duplicate case value '{}'",
+                                source_id, val
+                            ),
+                            Some(source_id),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Check edge conditions are not empty
+    fn check_edge_conditions(graph: &WorkflowGraph, result: &mut ValidationResult) {
+        for edge in graph.graph.edge_weights() {
+            if let Some(ref condition) = edge.condition {
+                if condition.trim().is_empty() {
+                    result.add_warning(
+                        "W009",
+                        "Edge has an empty condition expression",
+                        None,
+                    );
+                }
+            }
+        }
+    }
+
     /// Recursively validate nested workflows (foreach, loop bodies)
-    fn check_nested_workflows(graph: &WorkflowGraph, result: &mut ValidationResult) {
+    fn check_nested_workflows(
+        graph: &WorkflowGraph,
+        parent_vars: &HashSet<String>,
+        result: &mut ValidationResult,
+    ) {
         for idx in graph.graph.node_indices() {
             let node = &graph.graph[idx];
 
             match &node.node_type {
-                NodeType::Foreach { body, .. } => {
-                    let nested_result = Self::validate(body);
+                NodeType::Foreach { item, body, .. } => {
+                    // Pass foreach item variable to nested scope
+                    let mut nested_vars = parent_vars.clone();
+                    nested_vars.insert(item.clone());
+                    let nested_result = Self::validate_with_scope(body, &nested_vars);
                     for err in nested_result.errors {
                         result.add_error(
                             &format!("{}/nested", err.code),
@@ -348,7 +563,7 @@ impl WorkflowValidator {
                     }
                 }
                 NodeType::Loop { body, .. } => {
-                    let nested_result = Self::validate(body);
+                    let nested_result = Self::validate_with_scope(body, parent_vars);
                     for err in nested_result.errors {
                         result.add_error(
                             &format!("{}/nested", err.code),
@@ -382,13 +597,13 @@ name: "Test Workflow"
 entry: [start]
 
 [start]: chat(agent="default", message="hello")
-[end]: log(message="done")
+[end]: notify(message="done")
 
 [start] -> [end]
 "#;
         let graph = GraphParser::parse(content).unwrap();
         let result = WorkflowValidator::validate(&graph);
-        assert!(result.is_valid);
+        assert!(result.is_valid, "errors: {:?}", result.errors);
     }
 
     #[test]
@@ -397,11 +612,101 @@ entry: [start]
 name: "Test Workflow"
 entry: [missing]
 
-[start]: chat(agent="default")
+[start]: chat(agent="default", message="hello")
 "#;
         let graph = GraphParser::parse(content).unwrap();
         let result = WorkflowValidator::validate(&graph);
         assert!(!result.is_valid);
         assert!(result.errors.iter().any(|e| e.code == "E001"));
+    }
+
+    #[test]
+    fn test_missing_required_param_chat() {
+        let content = r#"
+name: "Test"
+entry: [start]
+[start]: chat(agent="test")
+"#;
+        let graph = GraphParser::parse(content).unwrap();
+        let result = WorkflowValidator::validate(&graph);
+        assert!(!result.is_valid);
+        assert!(result.errors.iter().any(|e| e.code == "E007"));
+    }
+
+    #[test]
+    fn test_missing_required_param_fetch() {
+        let content = r#"
+name: "Test"
+entry: [start]
+[start]: fetch(method="GET")
+"#;
+        let graph = GraphParser::parse(content).unwrap();
+        let result = WorkflowValidator::validate(&graph);
+        assert!(!result.is_valid);
+        assert!(result.errors.iter().any(|e| e.code == "E011"));
+    }
+
+    #[test]
+    fn test_unknown_variable_prefix() {
+        let content = r#"
+name: "Test"
+entry: [start]
+[start]: notify(message=$unknown.var)
+"#;
+        let graph = GraphParser::parse(content).unwrap();
+        let result = WorkflowValidator::validate(&graph);
+        assert!(result.warnings.iter().any(|w| w.code == "W006"));
+    }
+
+    #[test]
+    fn test_valid_variable_prefix() {
+        let content = r#"
+name: "Test"
+entry: [start]
+[start]: notify(message=$input.query)
+"#;
+        let graph = GraphParser::parse(content).unwrap();
+        let result = WorkflowValidator::validate(&graph);
+        assert!(!result.warnings.iter().any(|w| w.code == "W006"));
+    }
+
+    #[test]
+    fn test_switch_missing_default() {
+        let content = r#"
+name: "Test"
+entry: [start]
+
+[start]: notify(message="test")
+[a]: notify(message="a")
+[b]: notify(message="b")
+
+[start] -> switch $type {
+    "a": [a]
+    "b": [b]
+}
+"#;
+        let graph = GraphParser::parse(content).unwrap();
+        let result = WorkflowValidator::validate(&graph);
+        assert!(result.warnings.iter().any(|w| w.code == "W007"));
+    }
+
+    #[test]
+    fn test_switch_with_default_no_warning() {
+        let content = r#"
+name: "Test"
+entry: [start]
+
+[start]: notify(message="test")
+[a]: notify(message="a")
+[fallback]: notify(message="fb")
+
+[start] -> switch $type {
+    "a": [a]
+    default: [fallback]
+}
+"#;
+        let graph = GraphParser::parse(content).unwrap();
+        let result = WorkflowValidator::validate(&graph);
+        assert!(!result.warnings.iter().any(|w| w.code == "W007"));
     }
 }

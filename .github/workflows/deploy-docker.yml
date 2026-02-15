@@ -1,0 +1,70 @@
+name: Deploy Docker Image
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+  BINARY_NAME: juglans
+
+jobs:
+  build-and-push:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: docker-x86_64-unknown-linux-gnu
+
+      - name: Build release binary
+        run: cargo build --release --target x86_64-unknown-linux-gnu
+
+      - name: Prepare Docker context
+        run: |
+          mkdir -p docker-context/workers
+          cp target/x86_64-unknown-linux-gnu/release/juglans docker-context/
+          cp src/workers/python_worker.py docker-context/workers/
+          cp Dockerfile docker-context/
+
+      - name: Get version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: docker-context
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/juglans:latest
+            ghcr.io/${{ github.repository_owner }}/juglans:${{ steps.version.outputs.version }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/juglans:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/juglans:${{ steps.version.outputs.version }}

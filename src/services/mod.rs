@@ -7,6 +7,8 @@ pub mod tool_registry;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod config;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod github;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod jug0;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mcp;

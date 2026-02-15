@@ -15,7 +15,8 @@ use crate::core::agent_parser::AgentResource;
 use crate::core::graph::WorkflowGraph;
 use crate::core::prompt_parser::PromptResource;
 use crate::services::config::JuglansConfig;
-use crate::services::interface::JuglansRuntime;
+use tracing::{info, error};
+use crate::services::interface::{ChatToolHandler, JuglansRuntime};
 
 /// 定义对话输出类型，区分最终文本和工具调用请求
 #[derive(Debug)]
@@ -396,7 +397,7 @@ impl Jug0Client {
             payload["username"] = json!(username);
         }
 
-        // Add workflow_id if present
+        // Add workflow_id: set UUID if resolved, explicit null to unlink, or warning if unresolved
         let workflow_suffix = if let Some(wf_id) = workflow_id {
             payload["workflow_id"] = json!(wf_id);
             let wf_ref = agent.workflow.as_deref().unwrap_or("?");
@@ -405,6 +406,8 @@ impl Jug0Client {
             let wf_ref = agent.workflow.as_deref().unwrap_or("?");
             format!(" (⚠️ workflow '{}' not bound - not found on server)", wf_ref)
         } else {
+            // No workflow field → explicitly unlink
+            payload["workflow_id"] = json!(null);
             String::new()
         };
 
@@ -886,8 +889,10 @@ impl JuglansRuntime for Jug0Client {
         tools_def: Option<Vec<Value>>,
         chat_id: Option<&str>,
         token_sender: Option<UnboundedSender<String>>,
+        meta_sender: Option<UnboundedSender<Value>>,
         state: Option<&str>,
         history: Option<&str>,
+        tool_handler: Option<Arc<dyn ChatToolHandler>>,
     ) -> Result<ChatOutput> {
         // 验证 agent_config 包含必须字段
         if let Some(agent_obj) = agent_config.as_object() {
@@ -998,14 +1003,61 @@ impl JuglansRuntime for Jug0Client {
                     if let Some(id) = m.get("chat_id").and_then(|v| v.as_str()) {
                         final_id = id.to_string();
                     }
+                    // 转发完整 meta 事件到前端（chat_id, user_message_id 等）
+                    if let Some(sender) = &meta_sender {
+                        let _ = sender.send(m);
+                    }
                 }
                 continue;
             }
 
             if ev.event == "tool_call" {
                 if let Ok(d) = serde_json::from_str::<Value>(&ev.data) {
-                    if let Some(c) = d.get("tools").and_then(|v| v.as_array()) {
-                        tool_calls.extend(c.clone());
+                    let tools = d.get("tools").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+
+                    if let Some(ref handler) = tool_handler {
+                        // SSE 统一流：执行工具 → POST /tool-result → 继续读流
+                        let call_id = d.get("call_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let mut results = Vec::new();
+
+                        for tool in &tools {
+                            let name = tool["name"].as_str()
+                                .or_else(|| tool.pointer("/function/name").and_then(|v| v.as_str()))
+                                .unwrap_or("unknown");
+                            let args = tool["arguments"].as_str()
+                                .or_else(|| tool.pointer("/function/arguments").and_then(|v| v.as_str()))
+                                .unwrap_or("{}");
+                            let tool_call_id = tool["id"].as_str().unwrap_or("").to_string();
+
+                            info!("🔧 [Tool Handler] Executing: {}({:.80})", name, args);
+                            let content = match handler.handle_tool_call(name, args).await {
+                                Ok(r) => r,
+                                Err(e) => {
+                                    error!("🔧 [Tool Handler] {} failed: {}", name, e);
+                                    format!("Error: {}", e)
+                                }
+                            };
+                            info!("🔧 [Tool Handler] {} → {:.80}", name, content.replace('\n', " "));
+                            results.push(json!({"tool_call_id": tool_call_id, "content": content}));
+                        }
+
+                        // POST /api/chat/tool-result → jug0 channel 接收 → SSE 流恢复
+                        let post_result = self
+                            .build_auth_request(reqwest::Method::POST,
+                                &format!("{}/api/chat/tool-result", self.base_url))
+                            .json(&json!({"call_id": call_id, "results": results}))
+                            .send()
+                            .await;
+
+                        match post_result {
+                            Ok(r) => info!("🔧 [Tool Handler] tool-result POST: {}", r.status()),
+                            Err(e) => error!("🔧 [Tool Handler] tool-result POST failed: {}", e),
+                        }
+                        continue; // SSE 流恢复，继续读
+                    } else {
+                        // 无 handler → break 返回 ToolCalls（兼容旧调用方）
+                        tool_calls.extend(tools);
+                        break;
                     }
                 }
                 continue;

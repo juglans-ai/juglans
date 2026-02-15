@@ -9,6 +9,7 @@
 ## Guide
 * [Concepts](guide/concepts.md)
 * [Workflow Syntax](guide/workflow-syntax.md)
+* [Workflow Composition](guide/workflow-composition.md)
 * [Agent Syntax](guide/agent-syntax.md)
 * [Prompt Syntax](guide/prompt-syntax.md)
 * [Tools](guide/tools.md)

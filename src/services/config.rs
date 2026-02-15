@@ -1,11 +1,11 @@
 // src/services/config.rs
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 use tracing::{debug, info};
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct AccountConfig {
     pub id: String,
     pub name: String,
@@ -13,7 +13,7 @@ pub struct AccountConfig {
     pub api_key: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct WorkspaceConfig {
     pub id: String,
     pub name: String,
@@ -31,7 +31,7 @@ pub struct WorkspaceConfig {
     pub exclude: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct McpServerConfig {
     pub name: String,
     pub base_url: String,
@@ -39,13 +39,13 @@ pub struct McpServerConfig {
     pub token: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Jug0Config {
     pub base_url: String,
 }
 
 // 【新增】Server 配置部分
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ServerConfig {
     #[serde(default = "default_server_host")]
     pub host: String,
@@ -54,7 +54,7 @@ pub struct ServerConfig {
 }
 
 // 【新增】Debug 配置部分
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct DebugConfig {
     /// 显示节点执行信息
     #[serde(default)]
@@ -74,20 +74,20 @@ pub struct DebugConfig {
 }
 
 // Bot 配置
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct BotConfig {
     pub telegram: Option<TelegramBotConfig>,
     pub feishu: Option<FeishuBotConfig>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TelegramBotConfig {
     pub token: String,
     #[serde(default = "default_bot_agent")]
     pub agent: String,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct FeishuBotConfig {
     /// 事件订阅模式（双向）
     pub app_id: Option<String>,
@@ -101,6 +101,12 @@ pub struct FeishuBotConfig {
     /// API base URL: "https://open.feishu.cn" (默认) 或 "https://open.larksuite.com" (Lark 国际版)
     #[serde(default = "default_feishu_base_url")]
     pub base_url: String,
+    /// 审批人列表（open_id）
+    #[serde(default)]
+    pub approvers: Vec<String>,
+    /// 执行模式: "local" (本地执行) 或 "jug0" (SSE 客户端)，默认根据 jug0.base_url 自动判断
+    #[serde(default)]
+    pub mode: Option<String>,
 }
 
 fn default_bot_agent() -> String {
@@ -120,7 +126,7 @@ fn default_server_port() -> u16 {
     3000
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct JuglansConfig {
     pub account: AccountConfig,
     pub workspace: Option<WorkspaceConfig>,

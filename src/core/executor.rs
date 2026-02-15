@@ -556,6 +556,11 @@ impl WorkflowExecutor {
         debug!("👤 User: {}", config.account.name);
         let context = WorkflowContext::new();
 
+        // 注入 juglans.toml 配置到 $config
+        if let Ok(config_value) = serde_json::to_value(config) {
+            context.set("config".to_string(), config_value)?;
+        }
+
         // 设置输入数据到 ctx.input
         if let Some(input_val) = input {
             if let Some(obj) = input_val.as_object() {

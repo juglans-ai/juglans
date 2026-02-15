@@ -110,6 +110,7 @@ Include key findings and recommendations.
 - 编排复杂的多步骤任务
 - 实现条件分支和循环
 - 组合多个 Agent 和 Prompt
+- 通过 `flows:` 组合多个工作流文件
 
 ### 示例
 
@@ -126,6 +127,42 @@ exit: [end]
 
 [start] -> [process] -> [end]
 ```
+
+---
+
+## 工作流组合
+
+当单个工作流变得复杂时，可以通过 `flows:` 将多个 `.jgflow` 文件组合为一张统一的执行图：
+
+```yaml
+# main.jgflow
+flows: {
+  auth: "./workflows/auth.jgflow"
+  trading: "./workflows/trading.jgflow"
+}
+
+[start] -> [route]
+[route] if $ctx.need_auth -> [auth.start]
+[route] if $ctx.need_trade -> [trading.start]
+[auth.done] -> [done]
+[trading.done] -> [done]
+```
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  main.jgflow (父工作流)                                     │
+│                                                              │
+│   [start] ──→ [route] ──→ [auth.start] ──→ ... ──→ [done]  │
+│                   │                                    ↑     │
+│                   └──→ [trading.start] ──→ ... ────────┘     │
+│                                                              │
+│         auth.* 和 trading.* 节点来自子工作流                  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+子工作流的节点以别名为命名空间前缀合并到父 DAG 中，所有节点共享同一个执行上下文。子工作流内部的变量引用会自动添加命名空间前缀（仅节点引用变量，`$ctx`/`$input`/`$output` 不受影响）。
+
+详见[工作流组合指南](./workflow-composition.md)。
 
 ---
 

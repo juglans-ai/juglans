@@ -27,6 +27,7 @@ use core::executor::WorkflowExecutor;
 use core::parser::GraphParser;
 use core::prompt_parser::PromptParser;
 use core::renderer::JwlRenderer;
+use core::resolver;
 use core::validator::WorkflowValidator;
 use services::agent_loader::AgentRegistry;
 use services::config::JuglansConfig;
@@ -34,7 +35,9 @@ use services::interface::JuglansRuntime;
 use services::jug0::Jug0Client;
 use services::mcp::McpClient;
 use services::prompt_loader::PromptRegistry;
+use services::github;
 use services::web_server;
+use core::skill_parser;
 
 #[derive(Parser)]
 #[command(name = "juglans", author = "Juglans Team", version = env!("CARGO_PKG_VERSION"))]
@@ -160,6 +163,39 @@ enum Commands {
         #[arg(long)]
         port: Option<u16>,
     },
+    /// Manage Agent Skills (fetch from GitHub, convert to .jgprompt)
+    Skills {
+        #[command(subcommand)]
+        action: SkillsAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum SkillsAction {
+    /// Fetch skills from a GitHub repository and save as .jgprompt
+    Add {
+        /// GitHub repository (owner/repo), e.g. "anthropics/skills"
+        repo: String,
+        /// Specific skill(s) to fetch (can be repeated)
+        #[arg(long = "skill")]
+        skills: Vec<String>,
+        /// Fetch all available skills
+        #[arg(long)]
+        all: bool,
+        /// List available skills without downloading
+        #[arg(long)]
+        list: bool,
+        /// Output directory for .jgprompt files (default: ./prompts)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// List locally installed skills
+    List,
+    /// Remove a locally installed skill
+    Remove {
+        /// Skill name to remove
+        name: String,
+    },
 }
 
 /// Resolve input data from --input or --input-file
@@ -214,6 +250,14 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
             info!("🚀 Starting Workflow Graph Logic: {:?}", source_file_path);
             let local_config = JuglansConfig::load()?;
             let mut workflow_definition_obj = GraphParser::parse(&source_raw_text)?;
+
+            // 解析 flow imports 并合并子图（编译时图合并）
+            let mut import_stack = vec![absolute_target_path.clone()];
+            resolver::resolve_flow_imports(
+                &mut workflow_definition_obj,
+                &relative_base_offset,
+                &mut import_stack,
+            )?;
 
             let mut prompt_registry_inst = PromptRegistry::new();
             let mut agent_registry_inst = AgentRegistry::new();
@@ -304,6 +348,16 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
 
                 let mut workflow_parsed_data = GraphParser::parse(&wf_source_data_str)?;
                 let wf_context_base_dir = wf_physical_path.parent().unwrap_or(Path::new("."));
+
+                // 解析 flow imports 并合并子图（编译时图合并）
+                let wf_canonical = fs::canonicalize(&wf_physical_path)
+                    .unwrap_or_else(|_| wf_physical_path.clone());
+                let mut import_stack = vec![wf_canonical];
+                resolver::resolve_flow_imports(
+                    &mut workflow_parsed_data,
+                    wf_context_base_dir,
+                    &mut import_stack,
+                )?;
 
                 let p_import_list = resolve_import_patterns_verbose(
                     wf_context_base_dir,
@@ -1504,6 +1558,110 @@ async fn handle_bot(platform: &str, agent_override: Option<String>, port: Option
     Ok(())
 }
 
+async fn handle_skills(action: &SkillsAction) -> Result<()> {
+    match action {
+        SkillsAction::Add { repo, skills, all, list, output } => {
+            // --list: show available skills and exit
+            if *list {
+                println!("Fetching skill list from {}...", repo);
+                let names = github::list_remote_skills(repo).await?;
+                if names.is_empty() {
+                    println!("No skills found in {}", repo);
+                } else {
+                    println!("Available skills in {}:", repo);
+                    for name in &names {
+                        println!("  - {}", name);
+                    }
+                    println!("\nUse: juglans skills add {} --skill <name>", repo);
+                }
+                return Ok(());
+            }
+
+            // Determine which skills to fetch
+            let skill_names = if *all {
+                println!("Fetching all skills from {}...", repo);
+                github::list_remote_skills(repo).await?
+            } else if skills.is_empty() {
+                return Err(anyhow!(
+                    "No skill specified. Use --skill <name>, --all, or --list.\n\
+                     Example: juglans skills add {} --skill pdf",
+                    repo
+                ));
+            } else {
+                skills.clone()
+            };
+
+            // Output directory
+            let prompts_dir = output.clone().unwrap_or_else(|| PathBuf::from("./prompts"));
+            fs::create_dir_all(&prompts_dir)?;
+
+            // Create temp dir for fetching
+            let temp_dir = env::temp_dir().join(format!("juglans-skills-{}", uuid::Uuid::new_v4()));
+            fs::create_dir_all(&temp_dir)?;
+
+            // Fetch from GitHub
+            let fetched = github::fetch_skills(repo, &skill_names, &temp_dir).await?;
+
+            let mut success_count = 0;
+            for skill_entry in &fetched {
+                match skill_parser::load_skill_dir(&skill_entry.local_dir) {
+                    Ok(skill) => {
+                        let jgprompt_content = skill_parser::skill_to_jgprompt(&skill);
+                        let output_path = prompts_dir.join(format!("{}.jgprompt", skill.name));
+                        fs::write(&output_path, &jgprompt_content)?;
+                        println!("  ✓ Saved: {}", output_path.display());
+                        success_count += 1;
+                    }
+                    Err(e) => {
+                        eprintln!("  ✗ Failed to parse skill '{}': {}", skill_entry.name, e);
+                    }
+                }
+            }
+
+            // Cleanup temp dir
+            let _ = fs::remove_dir_all(&temp_dir);
+
+            println!(
+                "\nDone! {} skill(s) saved to {}/",
+                success_count,
+                prompts_dir.display()
+            );
+            println!("Use 'juglans apply {}/*.jgprompt' to push to jug0.", prompts_dir.display());
+        }
+        SkillsAction::List => {
+            let prompts_dir = PathBuf::from("./prompts");
+            if !prompts_dir.is_dir() {
+                println!("No prompts/ directory found. No skills installed.");
+                return Ok(());
+            }
+            let mut found = false;
+            if let Ok(entries) = fs::read_dir(&prompts_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|e| e.to_str()) == Some("jgprompt") {
+                        let name = path.file_stem().unwrap().to_string_lossy();
+                        println!("  - {}", name);
+                        found = true;
+                    }
+                }
+            }
+            if !found {
+                println!("No .jgprompt files found in prompts/");
+            }
+        }
+        SkillsAction::Remove { name } => {
+            let path = PathBuf::from(format!("./prompts/{}.jgprompt", name));
+            if path.exists() {
+                fs::remove_file(&path)?;
+                println!("Removed: {}", path.display());
+            } else {
+                println!("Skill '{}' not found at {}", name, path.display());
+            }
+        }
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
@@ -1561,6 +1719,9 @@ async fn main() -> Result<()> {
             }
             Commands::Bot { platform, agent, port } => {
                 handle_bot(platform, agent.clone(), *port).await?;
+            }
+            Commands::Skills { action } => {
+                handle_skills(action).await?;
             }
         }
     } else if let Some(ref file_path) = application_cli.file {

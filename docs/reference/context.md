@@ -10,6 +10,7 @@
 | `$output` | 当前节点输出 | 否 |
 | `$ctx` | 自定义上下文 | 是 |
 | `$reply` | AI 回复元数据 | 否 |
+| `$alias.node.field` | 子工作流节点输出（由 `flows:` 导入产生） | 否 |
 
 ## $input - 输入变量
 
@@ -171,6 +172,43 @@ AI 回复的元数据信息。
   token_count=$reply.tokens
 )
 ```
+
+---
+
+## 命名空间变量（Flow Imports）
+
+当使用 `flows:` 导入子工作流时，子工作流内部的节点引用变量会自动添加命名空间前缀。
+
+### 转换规则
+
+只有第一段匹配子工作流内部节点 ID 的变量才会加前缀。全局变量（`$ctx`、`$input`、`$output`）不受影响：
+
+```yaml
+# 假设 auth 子工作流内有 verify、extract 两个节点
+
+# 子工作流内部写法           →  合并后实际变量
+$verify.output              →  $auth.verify.output
+$extract.output.intent      →  $auth.extract.output.intent
+$ctx.some_var               →  $ctx.some_var          # 不变
+$input.message              →  $input.message          # 不变
+$output                     →  $output                 # 不变
+```
+
+### 在父工作流中使用
+
+```yaml
+flows: {
+  auth: "./workflows/auth.jgflow"
+}
+
+# 通过命名空间路径访问子工作流节点输出
+[next]: chat(message=$auth.verify.output)
+
+# 条件中使用
+[check] if $auth.extract.output.intent == "trade" -> [trade]
+```
+
+详见[工作流组合指南](../guide/workflow-composition.md)。
 
 ---
 

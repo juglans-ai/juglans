@@ -1,6 +1,6 @@
 [package]
 name = "juglans" # 【修改】从 jwl_compiler 改为 juglans
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 default-run = "juglans"
 description = "Compiler and runtime for Juglans Workflow Language (JWL)"
@@ -55,6 +55,7 @@ tokio-stream = "0.1"
 # 【新增】智能终端输入和渲染
 crossterm = "0.28"
 termimad = "0.30"
+dashmap = "6"
 
 [features]
 default = ["native"]

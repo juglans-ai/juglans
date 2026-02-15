@@ -148,6 +148,19 @@ impl GraphParser {
             "version" => workflow.version = Self::parse_text_value_raw(val_node),
             "author" => workflow.author = Self::parse_text_value_raw(val_node),
             "description" => workflow.description = Self::parse_text_value_raw(val_node),
+            "flows" => {
+                // 解析 flows: { alias: "path", ... } 对象映射
+                if val_node.as_rule() == Rule::meta_val_map {
+                    for pair in val_node.into_inner() {
+                        if pair.as_rule() == Rule::meta_map_pair {
+                            let mut it = pair.into_inner();
+                            let alias = it.next().unwrap().as_str().to_string();
+                            let path = it.next().unwrap().as_str().trim_matches('"').to_string();
+                            workflow.flow_imports.insert(alias, path);
+                        }
+                    }
+                }
+            }
             "entry" | "exit" | "libs" | "prompts" | "agents" | "tools" | "python" => {
                 let string_vec = Self::parse_string_list_helper(val_node)?;
                 match key_str {
@@ -223,6 +236,12 @@ impl GraphParser {
                     let mut p_it = p_pair.into_inner();
                     let pk = p_it.next().unwrap().as_str().to_string();
                     let pv = p_it.next().unwrap().as_str().trim().to_string();
+                    if param_map.contains_key(&pk) {
+                        return Err(anyhow!(
+                            "Duplicate parameter '{}' in node [{}]",
+                            pk, node_id_str
+                        ));
+                    }
                     param_map.insert(pk, pv);
                 }
                 NodeType::Task(Action {
@@ -415,6 +434,15 @@ impl GraphParser {
         t_id: &str,
         e_obj: Edge,
     ) -> Result<()> {
+        // 命名空间节点（含 '.'）在 parse 阶段还不存在，需要延迟到 flow 合并后再 commit
+        let f_is_namespaced = f_id.contains('.');
+        let t_is_namespaced = t_id.contains('.');
+
+        if f_is_namespaced || t_is_namespaced {
+            workflow.pending_edges.push((f_id.to_string(), t_id.to_string(), e_obj));
+            return Ok(());
+        }
+
         let f_idx = *workflow.node_map.get(f_id).ok_or_else(|| {
             anyhow!(
                 "Graph Error: Attempted to link from undefined node '{}'.",
@@ -513,5 +541,85 @@ entry: [start]
         assert_eq!(switch_route.cases[1].target, "case_b");
         assert_eq!(switch_route.cases[2].value, None); // default
         assert_eq!(switch_route.cases[2].target, "fallback");
+    }
+
+    #[test]
+    fn test_missing_comma_detected() {
+        let content = r#"
+name: "Test"
+entry: [start]
+[start]: notify(message="hello" status="ok")
+"#;
+        let result = GraphParser::parse(content);
+        assert!(
+            result.is_err(),
+            "Missing comma between parameters should cause parse error"
+        );
+    }
+
+    #[test]
+    fn test_valid_comma_separated_params() {
+        let content = r#"
+name: "Test"
+entry: [start]
+[start]: notify(message="hello", status="ok")
+"#;
+        let result = GraphParser::parse(content);
+        assert!(result.is_ok(), "Comma-separated params should parse: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_comparison_in_expression() {
+        // == in edge conditions should still work
+        let content = r#"
+name: "Test"
+entry: [start]
+[start]: notify(message="test")
+[a]: notify(message="a")
+[b]: notify(message="b")
+[start] if $output.category == "technical" -> [a]
+[start] -> [b]
+"#;
+        let result = GraphParser::parse(content);
+        assert!(result.is_ok(), "Comparison operators should be valid: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_duplicate_param_detected() {
+        let content = r#"
+name: "Test"
+entry: [start]
+[start]: notify(message="first", message="second")
+"#;
+        let result = GraphParser::parse(content);
+        assert!(
+            result.is_err(),
+            "Duplicate parameter keys should cause parse error"
+        );
+    }
+
+    #[test]
+    fn test_multiline_params_with_commas() {
+        let content = r#"
+name: "Test"
+entry: [start]
+[start]: chat(
+  agent="helper",
+  message=$input.query
+)
+"#;
+        let result = GraphParser::parse(content);
+        assert!(result.is_ok(), "Multiline params should parse: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_string_concat_expression() {
+        let content = r#"
+name: "Test"
+entry: [start]
+[start]: chat(agent="helper", message="[Expert] " + $input.query)
+"#;
+        let result = GraphParser::parse(content);
+        assert!(result.is_ok(), "String concat should parse: {:?}", result.err());
     }
 }

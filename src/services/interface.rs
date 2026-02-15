@@ -3,13 +3,22 @@ use crate::services::jug0::ChatOutput;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
+use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
+
+/// 工具执行回调 — 由调用方提供，runtime.chat() 收到 tool_call 事件时内联调用
+#[async_trait]
+pub trait ChatToolHandler: Send + Sync {
+    async fn handle_tool_call(&self, tool_name: &str, arguments_json: &str) -> Result<String>;
+}
 
 /// 定义 JWL 运行时所需的外部能力接口
 #[async_trait]
 pub trait JuglansRuntime: Send + Sync {
-    /// 核心对话能力
-    /// 增加 token_sender 用于流式透传
+    /// 核心对话能力（SSE 统一流）
+    ///
+    /// 当 tool_handler 为 Some 时，tool_call 事件在 SSE 流内处理（执行工具 + POST /tool-result），
+    /// 始终返回 ChatOutput::Final。当为 None 时，遇到 tool_call 即 break 返回 ChatOutput::ToolCalls。
     async fn chat(
         &self,
         agent_config: Value,
@@ -17,8 +26,10 @@ pub trait JuglansRuntime: Send + Sync {
         tools: Option<Vec<Value>>,
         chat_id: Option<&str>,
         token_sender: Option<UnboundedSender<String>>,
-        state: Option<&str>,       // 消息状态
-        history: Option<&str>,     // 上下文控制: "false" 或 JSON 数组字符串
+        meta_sender: Option<UnboundedSender<Value>>,
+        state: Option<&str>,
+        history: Option<&str>,
+        tool_handler: Option<Arc<dyn ChatToolHandler>>,
     ) -> Result<ChatOutput>;
 
     /// 资源加载能力：获取提示词内容

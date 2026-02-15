@@ -20,8 +20,11 @@ static PYTHON_RUNTIME: OnceLock<Arc<PythonRuntime>> = OnceLock::new();
 /// Python runtime for executing external Python calls
 pub struct PythonRuntime {
     pool: PythonWorkerPool,
-    /// Imported modules (from workflow python: [...] declaration)
+    /// Imported modules (normalized names, e.g. "bill_utils" from "./bill_utils.py")
     imported_modules: Vec<String>,
+    /// Map from normalized module name back to original import path
+    /// e.g. "bill_utils" -> "./bill_utils.py"
+    import_path_map: HashMap<String, String>,
 }
 
 impl PythonRuntime {
@@ -31,6 +34,7 @@ impl PythonRuntime {
         Ok(Self {
             pool,
             imported_modules: Vec::new(),
+            import_path_map: HashMap::new(),
         })
     }
 
@@ -49,8 +53,26 @@ impl PythonRuntime {
     }
 
     /// Set the imported modules for this runtime
+    /// Normalizes file paths (e.g. "./bill_utils.py" -> "bill_utils") for matching,
+    /// while preserving original paths for the Python worker to resolve.
     pub fn set_imports(&mut self, imports: Vec<String>) {
-        self.imported_modules = imports;
+        self.imported_modules = Vec::new();
+        self.import_path_map = HashMap::new();
+        for import in &imports {
+            let module_name = if import.ends_with(".py") {
+                import
+                    .rsplit('/')
+                    .next()
+                    .map(|f| f.trim_end_matches(".py"))
+                    .unwrap_or(import)
+                    .to_string()
+            } else {
+                import.clone()
+            };
+            self.import_path_map
+                .insert(module_name.clone(), import.clone());
+            self.imported_modules.push(module_name);
+        }
     }
 
     /// Check if a module is imported
@@ -86,9 +108,20 @@ impl PythonRuntime {
         // e.g., "sklearn.ensemble.RandomForestClassifier" -> target="sklearn.ensemble", method="RandomForestClassifier"
         let (target, method) = self.parse_call_path(call_path)?;
 
-        debug!("Python call: {}.{}({:?}, {:?})", target, method, args, kwargs);
+        // Map normalized module name back to original import path
+        // e.g. "bill_utils" -> "./bill_utils.py" so the worker can resolve file imports
+        let actual_target = self
+            .import_path_map
+            .get(&target)
+            .cloned()
+            .unwrap_or(target.clone());
 
-        let response = self.pool.call(&target, &method, args, kwargs)?;
+        debug!(
+            "Python call: {}.{}({:?}, {:?}) (target: {})",
+            target, method, args, kwargs, actual_target
+        );
+
+        let response = self.pool.call(&actual_target, &method, args, kwargs)?;
 
         if response.is_error() {
             let error = response.error.ok_or_else(|| anyhow!("Unknown Python error"))?;
