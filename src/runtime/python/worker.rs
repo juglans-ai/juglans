@@ -33,7 +33,10 @@ impl PythonWorker {
         // Find the worker script path relative to the executable
         let worker_script = Self::find_worker_script()?;
 
-        debug!("Spawning Python worker {} with script: {:?}", worker_id, worker_script);
+        debug!(
+            "Spawning Python worker {} with script: {:?}",
+            worker_id, worker_script
+        );
 
         let mut process = Command::new("python3")
             .arg(&worker_script)
@@ -43,8 +46,14 @@ impl PythonWorker {
             .spawn()
             .with_context(|| format!("Failed to spawn Python worker {}", worker_id))?;
 
-        let stdin = process.stdin.take().ok_or_else(|| anyhow!("Failed to get stdin"))?;
-        let stdout = process.stdout.take().ok_or_else(|| anyhow!("Failed to get stdout"))?;
+        let stdin = process
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow!("Failed to get stdin"))?;
+        let stdout = process
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow!("Failed to get stdout"))?;
 
         let mut worker = Self {
             process,
@@ -140,9 +149,9 @@ impl PythonWorker {
     /// Check if the worker process is still alive
     pub fn is_alive(&mut self) -> bool {
         match self.process.try_wait() {
-            Ok(None) => true,        // Still running
-            Ok(Some(_)) => false,    // Exited
-            Err(_) => false,         // Error checking
+            Ok(None) => true,     // Still running
+            Ok(Some(_)) => false, // Exited
+            Err(_) => false,      // Error checking
         }
     }
 
@@ -218,7 +227,9 @@ impl PythonWorkerPool {
         kwargs: HashMap<String, serde_json::Value>,
     ) -> Result<PythonResponse> {
         let worker_lock = self.get_worker();
-        let mut worker = worker_lock.lock().map_err(|e| anyhow!("Worker lock poisoned: {}", e))?;
+        let mut worker = worker_lock
+            .lock()
+            .map_err(|e| anyhow!("Worker lock poisoned: {}", e))?;
 
         // Check if worker is still alive
         if !worker.is_alive() {
@@ -251,7 +262,12 @@ mod tests {
     #[ignore] // Requires Python worker script to be present
     fn test_worker_call() {
         let mut worker = PythonWorker::spawn(0).unwrap();
-        let resp = worker.call("json", "dumps", vec![serde_json::json!({"a": 1})], HashMap::new());
+        let resp = worker.call(
+            "json",
+            "dumps",
+            vec![serde_json::json!({"a": 1})],
+            HashMap::new(),
+        );
         assert!(resp.is_ok());
         let resp = resp.unwrap();
         assert!(!resp.is_error());

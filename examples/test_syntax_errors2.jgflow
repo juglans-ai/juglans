@@ -1,0 +1,7 @@
+name: "Test Syntax Errors 2"
+entry: [start]
+
+# Missing closing bracket in nested structure
+[start]: notify(message="hello", config=[1, 2)
+
+[start] -> [end]

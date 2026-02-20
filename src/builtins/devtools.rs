@@ -287,10 +287,7 @@ impl Tool for EditFile {
             .await
             .with_context(|| format!("Failed to write file: {}", path))?;
 
-        info!(
-            "✏️ edit_file: {} ({} replacement(s))",
-            path, match_count
-        );
+        info!("✏️ edit_file: {} ({} replacement(s))", path, match_count);
 
         Ok(Some(json!({
             "status": "ok",
@@ -638,7 +635,8 @@ impl Tool for Bash {
             Ok(Err(e)) => Err(anyhow!("Failed to execute command: {}", e)),
             Err(_) => Err(anyhow!(
                 "Command timed out after {} ms: {}",
-                timeout_ms, cmd
+                timeout_ms,
+                cmd
             )),
         }
     }

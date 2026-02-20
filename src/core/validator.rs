@@ -312,11 +312,7 @@ impl WorkflowValidator {
         match tool_name {
             "chat" => {
                 if !params.contains_key("message") {
-                    result.add_error(
-                        "E007",
-                        "chat() requires 'message' parameter",
-                        Some(node_id),
-                    );
+                    result.add_error("E007", "chat() requires 'message' parameter", Some(node_id));
                 }
                 if !params.contains_key("agent") && !params.contains_key("system_prompt") {
                     result.add_warning(
@@ -522,11 +518,7 @@ impl WorkflowValidator {
         for edge in graph.graph.edge_weights() {
             if let Some(ref condition) = edge.condition {
                 if condition.trim().is_empty() {
-                    result.add_warning(
-                        "W009",
-                        "Edge has an empty condition expression",
-                        None,
-                    );
+                    result.add_warning("W009", "Edge has an empty condition expression", None);
                 }
             }
         }

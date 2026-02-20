@@ -2,21 +2,16 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use anyhow::Result;
-use axum::{
-    extract::Extension,
-    response::IntoResponse,
-    routing::post,
-    Json, Router,
-};
+use axum::{extract::Extension, response::IntoResponse, routing::post, Json, Router};
+use dashmap::DashSet;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use dashmap::DashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tracing::{error, info, warn};
 
+use super::{chat_via_jug0, run_agent_for_message, PlatformMessage, ToolExecutor};
 use crate::services::config::JuglansConfig;
-use super::{run_agent_for_message, chat_via_jug0, ToolExecutor, PlatformMessage};
 
 /// 飞书 Bot 共享状态
 struct FeishuState {
@@ -51,9 +46,7 @@ struct FeishuToolExecutor {
 impl FeishuToolExecutor {
     fn from_state(state: &FeishuState) -> Self {
         let bot_config = state.config.bot.as_ref().and_then(|b| b.feishu.as_ref());
-        let approvers = bot_config
-            .map(|c| c.approvers.clone())
-            .unwrap_or_default();
+        let approvers = bot_config.map(|c| c.approvers.clone()).unwrap_or_default();
 
         Self {
             project_root: state.project_root.clone(),
@@ -137,11 +130,23 @@ else:
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             error!("[FeishuToolExecutor] {} failed: {}", tool_name, stderr);
-            return Err(anyhow::anyhow!("Python tool {} failed: {}", tool_name, stderr));
+            return Err(anyhow::anyhow!(
+                "Python tool {} failed: {}",
+                tool_name,
+                stderr
+            ));
         }
 
         let result = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        info!("[FeishuToolExecutor] {} → {}", tool_name, if result.len() > 100 { &result[..100] } else { &result });
+        info!(
+            "[FeishuToolExecutor] {} → {}",
+            tool_name,
+            if result.len() > 100 {
+                &result[..100]
+            } else {
+                &result
+            }
+        );
         Ok(result)
     }
 }
@@ -170,7 +175,9 @@ pub async fn start(
     agent_slug: String,
     port: u16,
 ) -> Result<()> {
-    let bot_config = config.bot.as_ref()
+    let bot_config = config
+        .bot
+        .as_ref()
         .and_then(|b| b.feishu.as_ref())
         .ok_or_else(|| anyhow::anyhow!("Missing [bot.feishu] config in juglans.toml"))?;
 
@@ -184,7 +191,9 @@ pub async fn start(
     } else if has_app_credentials {
         start_event_mode(config, project_root, agent_slug, port).await
     } else {
-        Err(anyhow::anyhow!("[bot.feishu] requires webhook_url or (app_id + app_secret)"))
+        Err(anyhow::anyhow!(
+            "[bot.feishu] requires webhook_url or (app_id + app_secret)"
+        ))
     }
 }
 
@@ -197,7 +206,11 @@ async fn start_webhook_mode(
 ) -> Result<()> {
     info!("🤖 Starting Feishu Bot (webhook mode)...");
     info!("   Agent: {}", agent_slug);
-    info!("   Webhook: {}...{}", &webhook_url[..40.min(webhook_url.len())], if webhook_url.len() > 40 { "" } else { "" });
+    info!(
+        "   Webhook: {}...{}",
+        &webhook_url[..40.min(webhook_url.len())],
+        if webhook_url.len() > 40 { "" } else { "" }
+    );
     info!("   Type messages below. Replies will be sent to Feishu group.");
     println!();
 
@@ -212,8 +225,12 @@ async fn start_webhook_mode(
             break;
         }
         let text = input.trim();
-        if text.is_empty() { continue; }
-        if text == "exit" || text == "quit" { break; }
+        if text.is_empty() {
+            continue;
+        }
+        if text == "exit" || text == "quit" {
+            break;
+        }
 
         let msg = PlatformMessage {
             event_type: "message".into(),
@@ -251,13 +268,19 @@ async fn start_event_mode(
     agent_slug: String,
     port: u16,
 ) -> Result<()> {
-    let bot_config = config.bot.as_ref()
+    let bot_config = config
+        .bot
+        .as_ref()
         .and_then(|b| b.feishu.as_ref())
         .ok_or_else(|| anyhow::anyhow!("Missing [bot.feishu] config"))?;
 
-    let app_id = bot_config.app_id.clone()
+    let app_id = bot_config
+        .app_id
+        .clone()
         .ok_or_else(|| anyhow::anyhow!("[bot.feishu] event mode requires app_id"))?;
-    let app_secret = bot_config.app_secret.clone()
+    let app_secret = bot_config
+        .app_secret
+        .clone()
         .ok_or_else(|| anyhow::anyhow!("[bot.feishu] event mode requires app_secret"))?;
     let base_url = bot_config.base_url.clone();
 
@@ -333,7 +356,11 @@ pub async fn send_webhook(webhook_url: &str, text: &str) -> Result<()> {
 }
 
 /// 通过 Webhook 发送富文本消息（Markdown 风格的 post 消息）
-pub async fn send_webhook_rich(webhook_url: &str, title: &str, content_lines: Vec<Vec<Value>>) -> Result<()> {
+pub async fn send_webhook_rich(
+    webhook_url: &str,
+    title: &str,
+    content_lines: Vec<Vec<Value>>,
+) -> Result<()> {
     let client = reqwest::Client::new();
 
     let resp = client
@@ -444,7 +471,10 @@ async fn handle_feishu_event(
             return Json(json!({ "toast": { "type": "error", "content": "无效事件" } }));
         }
         _ => {
-            warn!("[Feishu] Unhandled event type: {} (id: {})", event_type, event_id);
+            warn!(
+                "[Feishu] Unhandled event type: {} (id: {})",
+                event_type, event_id
+            );
         }
     }
 
@@ -453,7 +483,9 @@ async fn handle_feishu_event(
 
 /// 处理飞书消息事件
 async fn handle_message_event(state: &FeishuState, event: &Value) -> Result<()> {
-    let message = event.get("message").ok_or_else(|| anyhow::anyhow!("No message in event"))?;
+    let message = event
+        .get("message")
+        .ok_or_else(|| anyhow::anyhow!("No message in event"))?;
 
     // 提取消息内容
     let msg_type = message["message_type"].as_str().unwrap_or("");
@@ -493,7 +525,15 @@ async fn handle_message_event(state: &FeishuState, event: &Value) -> Result<()> 
         sender_id,
         chat_type,
         chat_id,
-        if text.chars().count() > 50 { &text[..text.char_indices().nth(50).map(|(i,_)|i).unwrap_or(text.len())] } else { &text }
+        if text.chars().count() > 50 {
+            &text[..text
+                .char_indices()
+                .nth(50)
+                .map(|(i, _)| i)
+                .unwrap_or(text.len())]
+        } else {
+            &text
+        }
     );
 
     let platform_msg = PlatformMessage {
@@ -508,23 +548,49 @@ async fn handle_message_event(state: &FeishuState, event: &Value) -> Result<()> 
     // 执行 agent — 根据模式选择本地执行或 SSE 客户端
     let result = if state.use_jug0 {
         let tool_executor = FeishuToolExecutor::with_message(state, &platform_msg);
-        chat_via_jug0(&state.config, &state.agent_slug, &platform_msg, &tool_executor).await
+        chat_via_jug0(
+            &state.config,
+            &state.agent_slug,
+            &platform_msg,
+            &tool_executor,
+        )
+        .await
     } else {
         let tool_executor = FeishuToolExecutor::with_message(state, &platform_msg);
-        run_agent_for_message(&state.config, &state.project_root, &state.agent_slug, &platform_msg, Some(&tool_executor)).await
+        run_agent_for_message(
+            &state.config,
+            &state.project_root,
+            &state.agent_slug,
+            &platform_msg,
+            Some(&tool_executor),
+        )
+        .await
     };
 
     match result {
         Ok(reply) => {
             if !reply.text.is_empty() && reply.text != "(No response)" {
-                let token = get_access_token(&state.app_id, &state.app_secret, &state.base_url, &state.access_token).await?;
+                let token = get_access_token(
+                    &state.app_id,
+                    &state.app_secret,
+                    &state.base_url,
+                    &state.access_token,
+                )
+                .await?;
                 send_feishu_message(&token, &chat_id, &reply.text, &state.base_url).await?;
             }
         }
         Err(e) => {
             error!("[Feishu] Agent error: {}", e);
-            let token = get_access_token(&state.app_id, &state.app_secret, &state.base_url, &state.access_token).await?;
-            send_feishu_message(&token, &chat_id, &format!("Error: {}", e), &state.base_url).await?;
+            let token = get_access_token(
+                &state.app_id,
+                &state.app_secret,
+                &state.base_url,
+                &state.access_token,
+            )
+            .await?;
+            send_feishu_message(&token, &chat_id, &format!("Error: {}", e), &state.base_url)
+                .await?;
         }
     }
 
@@ -549,7 +615,10 @@ async fn get_access_token(
 
     let client = reqwest::Client::new();
     let resp: Value = client
-        .post(format!("{}/open-apis/auth/v3/tenant_access_token/internal", base_url))
+        .post(format!(
+            "{}/open-apis/auth/v3/tenant_access_token/internal",
+            base_url
+        ))
         .json(&json!({
             "app_id": app_id,
             "app_secret": app_secret
@@ -604,8 +673,15 @@ async fn send_feishu_message(token: &str, chat_id: &str, text: &str, base_url: &
     let api_code = body["code"].as_i64().unwrap_or(-1);
 
     if !status.is_success() || api_code != 0 {
-        warn!("[Feishu] Send message failed: HTTP {} | code: {} | body: {:?}", status, api_code, body);
-        return Err(anyhow::anyhow!("Feishu send failed: code={}, msg={}", api_code, body["msg"]));
+        warn!(
+            "[Feishu] Send message failed: HTTP {} | code: {} | body: {:?}",
+            status, api_code, body
+        );
+        return Err(anyhow::anyhow!(
+            "Feishu send failed: code={}, msg={}",
+            api_code,
+            body["msg"]
+        ));
     }
 
     info!("[Feishu] Message sent to chat_id: {}", chat_id);
@@ -651,9 +727,13 @@ async fn handle_card_action_event(state: &FeishuState, event: &Value) -> Result<
     // 统一走 workflow（由 workflow switch 路由到 Python 直调）
     let tool_executor = FeishuToolExecutor::with_message(state, &platform_msg);
     let reply = run_agent_for_message(
-        &state.config, &state.project_root, &state.agent_slug,
-        &platform_msg, Some(&tool_executor),
-    ).await?;
+        &state.config,
+        &state.project_root,
+        &state.agent_slug,
+        &platform_msg,
+        Some(&tool_executor),
+    )
+    .await?;
 
     // 尝试解析为卡片 JSON
     if let Ok(card) = serde_json::from_str::<Value>(&reply.text) {

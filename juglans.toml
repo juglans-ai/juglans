@@ -1,0 +1,13 @@
+# Minimal juglans.toml for testing
+
+[account]
+id = "test-user"
+name = "Test User"
+api_key = "sk_test"
+
+[jug0]
+base_url = "http://localhost:3000"
+
+[server]
+host = "127.0.0.1"
+port = 8080

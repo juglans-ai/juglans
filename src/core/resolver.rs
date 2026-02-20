@@ -20,15 +20,38 @@ lazy_static::lazy_static! {
     static ref VAR_REF_RE: Regex = Regex::new(r"\$([a-zA-Z_][a-zA-Z0-9_]*)(\.[a-zA-Z0-9_.]+)?").unwrap();
 }
 
+/// 展开 "@/" 前缀为 base_path（project_root + config.paths.base）
+/// at_base = None 时功能禁用，原样返回
+pub fn expand_at_prefix(pattern: &str, at_base: Option<&Path>) -> String {
+    let Some(base) = at_base else {
+        return pattern.to_string();
+    };
+    if let Some(rest) = pattern.strip_prefix("@/") {
+        base.join(rest).to_string_lossy().to_string()
+    } else {
+        pattern.to_string()
+    }
+}
+
+/// 批量展开 "@/" 前缀
+pub fn expand_at_prefixes(patterns: &[String], at_base: Option<&Path>) -> Vec<String> {
+    patterns
+        .iter()
+        .map(|p| expand_at_prefix(p, at_base))
+        .collect()
+}
+
 /// 解析 flow imports 并合并子图到父工作流
 ///
 /// - `workflow`: 父工作流（会被修改）
 /// - `base_dir`: 父工作流文件所在目录（用于解析相对路径）
 /// - `import_stack`: 已导入文件的绝对路径栈（用于检测循环导入）
+/// - `at_base`: @ 路径别名的基准目录（None = 禁用）
 pub fn resolve_flow_imports(
     workflow: &mut WorkflowGraph,
     base_dir: &Path,
     import_stack: &mut Vec<PathBuf>,
+    at_base: Option<&Path>,
 ) -> Result<()> {
     if workflow.flow_imports.is_empty() {
         // 即使没有 flow_imports，也需要解析 pending_edges（可能有误写的命名空间引用）
@@ -40,8 +63,13 @@ pub fn resolve_flow_imports(
     let imports: Vec<(String, String)> = workflow.flow_imports.clone().into_iter().collect();
 
     for (alias, rel_path) in imports {
-        // 1. 解析绝对路径
-        let abs_path = base_dir.join(&rel_path);
+        // 1. 展开 @/ 前缀并解析绝对路径
+        let expanded_rel = expand_at_prefix(&rel_path, at_base);
+        let abs_path = if Path::new(&expanded_rel).is_absolute() {
+            PathBuf::from(&expanded_rel)
+        } else {
+            base_dir.join(&expanded_rel)
+        };
         let canonical = abs_path.canonicalize().with_context(|| {
             format!(
                 "Flow import error: Cannot resolve path '{}' (base: {:?})",
@@ -61,19 +89,17 @@ pub fn resolve_flow_imports(
         import_stack.push(canonical.clone());
 
         // 3. 加载并解析子工作流
-        let content = std::fs::read_to_string(&canonical).with_context(|| {
-            format!("Flow import error: Cannot read '{:?}'", canonical)
-        })?;
-        let mut child_graph = GraphParser::parse(&content).with_context(|| {
-            format!("Flow import error: Failed to parse '{:?}'", canonical)
-        })?;
+        let content = std::fs::read_to_string(&canonical)
+            .with_context(|| format!("Flow import error: Cannot read '{:?}'", canonical))?;
+        let mut child_graph = GraphParser::parse(&content)
+            .with_context(|| format!("Flow import error: Failed to parse '{:?}'", canonical))?;
 
         // 4. 递归解析子工作流自身的 flow imports
         let child_base_dir = canonical.parent().unwrap_or(Path::new("."));
-        resolve_flow_imports(&mut child_graph, child_base_dir, import_stack)?;
+        resolve_flow_imports(&mut child_graph, child_base_dir, import_stack, at_base)?;
 
         // 5. 合并子图到父图
-        merge_subgraph(workflow, &child_graph, &alias, child_base_dir)?;
+        merge_subgraph(workflow, &child_graph, &alias, child_base_dir, at_base)?;
 
         import_stack.pop();
     }
@@ -90,6 +116,7 @@ fn merge_subgraph(
     child: &WorkflowGraph,
     prefix: &str,
     child_base_dir: &Path,
+    at_base: Option<&Path>,
 ) -> Result<()> {
     // 收集子工作流的所有节点 ID（用于变量命名空间转换）
     let child_node_ids: HashSet<String> = child
@@ -104,8 +131,7 @@ fn merge_subgraph(
         let prefixed_id = format!("{}.{}", prefix, child_node.id);
 
         // 克隆 node_type 并做变量命名空间转换
-        let prefixed_node_type =
-            prefix_node_type(&child_node.node_type, prefix, &child_node_ids);
+        let prefixed_node_type = prefix_node_type(&child_node.node_type, prefix, &child_node_ids);
 
         let new_node = Node {
             id: prefixed_id.clone(),
@@ -129,11 +155,15 @@ fn merge_subgraph(
 
         // 此时两个节点都已添加到 parent，可以直接 commit
         let f_idx = *parent.node_map.get(&from_id).ok_or_else(|| {
-            anyhow!("Merge error: source node '{}' not found after merge", from_id)
+            anyhow!(
+                "Merge error: source node '{}' not found after merge",
+                from_id
+            )
         })?;
-        let t_idx = *parent.node_map.get(&to_id).ok_or_else(|| {
-            anyhow!("Merge error: target node '{}' not found after merge", to_id)
-        })?;
+        let t_idx = *parent
+            .node_map
+            .get(&to_id)
+            .ok_or_else(|| anyhow!("Merge error: target node '{}' not found after merge", to_id))?;
         parent.graph.add_edge(f_idx, t_idx, edge);
     }
 
@@ -161,23 +191,39 @@ fn merge_subgraph(
         if let Some(ref cond) = edge.condition {
             edge.condition = Some(prefix_variables(cond, prefix, &child_node_ids));
         }
-        parent
-            .pending_edges
-            .push((prefixed_f, prefixed_t, edge));
+        parent.pending_edges.push((prefixed_f, prefixed_t, edge));
     }
 
-    // --- 5. 合并资源模式（相对路径调整为基于子工作流目录） ---
+    // --- 5. 合并资源模式（先展开 @/ 别名，非绝对路径调整为基于子工作流目录） ---
     for pattern in &child.prompt_patterns {
-        let resolved = child_base_dir.join(pattern).to_string_lossy().to_string();
-        parent.prompt_patterns.push(resolved);
+        let expanded = expand_at_prefix(pattern, at_base);
+        if Path::new(&expanded).is_absolute() {
+            parent.prompt_patterns.push(expanded);
+        } else {
+            parent
+                .prompt_patterns
+                .push(child_base_dir.join(&expanded).to_string_lossy().to_string());
+        }
     }
     for pattern in &child.agent_patterns {
-        let resolved = child_base_dir.join(pattern).to_string_lossy().to_string();
-        parent.agent_patterns.push(resolved);
+        let expanded = expand_at_prefix(pattern, at_base);
+        if Path::new(&expanded).is_absolute() {
+            parent.agent_patterns.push(expanded);
+        } else {
+            parent
+                .agent_patterns
+                .push(child_base_dir.join(&expanded).to_string_lossy().to_string());
+        }
     }
     for pattern in &child.tool_patterns {
-        let resolved = child_base_dir.join(pattern).to_string_lossy().to_string();
-        parent.tool_patterns.push(resolved);
+        let expanded = expand_at_prefix(pattern, at_base);
+        if Path::new(&expanded).is_absolute() {
+            parent.tool_patterns.push(expanded);
+        } else {
+            parent
+                .tool_patterns
+                .push(child_base_dir.join(&expanded).to_string_lossy().to_string());
+        }
     }
     for import in &child.python_imports {
         if !parent.python_imports.contains(import) {
@@ -352,10 +398,7 @@ mod tests {
             prefix_variables("$input.message", "auth", &node_ids),
             "$input.message"
         );
-        assert_eq!(
-            prefix_variables("$output", "auth", &node_ids),
-            "$output"
-        );
+        assert_eq!(prefix_variables("$output", "auth", &node_ids), "$output");
     }
 
     #[test]
@@ -369,6 +412,47 @@ mod tests {
             result,
             r#"$trading.classify.output.intent == "trade" && $ctx.ready"#
         );
+    }
+
+    #[test]
+    fn test_expand_at_prefix() {
+        let base = Path::new("/project/src");
+
+        // @/ 开头 → 展开为 base + 剩余部分
+        assert_eq!(
+            expand_at_prefix("@/prompts/foo.jgprompt", Some(base)),
+            "/project/src/prompts/foo.jgprompt"
+        );
+
+        // 非 @/ 开头 → 原样返回
+        assert_eq!(expand_at_prefix("./local/file", Some(base)), "./local/file");
+        assert_eq!(
+            expand_at_prefix("relative/path", Some(base)),
+            "relative/path"
+        );
+
+        // 只有 @ 没有 / → 原样返回
+        assert_eq!(expand_at_prefix("@noslash", Some(base)), "@noslash");
+
+        // at_base = None → 功能禁用，原样返回
+        assert_eq!(
+            expand_at_prefix("@/prompts/foo.jgprompt", None),
+            "@/prompts/foo.jgprompt"
+        );
+    }
+
+    #[test]
+    fn test_expand_at_prefixes_batch() {
+        let base = Path::new("/project");
+        let patterns = vec![
+            "@/prompts/*.jgprompt".to_string(),
+            "./local/file.jgprompt".to_string(),
+            "@/agents/my-agent.jgagent".to_string(),
+        ];
+        let result = expand_at_prefixes(&patterns, Some(base));
+        assert_eq!(result[0], "/project/prompts/*.jgprompt");
+        assert_eq!(result[1], "./local/file.jgprompt");
+        assert_eq!(result[2], "/project/agents/my-agent.jgagent");
     }
 
     #[test]

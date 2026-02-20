@@ -1,10 +1,9 @@
 // src/core/parser.rs
 use crate::core::graph::{Action, Edge, Node, NodeType, SwitchCase, SwitchRoute, WorkflowGraph};
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use pest::iterators::Pair;
 use pest::Parser;
 use pest_derive::Parser;
-use petgraph::graph::DiGraph;
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -239,7 +238,8 @@ impl GraphParser {
                     if param_map.contains_key(&pk) {
                         return Err(anyhow!(
                             "Duplicate parameter '{}' in node [{}]",
-                            pk, node_id_str
+                            pk,
+                            node_id_str
                         ));
                     }
                     param_map.insert(pk, pv);
@@ -361,7 +361,9 @@ impl GraphParser {
         let mut it = pair.into_inner();
 
         // First is the source node_id
-        let from_node = it.next().ok_or_else(|| anyhow!("Switch edge missing source node"))?;
+        let from_node = it
+            .next()
+            .ok_or_else(|| anyhow!("Switch edge missing source node"))?;
         let from_id = from_node.into_inner().next().unwrap().as_str().to_string();
 
         // Next is the switch subject (optional) and body
@@ -379,26 +381,34 @@ impl GraphParser {
                             let mut case_it = case_item.into_inner();
                             let case_value_or_default = case_it.next().unwrap();
 
-                            let case_value = if case_value_or_default.as_rule() == Rule::switch_default {
-                                None
-                            } else {
-                                // It's a switch_case_value (string, number, boolean, or variable_ref)
-                                let val_str = case_value_or_default.as_str().trim();
-                                // Remove quotes from strings
-                                let clean_val = if val_str.starts_with('"') && val_str.ends_with('"') {
-                                    val_str[1..val_str.len()-1].to_string()
+                            let case_value =
+                                if case_value_or_default.as_rule() == Rule::switch_default {
+                                    None
                                 } else {
-                                    val_str.to_string()
+                                    // It's a switch_case_value (string, number, boolean, or variable_ref)
+                                    let val_str = case_value_or_default.as_str().trim();
+                                    // Remove quotes from strings
+                                    let clean_val =
+                                        if val_str.starts_with('"') && val_str.ends_with('"') {
+                                            val_str[1..val_str.len() - 1].to_string()
+                                        } else {
+                                            val_str.to_string()
+                                        };
+                                    Some(clean_val)
                                 };
-                                Some(clean_val)
-                            };
 
                             let target_node = case_it.next().ok_or_else(|| {
-                                anyhow!("Switch case missing target node for value: {:?}", case_value)
+                                anyhow!(
+                                    "Switch case missing target node for value: {:?}",
+                                    case_value
+                                )
                             })?;
-                            let target_id = target_node.into_inner().next()
+                            let target_id = target_node
+                                .into_inner()
+                                .next()
                                 .ok_or_else(|| anyhow!("Invalid target node in switch case"))?
-                                .as_str().to_string();
+                                .as_str()
+                                .to_string();
 
                             cases.push(SwitchCase {
                                 value: case_value.clone(),
@@ -420,10 +430,9 @@ impl GraphParser {
         }
 
         // Store the switch route
-        workflow.switch_routes.insert(from_id.clone(), SwitchRoute {
-            subject,
-            cases,
-        });
+        workflow
+            .switch_routes
+            .insert(from_id.clone(), SwitchRoute { subject, cases });
 
         Ok(())
     }
@@ -439,7 +448,9 @@ impl GraphParser {
         let t_is_namespaced = t_id.contains('.');
 
         if f_is_namespaced || t_is_namespaced {
-            workflow.pending_edges.push((f_id.to_string(), t_id.to_string(), e_obj));
+            workflow
+                .pending_edges
+                .push((f_id.to_string(), t_id.to_string(), e_obj));
             return Ok(());
         }
 
@@ -481,7 +492,9 @@ entry: [load]
 
         assert_eq!(graph.python_imports.len(), 3);
         assert!(graph.python_imports.contains(&"pandas".to_string()));
-        assert!(graph.python_imports.contains(&"sklearn.ensemble".to_string()));
+        assert!(graph
+            .python_imports
+            .contains(&"sklearn.ensemble".to_string()));
         assert!(graph.python_imports.contains(&"./utils.py".to_string()));
     }
 
@@ -503,7 +516,10 @@ entry: [load]
         if let NodeType::Task(action) = &node.node_type {
             assert_eq!(action.name, "pandas.read_csv");
             assert_eq!(action.params.get("path"), Some(&"\"data.csv\"".to_string()));
-            assert_eq!(action.params.get("encoding"), Some(&"\"utf-8\"".to_string()));
+            assert_eq!(
+                action.params.get("encoding"),
+                Some(&"\"utf-8\"".to_string())
+            );
         } else {
             panic!("Expected Task node type");
         }
@@ -565,7 +581,11 @@ entry: [start]
 [start]: notify(message="hello", status="ok")
 "#;
         let result = GraphParser::parse(content);
-        assert!(result.is_ok(), "Comma-separated params should parse: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Comma-separated params should parse: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -581,7 +601,11 @@ entry: [start]
 [start] -> [b]
 "#;
         let result = GraphParser::parse(content);
-        assert!(result.is_ok(), "Comparison operators should be valid: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Comparison operators should be valid: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -609,7 +633,11 @@ entry: [start]
 )
 "#;
         let result = GraphParser::parse(content);
-        assert!(result.is_ok(), "Multiline params should parse: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Multiline params should parse: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -620,6 +648,10 @@ entry: [start]
 [start]: chat(agent="helper", message="[Expert] " + $input.query)
 "#;
         let result = GraphParser::parse(content);
-        assert!(result.is_ok(), "String concat should parse: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "String concat should parse: {:?}",
+            result.err()
+        );
     }
 }

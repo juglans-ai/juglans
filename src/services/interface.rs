@@ -12,6 +12,19 @@ pub trait ChatToolHandler: Send + Sync {
     async fn handle_tool_call(&self, tool_name: &str, arguments_json: &str) -> Result<String>;
 }
 
+/// Chat 请求参数，替代 9 个独立参数
+pub struct ChatRequest {
+    pub agent_config: Value,
+    pub messages: Vec<Value>,
+    pub tools: Option<Vec<Value>>,
+    pub chat_id: Option<String>,
+    pub token_sender: Option<UnboundedSender<String>>,
+    pub meta_sender: Option<UnboundedSender<Value>>,
+    pub state: Option<String>,
+    pub history: Option<String>,
+    pub tool_handler: Option<Arc<dyn ChatToolHandler>>,
+}
+
 /// 定义 JWL 运行时所需的外部能力接口
 #[async_trait]
 pub trait JuglansRuntime: Send + Sync {
@@ -19,18 +32,7 @@ pub trait JuglansRuntime: Send + Sync {
     ///
     /// 当 tool_handler 为 Some 时，tool_call 事件在 SSE 流内处理（执行工具 + POST /tool-result），
     /// 始终返回 ChatOutput::Final。当为 None 时，遇到 tool_call 即 break 返回 ChatOutput::ToolCalls。
-    async fn chat(
-        &self,
-        agent_config: Value,
-        messages: Vec<Value>,
-        tools: Option<Vec<Value>>,
-        chat_id: Option<&str>,
-        token_sender: Option<UnboundedSender<String>>,
-        meta_sender: Option<UnboundedSender<Value>>,
-        state: Option<&str>,
-        history: Option<&str>,
-        tool_handler: Option<Arc<dyn ChatToolHandler>>,
-    ) -> Result<ChatOutput>;
+    async fn chat(&self, req: ChatRequest) -> Result<ChatOutput>;
 
     /// 资源加载能力：获取提示词内容
     async fn fetch_prompt(&self, slug: &str) -> Result<String>;
@@ -51,10 +53,6 @@ pub trait JuglansRuntime: Send + Sync {
     ) -> Result<()>;
 
     /// 更新消息状态（workflow 节点回溯控制用户消息可见性）
-    async fn update_message_state(
-        &self,
-        chat_id: &str,
-        message_id: i32,
-        state: &str,
-    ) -> Result<()>;
+    async fn update_message_state(&self, chat_id: &str, message_id: i32, state: &str)
+        -> Result<()>;
 }

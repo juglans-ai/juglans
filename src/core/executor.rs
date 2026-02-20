@@ -7,8 +7,7 @@ use lazy_static::lazy_static;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 use petgraph::Direction;
-use regex::{Captures, Regex};
-use rhai::{Dynamic, Engine, Scope};
+use regex::Regex;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
@@ -18,6 +17,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::builtins::BuiltinRegistry;
 use crate::core::context::WorkflowContext;
+use crate::core::expr_eval::{self, ExprEvaluator};
 use crate::core::graph::{NodeType, WorkflowGraph};
 use crate::core::parser::GraphParser;
 use crate::runtime::python::PythonRuntime;
@@ -29,7 +29,6 @@ use crate::services::prompt_loader::PromptRegistry;
 use crate::services::tool_registry::ToolRegistry;
 
 lazy_static! {
-    static ref CONTEXT_VAR_RE: Regex = Regex::new(r"\$([a-zA-Z0-9_.]+)").unwrap();
     static ref FUNC_CALL_RE: Regex =
         Regex::new(r"(?s)^([a-zA-Z0-9_.]+)\((.*)\)(\.[a-zA-Z0-9_]+)?$").unwrap();
 }
@@ -39,8 +38,10 @@ pub struct WorkflowExecutor {
     mcp_client: McpClient,
     mcp_tools_map: HashMap<String, McpTool>,
     tool_registry: Arc<ToolRegistry>,
-    rhai_engine: Engine,
+    expr_eval: ExprEvaluator,
     debug_config: DebugConfig,
+    /// Configurable runtime limits
+    max_loop_iterations: usize,
     /// Python runtime for executing external Python calls
     python_runtime: Option<Arc<Mutex<PythonRuntime>>>,
     /// Imported Python modules (from workflow python: [...] declaration)
@@ -53,7 +54,13 @@ impl WorkflowExecutor {
         agent_registry: Arc<AgentRegistry>,
         runtime: Arc<dyn JuglansRuntime>,
     ) -> Self {
-        Self::new_with_debug(prompt_registry, agent_registry, runtime, DebugConfig::default()).await
+        Self::new_with_debug(
+            prompt_registry,
+            agent_registry,
+            runtime,
+            DebugConfig::default(),
+        )
+        .await
     }
 
     pub async fn new_with_debug(
@@ -62,10 +69,6 @@ impl WorkflowExecutor {
         runtime: Arc<dyn JuglansRuntime>,
         debug_config: DebugConfig,
     ) -> Self {
-        let mut engine = Engine::new_raw();
-        engine.set_max_operations(1_000_000);
-        engine.set_max_call_levels(10);
-
         let registry_arc = BuiltinRegistry::new(prompt_registry, agent_registry, runtime);
 
         // 将 devtools schema 自动注册到 ToolRegistry（slug: "devtools"）
@@ -77,11 +80,17 @@ impl WorkflowExecutor {
             mcp_client: McpClient::new(),
             mcp_tools_map: HashMap::new(),
             tool_registry: Arc::new(tool_registry),
-            rhai_engine: engine,
+            expr_eval: ExprEvaluator::new(),
             debug_config,
+            max_loop_iterations: 100,
             python_runtime: None,
             python_imports: Vec::new(),
         }
+    }
+
+    /// Apply runtime limits from configuration
+    pub fn apply_limits(&mut self, limits: &crate::services::config::RuntimeLimits) {
+        self.max_loop_iterations = limits.max_loop_iterations;
     }
 
     /// 获取 builtin registry 的引用（用于注入 executor）
@@ -172,7 +181,11 @@ impl WorkflowExecutor {
     }
 
     /// Initialize Python runtime if the workflow has python imports
-    pub fn init_python_runtime(&mut self, workflow: &WorkflowGraph) -> Result<()> {
+    pub fn init_python_runtime(
+        &mut self,
+        workflow: &WorkflowGraph,
+        worker_count: usize,
+    ) -> Result<()> {
         if workflow.python_imports.is_empty() {
             return Ok(());
         }
@@ -185,13 +198,14 @@ impl WorkflowExecutor {
         // Store the imports for later resolution
         self.python_imports = workflow.python_imports.clone();
 
-        // Create Python runtime with 1 worker for now
-        // TODO: Make worker count configurable
-        let mut runtime = PythonRuntime::new(1)?;
+        let mut runtime = PythonRuntime::new(worker_count)?;
         runtime.set_imports(workflow.python_imports.clone());
         self.python_runtime = Some(Arc::new(Mutex::new(runtime)));
 
-        info!("  ✅ Python runtime initialized with imports: {:?}", workflow.python_imports);
+        info!(
+            "  ✅ Python runtime initialized with imports: {:?}",
+            workflow.python_imports
+        );
         Ok(())
     }
 
@@ -205,7 +219,9 @@ impl WorkflowExecutor {
         for import in &self.python_imports {
             // Handle file imports (e.g., "./utils.py" -> "utils")
             let module_name = if import.ends_with(".py") {
-                import.rsplit('/').next()
+                import
+                    .rsplit('/')
+                    .next()
                     .map(|f| f.trim_end_matches(".py"))
                     .unwrap_or(import)
             } else {
@@ -225,10 +241,13 @@ impl WorkflowExecutor {
         name: &str,
         params: &HashMap<String, String>,
     ) -> Result<Option<Value>> {
-        let runtime = self.python_runtime.as_ref()
+        let runtime = self
+            .python_runtime
+            .as_ref()
             .ok_or_else(|| anyhow!("Python runtime not initialized"))?;
 
-        let mut rt = runtime.lock()
+        let mut rt = runtime
+            .lock()
             .map_err(|e| anyhow!("Failed to lock Python runtime: {}", e))?;
 
         // Convert params to kwargs
@@ -277,104 +296,37 @@ impl WorkflowExecutor {
             return Ok(result_val.unwrap_or(Value::Null));
         }
 
-        let clean_param_no_quotes = if clean_param.starts_with('"') && clean_param.ends_with('"') {
-            &clean_param[1..clean_param.len() - 1]
-        } else {
-            clean_param
+        // 引号包裹 → 字符串字面量，直接返回，不经过表达式求值器
+        // 防止 "display_only" 被当作变量解析为 Null，"trade-extractor" 被当作 trade - extractor = 0
+        if clean_param.starts_with('"') && clean_param.ends_with('"') {
+            return Ok(Value::String(
+                clean_param[1..clean_param.len() - 1].to_string(),
+            ));
+        }
+
+        // 使用表达式求值器解析和求值（替代 Rhai）
+        // resolver 负责将变量路径（如 "ctx.intent" → "intent"）映射到 WorkflowContext
+        let context_ref = context;
+        let show_variables = self.debug_config.show_variables;
+        let resolver = |path: &str| -> Option<Value> {
+            let clean = if path.starts_with("ctx.") {
+                &path[4..]
+            } else {
+                path
+            };
+            let resolved = context_ref.resolve_path(clean).ok().flatten();
+            if show_variables {
+                info!("🔍 [Debug] Resolve: ${} → {:?}", path, resolved);
+            }
+            resolved
         };
 
-        if CONTEXT_VAR_RE.is_match(clean_param_no_quotes) {
-            // 检查是否是纯变量引用（没有运算符/表达式）
-            let is_pure_variable = clean_param_no_quotes.starts_with('$') &&
-                !clean_param_no_quotes.contains("==") &&
-                !clean_param_no_quotes.contains("!=") &&
-                !clean_param_no_quotes.contains(">=") &&
-                !clean_param_no_quotes.contains("<=") &&
-                !clean_param_no_quotes.contains('>') &&
-                !clean_param_no_quotes.contains('<') &&
-                !clean_param_no_quotes.contains('+') &&
-                !clean_param_no_quotes.contains('-') &&
-                !clean_param_no_quotes.contains('*') &&
-                !clean_param_no_quotes.contains('/') &&
-                !clean_param_no_quotes.contains("&&") &&
-                !clean_param_no_quotes.contains("||") &&
-                !clean_param_no_quotes.contains('(') &&
-                !clean_param_no_quotes.contains(' ');
-
-            if is_pure_variable {
-                // 纯变量引用：返回原始 JSON 类型（保留 boolean, number 等）
-                // 如果变量不存在，返回 null（而不是报错），使条件路由更直观
-                let path = &clean_param_no_quotes[1..]; // 去掉 $
-                let path = if path.starts_with("ctx.") {
-                    &path[4..]
-                } else {
-                    path
-                };
-                let resolved = context.resolve_path(path)?.unwrap_or(Value::Null);
-                if self.debug_config.show_variables {
-                    info!("🔍 [Debug] Resolve: ${} → {:?}", path, resolved);
-                }
-                return Ok(resolved);
+        match self.expr_eval.eval(clean_param, &resolver) {
+            Ok(val) => Ok(val),
+            Err(_) => {
+                // 解析失败时作为字符串字面量返回
+                Ok(json!(clean_param))
             }
-
-            // 包含表达式：替换变量后用 Rhai 评估
-            let rendered = CONTEXT_VAR_RE.replace_all(clean_param_no_quotes, |caps: &Captures| {
-                let raw_path = &caps[1];
-                let path = if raw_path.starts_with("ctx.") {
-                    &raw_path[4..]
-                } else {
-                    raw_path
-                };
-                context
-                    .resolve_path(path)
-                    .ok()
-                    .flatten()
-                    .map(|v| match v {
-                        // 保留类型的字符串表示（用于 Rhai 评估）
-                        Value::String(s) => format!("\"{}\"", s.replace("\"", "\\\"")), // 转义引号
-                        Value::Bool(b) => b.to_string(),
-                        Value::Number(n) => n.to_string(),
-                        Value::Null => "()".to_string(), // Rhai 用 () 表示 null/unit
-                        Value::Array(_) | Value::Object(_) => v.to_string(),
-                    })
-                    .unwrap_or_else(|| "()".to_string()) // 变量不存在时也返回 Rhai 的 unit
-            });
-
-            // 用 Rhai 评估表达式
-            let mut scope = Scope::new();
-            let context_val = context.get_as_value()?;
-            let dynamic_ctx = rhai::serde::to_dynamic(context_val)?;
-            if let Some(map) = dynamic_ctx.try_cast::<rhai::Map>() {
-                scope.push("ctx", map);
-            }
-
-            match self.rhai_engine.eval_with_scope::<Dynamic>(&mut scope, &rendered.to_string()) {
-                Ok(result) => {
-                    let json_result = rhai::serde::from_dynamic::<Value>(&result)?;
-                    return Ok(json_result);
-                }
-                Err(e) => {
-                    return Err(anyhow!("Failed to evaluate expression '{}': {}", rendered, e));
-                }
-            }
-        }
-
-        let mut scope = Scope::new();
-        let context_val = context.get_as_value()?;
-        let dynamic_ctx = rhai::serde::to_dynamic(context_val)?;
-        if let Some(map) = dynamic_ctx.try_cast::<rhai::Map>() {
-            scope.push("ctx", map);
-        }
-
-        match self
-            .rhai_engine
-            .eval_with_scope::<Dynamic>(&mut scope, clean_param)
-        {
-            Ok(result) => {
-                let json_result = rhai::serde::from_dynamic::<Value>(&result)?;
-                Ok(json_result)
-            }
-            Err(_) => Ok(json!(clean_param_no_quotes)),
         }
     }
 
@@ -430,9 +382,13 @@ impl WorkflowExecutor {
         context: &WorkflowContext,
     ) -> Result<bool> {
         let val = self.process_parameter(script, context).await?;
-        let result = val.as_bool().unwrap_or(false);
+        // Python-like truthiness 代替 Rhai 的 as_bool
+        let result = expr_eval::is_truthy(&val);
         if self.debug_config.show_conditions {
-            info!("🔀 [Debug] Condition '{}' → {} (raw: {:?})", script, result, val);
+            info!(
+                "🔀 [Debug] Condition '{}' → {} (raw: {:?})",
+                script, result, val
+            );
         }
         Ok(result)
     }
@@ -481,10 +437,7 @@ impl WorkflowExecutor {
                 } else {
                     list
                 };
-                debug!(
-                    "│   Foreach: {} in {} ({})",
-                    item, list, clean_path
-                );
+                debug!("│   Foreach: {} in {} ({})", item, list, clean_path);
                 let list_val = context
                     .resolve_path(clean_path)?
                     .ok_or_else(|| anyhow!("Foreach list variable '{}' not found", clean_path))?;
@@ -508,8 +461,11 @@ impl WorkflowExecutor {
                 );
                 let mut loop_count = 0;
                 loop {
-                    if loop_count > 100 {
-                        return Err(anyhow!("Loop limit exceeded."));
+                    if loop_count > self.max_loop_iterations {
+                        return Err(anyhow!(
+                            "Loop limit exceeded (max: {}).",
+                            self.max_loop_iterations
+                        ));
                     }
                     if !self.evaluate_condition_async(condition, context).await? {
                         info!("  [Control] Loop condition is false, exiting loop.");
@@ -523,14 +479,38 @@ impl WorkflowExecutor {
                 }
                 Ok(None)
             }
-            NodeType::ExternalCall { call_path, args, kwargs } => {
-                // TODO: Implement Python worker call
-                // For now, this is a placeholder until we implement the Python runtime
-                debug!("│   ExternalCall: {} args={:?} kwargs={:?}", call_path, args, kwargs);
-                Err(anyhow!(
-                    "Python runtime not yet implemented. Cannot execute external call: {}",
-                    call_path
-                ))
+            NodeType::ExternalCall {
+                call_path,
+                args,
+                kwargs,
+            } => {
+                debug!(
+                    "│   ExternalCall: {} args={:?} kwargs={:?}",
+                    call_path, args, kwargs
+                );
+
+                // Resolve args and kwargs through the expression evaluator
+                let mut resolved_kwargs: HashMap<String, String> = HashMap::new();
+                for (k, v) in kwargs {
+                    let resolved = self.process_parameter(v, context).await?;
+                    let val_str = match resolved {
+                        Value::String(s) => s,
+                        other => other.to_string(),
+                    };
+                    resolved_kwargs.insert(k.clone(), val_str);
+                }
+
+                // Add positional args as numbered kwargs for Python runtime
+                for (i, arg) in args.iter().enumerate() {
+                    let resolved = self.process_parameter(arg, context).await?;
+                    let val_str = match resolved {
+                        Value::String(s) => s,
+                        other => other.to_string(),
+                    };
+                    resolved_kwargs.insert(format!("__arg{}", i), val_str);
+                }
+
+                self.execute_python_call(call_path, &resolved_kwargs)
             }
         }
     }
@@ -691,6 +671,212 @@ impl WorkflowExecutor {
         }
     }
 
+    /// Store node execution result into context
+    fn store_node_result(node_id: &str, result: &Result<Option<Value>>, context: &WorkflowContext) {
+        match result {
+            Ok(Some(output)) => {
+                debug!(
+                    "  [Output] Result for [{}]: {}",
+                    node_id,
+                    serde_json::to_string(output).unwrap_or_default()
+                );
+                info!("  ✅ Success");
+                context
+                    .set(format!("{}.output", node_id), output.clone())
+                    .unwrap();
+            }
+            Ok(None) => {
+                debug!("  [Output] No primary output for [{}].", node_id);
+                info!("  ✅ Success");
+                context
+                    .set(format!("{}.output", node_id), Value::Null)
+                    .unwrap();
+            }
+            Err(e) => {
+                warn!("  [Output] Error for [{}]: {}", node_id, e);
+                error!("  ❌ Failed: {}", e);
+                context
+                    .set(format!("{}.error", node_id), json!(e.to_string()))
+                    .unwrap();
+                context
+                    .set(
+                        "error".to_string(),
+                        json!({
+                            "node": node_id,
+                            "message": e.to_string()
+                        }),
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
+    /// Resolve switch subject value for a node (if it has a switch route)
+    fn resolve_switch_subject(
+        node_id: &str,
+        workflow: &WorkflowGraph,
+        context: &WorkflowContext,
+    ) -> Option<String> {
+        let switch_route = workflow.switch_routes.get(node_id)?;
+
+        let subject_value = if switch_route.subject.is_empty() {
+            context.resolve_path("output").ok().flatten()
+        } else {
+            let clean_subject = switch_route.subject.trim_start_matches('$');
+            let clean_subject = if clean_subject.starts_with("ctx.") {
+                &clean_subject[4..]
+            } else {
+                clean_subject
+            };
+            context.resolve_path(clean_subject).ok().flatten()
+        };
+
+        let subject_str = match &subject_value {
+            Some(Value::String(s)) => s.clone(),
+            Some(Value::Number(n)) => n.to_string(),
+            Some(Value::Bool(b)) => b.to_string(),
+            Some(Value::Null) => String::new(),
+            Some(v) => v.to_string(),
+            None => String::new(),
+        };
+
+        info!(
+            "  🔀 Switch on '{}' = '{}'",
+            switch_route.subject, subject_str
+        );
+        Some(subject_str)
+    }
+
+    /// Activate a successor node by decrementing its in-degree and enqueueing if ready
+    fn activate_successor(
+        successor_idx: NodeIndex,
+        workflow: &WorkflowGraph,
+        in_degrees: &Arc<Mutex<HashMap<NodeIndex, usize>>>,
+        ready_queue: &Arc<Mutex<VecDeque<NodeIndex>>>,
+    ) {
+        let mut degrees_guard = in_degrees.lock().unwrap();
+        if let Some(degree) = degrees_guard.get_mut(&successor_idx) {
+            *degree -= 1;
+            if *degree == 0 {
+                info!(
+                    "Node [{}] is now ready to run.",
+                    workflow.graph[successor_idx].id
+                );
+                ready_queue.lock().unwrap().push_back(successor_idx);
+            }
+        }
+    }
+
+    /// Evaluate outgoing edges from a completed node and enqueue ready successors
+    async fn evaluate_outgoing_edges(
+        executor: &Arc<Self>,
+        node_idx: NodeIndex,
+        node_succeeded: bool,
+        switch_result: &Option<String>,
+        workflow: &Arc<WorkflowGraph>,
+        context: &WorkflowContext,
+        in_degrees: &Arc<Mutex<HashMap<NodeIndex, usize>>>,
+        ready_queue: &Arc<Mutex<VecDeque<NodeIndex>>>,
+    ) {
+        let node_id = &workflow.graph[node_idx].id;
+        let mut switch_matched = false;
+
+        for edge in workflow.graph.edges(node_idx) {
+            let (edge_info, successor_idx) = (edge.weight(), edge.target());
+            let mut proceed = false;
+
+            if edge_info.is_error_path {
+                if !node_succeeded {
+                    proceed = true;
+                    info!(
+                        "  -> Taking 'on error' path to [{}]",
+                        workflow.graph[successor_idx].id
+                    );
+                }
+            } else if node_succeeded {
+                if let Some(ref switch_value) = switch_result {
+                    if let Some(ref case_value) = edge_info.switch_case {
+                        if case_value == switch_value && !switch_matched {
+                            proceed = true;
+                            switch_matched = true;
+                            info!(
+                                "  -> Switch case '{}' matched, taking path to [{}]",
+                                case_value, workflow.graph[successor_idx].id
+                            );
+                        }
+                    } else if edge_info.switch_case.is_none()
+                        && workflow.switch_routes.contains_key(node_id)
+                    {
+                        // Default case — handled after all cases
+                    } else if let Some(condition) = &edge_info.condition {
+                        if executor
+                            .evaluate_condition_async(condition, context)
+                            .await
+                            .unwrap_or(false)
+                        {
+                            proceed = true;
+                            info!(
+                                "  -> Condition TRUE, taking path to [{}]",
+                                workflow.graph[successor_idx].id
+                            );
+                        }
+                    } else {
+                        proceed = true;
+                        info!(
+                            "  -> Taking unconditional path to [{}]",
+                            workflow.graph[successor_idx].id
+                        );
+                    }
+                } else if let Some(condition) = &edge_info.condition {
+                    if executor
+                        .evaluate_condition_async(condition, context)
+                        .await
+                        .unwrap_or(false)
+                    {
+                        proceed = true;
+                        info!(
+                            "  -> Condition TRUE, taking path to [{}]",
+                            workflow.graph[successor_idx].id
+                        );
+                    } else {
+                        info!(
+                            "  -> Condition FALSE, skipping path to [{}]",
+                            workflow.graph[successor_idx].id
+                        );
+                    }
+                } else {
+                    proceed = true;
+                    info!(
+                        "  -> Taking unconditional path to [{}]",
+                        workflow.graph[successor_idx].id
+                    );
+                }
+            }
+
+            if proceed {
+                Self::activate_successor(successor_idx, workflow, in_degrees, ready_queue);
+            }
+        }
+
+        // Handle default switch case if no case matched
+        if switch_result.is_some() && !switch_matched {
+            for edge in workflow.graph.edges(node_idx) {
+                let (edge_info, successor_idx) = (edge.weight(), edge.target());
+                if edge_info.switch_case.is_none()
+                    && !edge_info.is_error_path
+                    && edge_info.condition.is_none()
+                {
+                    info!(
+                        "  -> Switch default, taking path to [{}]",
+                        workflow.graph[successor_idx].id
+                    );
+                    Self::activate_successor(successor_idx, workflow, in_degrees, ready_queue);
+                    break;
+                }
+            }
+        }
+    }
+
     pub fn execute_graph<'a>(
         self: Arc<Self>,
         workflow: Arc<WorkflowGraph>,
@@ -771,195 +957,38 @@ impl WorkflowExecutor {
                             .run_single_node(node_idx, &workflow_clone, &context_clone)
                             .await;
                         let node_succeeded = node_result.is_ok();
-                        match node_result {
-                            Ok(Some(output)) => {
-                                debug!(
-                                    "  [Output] Result for [{}]: {}",
-                                    node.id,
-                                    serde_json::to_string(&output).unwrap_or_default()
-                                );
-                                info!("  ✅ Success");
-                                context_clone
-                                    .set(format!("{}.output", node.id), output)
-                                    .unwrap();
-                            }
-                            Ok(None) => {
-                                debug!("  [Output] No primary output for [{}].", node.id);
-                                info!("  ✅ Success");
-                                context_clone
-                                    .set(format!("{}.output", node.id), Value::Null)
-                                    .unwrap();
-                            }
-                            Err(e) => {
-                                warn!("  [Output] Error for [{}]: {}", node.id, e);
-                                error!("  ❌ Failed: {}", e);
-                                // Set node-specific error
-                                context_clone
-                                    .set(format!("{}.error", node.id), json!(e.to_string()))
-                                    .unwrap();
-                                // Set global $error variable for convenient access in error handlers
-                                context_clone
-                                    .set("error".to_string(), json!({
-                                        "node": node.id,
-                                        "message": e.to_string()
-                                    }))
-                                    .unwrap();
-                            }
-                        }
 
-                        // 显示上下文变化
+                        // Store node result in context
+                        Self::store_node_result(&node.id, &node_result, &context_clone);
+
                         if self_clone.debug_config.show_context {
                             if let Ok(ctx_val) = context_clone.get_as_value() {
-                                info!("📋 [Debug] Context after [{}]: {}", node.id, serde_json::to_string_pretty(&ctx_val).unwrap_or_default());
+                                info!(
+                                    "📋 [Debug] Context after [{}]: {}",
+                                    node.id,
+                                    serde_json::to_string_pretty(&ctx_val).unwrap_or_default()
+                                );
                             }
                         }
 
                         completed_nodes_clone.lock().unwrap().insert(node_idx);
 
-                        // Check if this node has a switch route
-                        let switch_result: Option<String> = if let Some(switch_route) = workflow_clone.switch_routes.get(&node.id) {
-                            // Evaluate the switch subject
-                            let subject_value = if switch_route.subject.is_empty() {
-                                // No subject means we use the node output
-                                context_clone.resolve_path("output").ok().flatten()
-                            } else {
-                                let clean_subject = switch_route.subject.trim_start_matches('$');
-                                context_clone.resolve_path(clean_subject).ok().flatten()
-                            };
+                        // Evaluate switch subject if applicable
+                        let switch_result =
+                            Self::resolve_switch_subject(&node.id, &workflow_clone, &context_clone);
 
-                            // Convert to string for comparison
-                            let subject_str = match &subject_value {
-                                Some(Value::String(s)) => s.clone(),
-                                Some(Value::Number(n)) => n.to_string(),
-                                Some(Value::Bool(b)) => b.to_string(),
-                                Some(v) => v.to_string(),
-                                None => String::new(),
-                            };
-
-                            info!("  🔀 Switch on '{}' = '{}'", switch_route.subject, subject_str);
-                            Some(subject_str)
-                        } else {
-                            None
-                        };
-
-                        let mut switch_matched = false;
-
-                        for edge in workflow_clone.graph.edges(node_idx) {
-                            let (edge_info, successor_idx) = (edge.weight(), edge.target());
-                            let mut proceed = false;
-
-                            if edge_info.is_error_path {
-                                if !node_succeeded {
-                                    proceed = true;
-                                    info!(
-                                        "  -> Taking 'on error' path to [{}]",
-                                        workflow_clone.graph[successor_idx].id
-                                    );
-                                }
-                            } else if node_succeeded {
-                                // Handle switch case edges
-                                if let Some(ref switch_value) = switch_result {
-                                    if let Some(ref case_value) = edge_info.switch_case {
-                                        // This is a switch case - compare values
-                                        if case_value == switch_value && !switch_matched {
-                                            proceed = true;
-                                            switch_matched = true;
-                                            info!(
-                                                "  -> Switch case '{}' matched, taking path to [{}]",
-                                                case_value,
-                                                workflow_clone.graph[successor_idx].id
-                                            );
-                                        }
-                                    } else if edge_info.switch_case.is_none() && workflow_clone.switch_routes.contains_key(&node.id) {
-                                        // This is the default case - only take if no other case matched
-                                        // We'll handle this after checking all cases
-                                    } else if edge_info.condition.is_some() {
-                                        // Regular conditional edge
-                                        if let Some(condition) = &edge_info.condition {
-                                            if self_clone
-                                                .evaluate_condition_async(condition, &context_clone)
-                                                .await
-                                                .unwrap_or(false)
-                                            {
-                                                proceed = true;
-                                                info!(
-                                                    "  -> Condition TRUE, taking path to [{}]",
-                                                    workflow_clone.graph[successor_idx].id
-                                                );
-                                            }
-                                        }
-                                    } else {
-                                        // Unconditional edge (shouldn't happen with switch)
-                                        proceed = true;
-                                        info!(
-                                            "  -> Taking unconditional path to [{}]",
-                                            workflow_clone.graph[successor_idx].id
-                                        );
-                                    }
-                                } else if let Some(condition) = &edge_info.condition {
-                                    if self_clone
-                                        .evaluate_condition_async(condition, &context_clone)
-                                        .await
-                                        .unwrap_or(false)
-                                    {
-                                        proceed = true;
-                                        info!(
-                                            "  -> Condition TRUE, taking path to [{}]",
-                                            workflow_clone.graph[successor_idx].id
-                                        );
-                                    } else {
-                                        info!(
-                                            "  -> Condition FALSE, skipping path to [{}]",
-                                            workflow_clone.graph[successor_idx].id
-                                        );
-                                    }
-                                } else {
-                                    proceed = true;
-                                    info!(
-                                        "  -> Taking unconditional path to [{}]",
-                                        workflow_clone.graph[successor_idx].id
-                                    );
-                                }
-                            }
-                            if proceed {
-                                let mut degrees_guard = in_degrees_clone.lock().unwrap();
-                                if let Some(degree) = degrees_guard.get_mut(&successor_idx) {
-                                    *degree -= 1;
-                                    if *degree == 0 {
-                                        info!(
-                                            "Node [{}] is now ready to run.",
-                                            workflow_clone.graph[successor_idx].id
-                                        );
-                                        ready_queue_clone.lock().unwrap().push_back(successor_idx);
-                                    }
-                                }
-                            }
-                        }
-
-                        // Handle default switch case if no case matched
-                        if switch_result.is_some() && !switch_matched {
-                            for edge in workflow_clone.graph.edges(node_idx) {
-                                let (edge_info, successor_idx) = (edge.weight(), edge.target());
-                                if edge_info.switch_case.is_none() && !edge_info.is_error_path && edge_info.condition.is_none() {
-                                    info!(
-                                        "  -> Switch default, taking path to [{}]",
-                                        workflow_clone.graph[successor_idx].id
-                                    );
-                                    let mut degrees_guard = in_degrees_clone.lock().unwrap();
-                                    if let Some(degree) = degrees_guard.get_mut(&successor_idx) {
-                                        *degree -= 1;
-                                        if *degree == 0 {
-                                            info!(
-                                                "Node [{}] is now ready to run.",
-                                                workflow_clone.graph[successor_idx].id
-                                            );
-                                            ready_queue_clone.lock().unwrap().push_back(successor_idx);
-                                        }
-                                    }
-                                    break; // Only take one default
-                                }
-                            }
-                        }
+                        // Evaluate outgoing edges and enqueue ready successors
+                        Self::evaluate_outgoing_edges(
+                            &self_clone,
+                            node_idx,
+                            node_succeeded,
+                            &switch_result,
+                            &workflow_clone,
+                            &context_clone,
+                            &in_degrees_clone,
+                            &ready_queue_clone,
+                        )
+                        .await;
                     }));
                 }
                 join_all(tasks).await;

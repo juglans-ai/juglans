@@ -86,7 +86,10 @@ impl Tool for Fetch {
             .ok_or_else(|| anyhow!("fetch() requires 'url' parameter"))?
             .trim_matches('"');
 
-        let method = params.get("method").map(|s| s.trim_matches('"')).unwrap_or("GET");
+        let method = params
+            .get("method")
+            .map(|s| s.trim_matches('"'))
+            .unwrap_or("GET");
 
         let client = reqwest::Client::new();
         let mut builder = match method.to_uppercase().as_str() {

@@ -15,8 +15,8 @@ use crate::core::agent_parser::AgentResource;
 use crate::core::graph::WorkflowGraph;
 use crate::core::prompt_parser::PromptResource;
 use crate::services::config::JuglansConfig;
-use tracing::{info, error};
-use crate::services::interface::{ChatToolHandler, JuglansRuntime};
+use crate::services::interface::{ChatRequest, JuglansRuntime};
+use tracing::{error, info};
 
 /// 定义对话输出类型，区分最终文本和工具调用请求
 #[derive(Debug)]
@@ -27,19 +27,9 @@ pub enum ChatOutput {
     ToolCalls { calls: Vec<Value>, chat_id: String },
 }
 
+// Response types for get_prompt_id / get_workflow_id
 #[derive(Deserialize)]
-struct AgentResponse {
-    id: Uuid,
-    slug: String,
-}
-
-#[derive(Deserialize)]
-struct PromptResponse {
-    id: Uuid,
-}
-
-#[derive(Deserialize)]
-struct WorkflowResponse {
+struct IdResponse {
     id: Uuid,
 }
 
@@ -83,6 +73,7 @@ pub struct RemoteAgentDetail {
     pub default_model: Option<String>,
     pub temperature: Option<f64>,
     pub username: Option<String>,
+    pub avatar: Option<String>,
     pub system_prompt: Option<RemotePromptDetail>,
 }
 
@@ -107,7 +98,7 @@ pub struct Jug0Client {
 impl Jug0Client {
     pub fn new(config: &JuglansConfig) -> Self {
         let http_client = Client::builder()
-            .timeout(Duration::from_secs(120))
+            .timeout(Duration::from_secs(config.limits.http_timeout_secs))
             .build()
             .expect("Failed to build HTTP client for Jug0 communication.");
 
@@ -138,7 +129,10 @@ impl Jug0Client {
 
     /// Get the current execution token (if set).
     pub fn get_execution_token(&self) -> Option<String> {
-        self.execution_token.read().ok().and_then(|guard| guard.clone())
+        self.execution_token
+            .read()
+            .ok()
+            .and_then(|guard| guard.clone())
     }
 
     /// Build a request with the appropriate authentication header.
@@ -194,7 +188,11 @@ impl Jug0Client {
 
             let lookup: HandleLookup = res.json().await?;
             if lookup.target_type != "agent" {
-                return Err(anyhow!("@{} is not an agent (type: {})", handle, lookup.target_type));
+                return Err(anyhow!(
+                    "@{} is not an agent (type: {})",
+                    handle,
+                    lookup.target_type
+                ));
             }
             lookup.target_id.to_string()
         } else {
@@ -209,10 +207,15 @@ impl Jug0Client {
 
         if !res.status().is_success() {
             let status = res.status();
-            let error_text = res.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = res
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(anyhow!(
                 "Failed to get agent '{}': {} - {}",
-                handle_or_slug, status, error_text
+                handle_or_slug,
+                status,
+                error_text
             ));
         }
 
@@ -223,9 +226,7 @@ impl Jug0Client {
     pub async fn get_prompt_id(&self, slug: &str) -> Result<Uuid> {
         let url = self.build_resource_url(slug, "prompts");
         let res = self
-            .http
-            .get(&url)
-            .header("X-API-KEY", &self.api_key)
+            .build_auth_request(reqwest::Method::GET, &url)
             .send()
             .await?;
         if !res.status().is_success() {
@@ -234,16 +235,14 @@ impl Jug0Client {
                 slug
             ));
         }
-        let body: PromptResponse = res.json().await?;
+        let body: IdResponse = res.json().await?;
         Ok(body.id)
     }
 
     pub async fn get_workflow_id(&self, slug: &str) -> Result<Uuid> {
         let url = self.build_resource_url(slug, "workflows");
         let res = self
-            .http
-            .get(&url)
-            .header("X-API-KEY", &self.api_key)
+            .build_auth_request(reqwest::Method::GET, &url)
             .send()
             .await?;
         if !res.status().is_success() {
@@ -252,19 +251,162 @@ impl Jug0Client {
                 slug
             ));
         }
-        let body: WorkflowResponse = res.json().await?;
+        let body: IdResponse = res.json().await?;
         Ok(body.id)
     }
 
-    pub async fn apply_prompt(&self, prompt: &PromptResource, force: bool) -> Result<String> {
-        let url_get = format!("{}/api/prompts/{}", self.base_url, prompt.slug);
+    /// Generic upsert: GET by slug → PATCH by id → fallback POST to create.
+    /// Returns a success message string.
+    async fn upsert_resource(
+        &self,
+        slug: &str,
+        endpoint: &str,
+        payload: Value,
+        force: bool,
+    ) -> Result<String> {
+        let url_get = format!("{}/api/{}/{}", self.base_url, endpoint, slug);
         let res_get = self
-            .http
-            .get(&url_get)
-            .header("X-API-KEY", &self.api_key)
+            .build_auth_request(reqwest::Method::GET, &url_get)
             .send()
             .await?;
 
+        if res_get.status().is_success() {
+            // Extract id from response (works for prompts, agents, workflows)
+            let existing: Value = res_get.json().await?;
+            let id = existing
+                .get("id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("Missing 'id' in {} response for '{}'", endpoint, slug))?;
+
+            let url = if force {
+                format!("{}/api/{}?force=true", self.base_url, id)
+            } else {
+                format!("{}/api/{}/{}", self.base_url, endpoint, id)
+            };
+            let res = self
+                .build_auth_request(reqwest::Method::PATCH, &url)
+                .json(&payload)
+                .send()
+                .await?;
+
+            // If PATCH fails with 404, fall through to create (resource belongs to different org)
+            if res.status() == 404 {
+                // Fall through to create
+            } else if !res.status().is_success() {
+                let status = res.status();
+                let error_text = res
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Unknown error".to_string());
+                return Err(anyhow!(
+                    "Failed to update {} '{}': {} - {}",
+                    endpoint,
+                    slug,
+                    status,
+                    error_text
+                ));
+            } else {
+                return Ok(format!(
+                    "Successfully synchronized {}: {}",
+                    endpoint.trim_end_matches('s'),
+                    slug
+                ));
+            }
+        }
+
+        // Create new resource
+        let mut create_payload = payload.clone();
+        create_payload["slug"] = json!(slug);
+        let url = if force {
+            format!("{}/api/{}?force=true", self.base_url, endpoint)
+        } else {
+            format!("{}/api/{}", self.base_url, endpoint)
+        };
+        let res = self
+            .build_auth_request(reqwest::Method::POST, &url)
+            .json(&create_payload)
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            let status = res.status();
+            let error_text = res
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(anyhow!(
+                "Failed to create {} '{}': {} - {}",
+                endpoint.trim_end_matches('s'),
+                slug,
+                status,
+                error_text
+            ));
+        }
+
+        Ok(format!(
+            "Successfully registered new {}: {}",
+            endpoint.trim_end_matches('s'),
+            slug
+        ))
+    }
+
+    /// Upload a local file to jug0 and return the URL
+    pub async fn upload_file(&self, file_path: &std::path::Path) -> Result<String> {
+        let file_name = file_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("upload")
+            .to_string();
+
+        let data = tokio::fs::read(file_path)
+            .await
+            .map_err(|e| anyhow!("Failed to read file '{}': {}", file_path.display(), e))?;
+
+        let ext = file_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+
+        let mime_type = match ext.as_str() {
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "gif" => "image/gif",
+            "webp" => "image/webp",
+            "svg" => "image/svg+xml",
+            _ => "application/octet-stream",
+        };
+
+        let part = reqwest::multipart::Part::bytes(data)
+            .file_name(file_name.clone())
+            .mime_str(mime_type)?;
+
+        let form = reqwest::multipart::Form::new().part("file", part);
+
+        let url = format!("{}/api/upload", self.base_url);
+        let res = self
+            .build_auth_request(reqwest::Method::POST, &url)
+            .multipart(form)
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            let status = res.status();
+            let error_text = res.text().await.unwrap_or_default();
+            return Err(anyhow!("Upload failed ({}): {}", status, error_text));
+        }
+
+        #[derive(Deserialize)]
+        struct UploadResponse {
+            url: String,
+        }
+
+        let resp: UploadResponse = res.json().await?;
+        info!("Uploaded {} → {}", file_name, resp.url);
+        Ok(resp.url)
+    }
+
+    pub async fn apply_prompt(&self, prompt: &PromptResource, force: bool) -> Result<String> {
         let payload = json!({
             "name": prompt.name,
             "content": prompt.content,
@@ -274,69 +416,8 @@ impl Jug0Client {
             "tags": json!([prompt.r#type])
         });
 
-        if res_get.status().is_success() {
-            let existing: PromptResponse = res_get.json().await?;
-            let url = if force {
-                format!("{}/api/prompts/{}?force=true", self.base_url, existing.id)
-            } else {
-                format!("{}/api/prompts/{}", self.base_url, existing.id)
-            };
-            let res = self.http
-                .patch(&url)
-                .header("X-API-KEY", &self.api_key)
-                .json(&payload)
-                .send()
-                .await?;
-
-            // If PATCH fails with 404, fall through to create
-            if res.status() == 404 {
-                // Prompt exists but we don't own it, create our own
-            } else if !res.status().is_success() {
-                let status = res.status();
-                let error_text = res.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-                return Err(anyhow!(
-                    "Failed to update prompt '{}': {} - {}",
-                    prompt.slug,
-                    status,
-                    error_text
-                ));
-            } else {
-                return Ok(format!("Successfully synchronized prompt: {}", prompt.slug));
-            }
-        }
-
-        // Create new prompt
-        {
-            let mut create_payload = payload.clone();
-            create_payload["slug"] = json!(prompt.slug);
-            let url = if force {
-                format!("{}/api/prompts?force=true", self.base_url)
-            } else {
-                format!("{}/api/prompts", self.base_url)
-            };
-            let res = self.http
-                .post(&url)
-                .header("X-API-KEY", &self.api_key)
-                .json(&create_payload)
-                .send()
-                .await?;
-
-        if !res.status().is_success() {
-            let status = res.status();
-            let error_text = res.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(anyhow!(
-                "Failed to create prompt '{}': {} - {}",
-                prompt.slug,
-                status,
-                error_text
-            ));
-        }
-
-        Ok(format!(
-            "Successfully registered new prompt: {}",
-            prompt.slug
-        ))
-        }
+        self.upsert_resource(&prompt.slug, "prompts", payload, force)
+            .await
     }
 
     pub async fn apply_agent(&self, agent: &AgentResource, force: bool) -> Result<String> {
@@ -366,7 +447,8 @@ impl Jug0Client {
                 Err(_) => {
                     tracing::warn!(
                         "Agent '{}': workflow '{}' not found on server, skipping binding.",
-                        agent.slug, slug
+                        agent.slug,
+                        slug
                     );
                     None
                 }
@@ -374,14 +456,6 @@ impl Jug0Client {
         } else {
             None
         };
-
-        let url_get = format!("{}/api/agents/{}", self.base_url, agent.slug);
-        let res_get = self
-            .http
-            .get(&url_get)
-            .header("X-API-KEY", &self.api_key)
-            .send()
-            .await?;
 
         let mut payload = json!({
             "name": agent.name,
@@ -397,6 +471,30 @@ impl Jug0Client {
             payload["username"] = json!(username);
         }
 
+        // Handle avatar: upload local file or use URL directly
+        if let Some(ref avatar_value) = agent.avatar {
+            let avatar_url = if avatar_value.starts_with("http") || avatar_value.starts_with("/") {
+                // Already a URL, use directly
+                avatar_value.clone()
+            } else {
+                // Local file path — upload it
+                let path = std::path::Path::new(avatar_value);
+                match self.upload_file(path).await {
+                    Ok(url) => url,
+                    Err(e) => {
+                        tracing::warn!(
+                            "Agent '{}': failed to upload avatar '{}': {}",
+                            agent.slug,
+                            avatar_value,
+                            e
+                        );
+                        avatar_value.clone()
+                    }
+                }
+            };
+            payload["avatar"] = json!(avatar_url);
+        }
+
         // Add workflow_id: set UUID if resolved, explicit null to unlink, or warning if unresolved
         let workflow_suffix = if let Some(wf_id) = workflow_id {
             payload["workflow_id"] = json!(wf_id);
@@ -404,85 +502,20 @@ impl Jug0Client {
             format!(" (workflow: {} → {})", wf_ref, wf_id)
         } else if agent.workflow.is_some() {
             let wf_ref = agent.workflow.as_deref().unwrap_or("?");
-            format!(" (⚠️ workflow '{}' not bound - not found on server)", wf_ref)
+            format!(
+                " (⚠️ workflow '{}' not bound - not found on server)",
+                wf_ref
+            )
         } else {
             // No workflow field → explicitly unlink
             payload["workflow_id"] = json!(null);
             String::new()
         };
 
-        if res_get.status().is_success() {
-            let existing: AgentResponse = res_get.json().await?;
-            let url = if force {
-                format!("{}/api/agents/{}?force=true", self.base_url, existing.id)
-            } else {
-                format!("{}/api/agents/{}", self.base_url, existing.id)
-            };
-            let res = self.http
-                .patch(&url)
-                .header("X-API-KEY", &self.api_key)
-                .json(&payload)
-                .send()
-                .await?;
-
-            // If PATCH by ID fails with 404, GET may have returned a different org's agent
-            // Retry PATCH by slug (which will match our own agent in the same org)
-            if res.status() == 404 {
-                let url_retry = format!("{}/api/agents/{}", self.base_url, agent.slug);
-                let res_retry = self.http
-                    .patch(&url_retry)
-                    .header("X-API-KEY", &self.api_key)
-                    .json(&payload)
-                    .send()
-                    .await?;
-
-                if res_retry.status().is_success() {
-                    return Ok(format!("Successfully synchronized agent: {}{}", agent.slug, workflow_suffix));
-                }
-                // Still failed, fall through to create
-            } else if !res.status().is_success() {
-                let status = res.status();
-                let error_text = res.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-                return Err(anyhow!(
-                    "Failed to update agent '{}': {} - {}",
-                    agent.slug,
-                    status,
-                    error_text
-                ));
-            } else {
-                return Ok(format!("Successfully synchronized agent: {}{}", agent.slug, workflow_suffix));
-            }
-        }
-
-        // Create new agent (either GET failed or PATCH returned 404)
-        {
-            let mut create_payload = payload.clone();
-            create_payload["slug"] = json!(agent.slug);
-            let url = if force {
-                format!("{}/api/agents?force=true", self.base_url)
-            } else {
-                format!("{}/api/agents", self.base_url)
-            };
-            let res = self.http
-                .post(&url)
-                .header("X-API-KEY", &self.api_key)
-                .json(&create_payload)
-                .send()
-                .await?;
-
-        if !res.status().is_success() {
-            let status = res.status();
-            let error_text = res.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(anyhow!(
-                "Failed to create agent '{}': {} - {}",
-                agent.slug,
-                status,
-                error_text
-            ));
-        }
-
-        Ok(format!("Successfully registered new agent: {}{}", agent.slug, workflow_suffix))
-        }
+        let result = self
+            .upsert_resource(&agent.slug, "agents", payload, force)
+            .await?;
+        Ok(format!("{}{}", result, workflow_suffix))
     }
 
     /// Pull a resource from the server
@@ -496,9 +529,7 @@ impl Jug0Client {
 
         let url = format!("{}/api/{}/{}", self.base_url, endpoint, slug);
         let res = self
-            .http
-            .get(&url)
-            .header("X-API-KEY", &self.api_key)
+            .build_auth_request(reqwest::Method::GET, &url)
             .send()
             .await?;
 
@@ -572,9 +603,7 @@ impl Jug0Client {
 
             let url = format!("{}/api/{}", self.base_url, endpoint);
             let res = self
-                .http
-                .get(&url)
-                .header("X-API-KEY", &self.api_key)
+                .build_auth_request(reqwest::Method::GET, &url)
                 .send()
                 .await?;
 
@@ -605,9 +634,7 @@ impl Jug0Client {
 
         let url = format!("{}/api/{}/{}", self.base_url, endpoint, slug);
         let res = self
-            .http
-            .delete(&url)
-            .header("X-API-KEY", &self.api_key)
+            .build_auth_request(reqwest::Method::DELETE, &url)
             .send()
             .await?;
 
@@ -627,9 +654,7 @@ impl Jug0Client {
     pub async fn get_current_user(&self) -> Result<UserInfo> {
         let url = format!("{}/api/auth/me", self.base_url);
         let res = self
-            .http
-            .get(&url)
-            .header("X-API-KEY", &self.api_key)
+            .build_auth_request(reqwest::Method::GET, &url)
             .send()
             .await?;
 
@@ -652,17 +677,9 @@ impl Jug0Client {
         endpoint_url: &str,
         force: bool,
     ) -> Result<String> {
-        let url_get = format!("{}/api/workflows/{}", self.base_url, workflow.slug);
-        let res_get = self
-            .http
-            .get(&url_get)
-            .header("X-API-KEY", &self.api_key)
-            .send()
-            .await?;
-
         // Parse definition as JSON for JSONB column
-        let definition_json: Value = serde_json::from_str(definition)
-            .unwrap_or_else(|_| json!({"raw": definition}));
+        let definition_json: Value =
+            serde_json::from_str(definition).unwrap_or_else(|_| json!({"raw": definition}));
 
         let payload = json!({
             "name": if workflow.name.is_empty() { None } else { Some(&workflow.name) },
@@ -671,72 +688,8 @@ impl Jug0Client {
             "is_active": true,
         });
 
-        if res_get.status().is_success() {
-            let existing: WorkflowResponse = res_get.json().await?;
-            let url = if force {
-                format!("{}/api/workflows/{}?force=true", self.base_url, existing.id)
-            } else {
-                format!("{}/api/workflows/{}", self.base_url, existing.id)
-            };
-            let res = self.http
-                .patch(&url)
-                .header("X-API-KEY", &self.api_key)
-                .json(&payload)
-                .send()
-                .await?;
-
-            // If PATCH fails with 404, fall through to create
-            if res.status() == 404 {
-                // Workflow exists but we don't own it, create our own
-            } else if !res.status().is_success() {
-                let status = res.status();
-                let error_text = res.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-                return Err(anyhow!(
-                    "Failed to update workflow '{}': {} - {}",
-                    workflow.slug,
-                    status,
-                    error_text
-                ));
-            } else {
-                return Ok(format!(
-                    "Successfully synchronized workflow: {}",
-                    workflow.slug
-                ));
-            }
-        }
-
-        // Create new workflow
-        {
-            let mut create_payload = payload.clone();
-            create_payload["slug"] = json!(workflow.slug);
-            let url = if force {
-                format!("{}/api/workflows?force=true", self.base_url)
-            } else {
-                format!("{}/api/workflows", self.base_url)
-            };
-            let res = self.http
-                .post(&url)
-                .header("X-API-KEY", &self.api_key)
-                .json(&create_payload)
-                .send()
-                .await?;
-
-        if !res.status().is_success() {
-            let status = res.status();
-            let error_text = res.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(anyhow!(
-                "Failed to create workflow '{}': {} - {}",
-                workflow.slug,
-                status,
-                error_text
-            ));
-        }
-
-        Ok(format!(
-            "Successfully registered new workflow: {}",
-            workflow.slug
-        ))
-        }
+        self.upsert_resource(&workflow.slug, "workflows", payload, force)
+            .await
     }
 }
 
@@ -865,7 +818,10 @@ impl JuglansRuntime for Jug0Client {
         message_id: i32,
         state: &str,
     ) -> Result<()> {
-        let url = format!("{}/api/chats/{}/messages/{}", self.base_url, chat_id, message_id);
+        let url = format!(
+            "{}/api/chats/{}/messages/{}",
+            self.base_url, chat_id, message_id
+        );
         let payload = json!({ "state": state });
 
         let res = self
@@ -882,18 +838,19 @@ impl JuglansRuntime for Jug0Client {
         Ok(())
     }
 
-    async fn chat(
-        &self,
-        mut agent_config: Value,
-        messages: Vec<Value>,
-        tools_def: Option<Vec<Value>>,
-        chat_id: Option<&str>,
-        token_sender: Option<UnboundedSender<String>>,
-        meta_sender: Option<UnboundedSender<Value>>,
-        state: Option<&str>,
-        history: Option<&str>,
-        tool_handler: Option<Arc<dyn ChatToolHandler>>,
-    ) -> Result<ChatOutput> {
+    async fn chat(&self, req: ChatRequest) -> Result<ChatOutput> {
+        let ChatRequest {
+            mut agent_config,
+            messages,
+            tools: tools_def,
+            chat_id,
+            token_sender,
+            meta_sender,
+            state,
+            history,
+            tool_handler,
+        } = req;
+
         // 验证 agent_config 包含必须字段
         if let Some(agent_obj) = agent_config.as_object() {
             let required_fields = ["slug", "model"];
@@ -934,16 +891,16 @@ impl JuglansRuntime for Jug0Client {
             "messages": messages
         });
 
-        if let Some(id) = chat_id {
+        if let Some(ref id) = chat_id {
             if !id.is_empty() {
                 payload["chat_id"] = json!(id);
             }
         }
 
-        if let Some(s) = state {
+        if let Some(ref s) = state {
             payload["state"] = json!(s);
         }
-        if let Some(h) = history {
+        if let Some(ref h) = history {
             // 尝试解析为 JSON（false 或 数组），否则忽略
             if let Ok(parsed) = serde_json::from_str::<Value>(h) {
                 payload["history"] = parsed;
@@ -988,7 +945,7 @@ impl JuglansRuntime for Jug0Client {
 
         let mut stream = res.bytes_stream().eventsource();
         let mut text_acc = String::new();
-        let mut final_id = chat_id.unwrap_or("").to_string();
+        let mut final_id = chat_id.unwrap_or_default();
         let mut tool_calls = Vec::new();
 
         while let Some(event_res) = stream.next().await {
@@ -1013,19 +970,31 @@ impl JuglansRuntime for Jug0Client {
 
             if ev.event == "tool_call" {
                 if let Ok(d) = serde_json::from_str::<Value>(&ev.data) {
-                    let tools = d.get("tools").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                    let tools = d
+                        .get("tools")
+                        .and_then(|v| v.as_array())
+                        .cloned()
+                        .unwrap_or_default();
 
                     if let Some(ref handler) = tool_handler {
                         // SSE 统一流：执行工具 → POST /tool-result → 继续读流
-                        let call_id = d.get("call_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let call_id = d
+                            .get("call_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
                         let mut results = Vec::new();
 
                         for tool in &tools {
-                            let name = tool["name"].as_str()
+                            let name = tool["name"]
+                                .as_str()
                                 .or_else(|| tool.pointer("/function/name").and_then(|v| v.as_str()))
                                 .unwrap_or("unknown");
-                            let args = tool["arguments"].as_str()
-                                .or_else(|| tool.pointer("/function/arguments").and_then(|v| v.as_str()))
+                            let args = tool["arguments"]
+                                .as_str()
+                                .or_else(|| {
+                                    tool.pointer("/function/arguments").and_then(|v| v.as_str())
+                                })
                                 .unwrap_or("{}");
                             let tool_call_id = tool["id"].as_str().unwrap_or("").to_string();
 
@@ -1037,21 +1006,49 @@ impl JuglansRuntime for Jug0Client {
                                     format!("Error: {}", e)
                                 }
                             };
-                            info!("🔧 [Tool Handler] {} → {:.80}", name, content.replace('\n', " "));
+                            info!(
+                                "🔧 [Tool Handler] {} → {:.80}",
+                                name,
+                                content.replace('\n', " ")
+                            );
                             results.push(json!({"tool_call_id": tool_call_id, "content": content}));
                         }
 
                         // POST /api/chat/tool-result → jug0 channel 接收 → SSE 流恢复
                         let post_result = self
-                            .build_auth_request(reqwest::Method::POST,
-                                &format!("{}/api/chat/tool-result", self.base_url))
+                            .build_auth_request(
+                                reqwest::Method::POST,
+                                &format!("{}/api/chat/tool-result", self.base_url),
+                            )
                             .json(&json!({"call_id": call_id, "results": results}))
                             .send()
                             .await;
 
                         match post_result {
-                            Ok(r) => info!("🔧 [Tool Handler] tool-result POST: {}", r.status()),
-                            Err(e) => error!("🔧 [Tool Handler] tool-result POST failed: {}", e),
+                            Ok(r) => {
+                                if r.status().is_success() {
+                                    info!("🔧 [Tool Handler] tool-result POST: {}", r.status());
+                                } else {
+                                    let status = r.status();
+                                    let err_text = r
+                                        .text()
+                                        .await
+                                        .unwrap_or_else(|_| "Unknown error".to_string());
+                                    error!(
+                                        "🔧 [Tool Handler] tool-result POST failed: {} - {}",
+                                        status, err_text
+                                    );
+                                    return Err(anyhow!(
+                                        "Tool result submission failed ({}): {}",
+                                        status,
+                                        err_text
+                                    ));
+                                }
+                            }
+                            Err(e) => {
+                                error!("🔧 [Tool Handler] tool-result POST failed: {}", e);
+                                return Err(anyhow!("Tool result submission failed: {}", e));
+                            }
                         }
                         continue; // SSE 流恢复，继续读
                     } else {

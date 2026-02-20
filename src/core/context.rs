@@ -2,7 +2,7 @@
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
@@ -32,7 +32,7 @@ pub enum WorkflowEvent {
 /// A thread-safe, shared state for a single workflow execution.
 #[derive(Debug, Clone)]
 pub struct WorkflowContext {
-    data: Arc<Mutex<Value>>,
+    data: Arc<RwLock<Value>>,
     /// 【新增】用于流式输出的信道
     event_sender: Option<UnboundedSender<WorkflowEvent>>,
     /// 【新增】执行栈追踪，用于防止无限递归
@@ -46,17 +46,22 @@ impl WorkflowContext {
     /// Creates a new, empty context, initialized as a JSON object.
     pub fn new() -> Self {
         Self {
-            data: Arc::new(Mutex::new(json!({}))),
+            data: Arc::new(RwLock::new(json!({}))),
             event_sender: None,
             execution_stack: Arc::new(Mutex::new(Vec::new())),
             max_depth: 10, // 默认最大深度 10 层
         }
     }
 
+    /// 设置最大嵌套深度
+    pub fn set_max_depth(&mut self, max_depth: usize) {
+        self.max_depth = max_depth;
+    }
+
     /// 【新增】创建带信道的上下文
     pub fn with_sender(sender: UnboundedSender<WorkflowEvent>) -> Self {
         Self {
-            data: Arc::new(Mutex::new(json!({}))),
+            data: Arc::new(RwLock::new(json!({}))),
             event_sender: Some(sender),
             execution_stack: Arc::new(Mutex::new(Vec::new())),
             max_depth: 10,
@@ -200,8 +205,8 @@ impl WorkflowContext {
 
         let mut data = self
             .data
-            .lock()
-            .map_err(|_| anyhow!("Failed to acquire context lock"))?;
+            .write()
+            .map_err(|_| anyhow!("Failed to acquire context write lock"))?;
 
         let parts: Vec<&str> = path.split('.').collect();
         let (last_key, parent_parts) = parts
@@ -235,8 +240,8 @@ impl WorkflowContext {
 
         let data = self
             .data
-            .lock()
-            .map_err(|_| anyhow!("Failed to acquire context lock"))?;
+            .read()
+            .map_err(|_| anyhow!("Failed to acquire context read lock"))?;
 
         let pointer = format!("/{}", parts.join("/"));
         Ok(data.pointer(&pointer).cloned())
@@ -246,8 +251,8 @@ impl WorkflowContext {
     pub fn get_as_value(&self) -> Result<Value> {
         let data = self
             .data
-            .lock()
-            .map_err(|_| anyhow!("Failed to acquire context lock"))?;
+            .read()
+            .map_err(|_| anyhow!("Failed to acquire context read lock"))?;
         Ok(data.clone())
     }
 }

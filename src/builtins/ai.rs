@@ -12,7 +12,7 @@ use tracing::{debug, error, info, trace, warn};
 use crate::core::context::WorkflowContext;
 use crate::core::prompt_parser::PromptParser;
 use crate::services::agent_loader::AgentRegistry;
-use crate::services::interface::{ChatToolHandler, JuglansRuntime};
+use crate::services::interface::{ChatRequest, ChatToolHandler, JuglansRuntime};
 use crate::services::jug0::ChatOutput;
 use crate::services::prompt_loader::PromptRegistry;
 
@@ -61,7 +61,76 @@ impl Chat {
                 }
             }
         }
+
+        // Extract last JSON block from mixed prose+JSON text (e.g. DeepSeek output)
+        if let Some(json_block) = Self::extract_last_json_block(trimmed_content) {
+            return json_block;
+        }
+
         trimmed_content.to_string()
+    }
+
+    /// Extract the last valid JSON object/array from mixed text.
+    ///
+    /// Scans forward tracking `{}`/`[]` depth with string-awareness
+    /// (handles escaped quotes and braces inside strings), collects all
+    /// top-level blocks, then validates from last to first.
+    fn extract_last_json_block(text: &str) -> Option<String> {
+        let bytes = text.as_bytes();
+        let len = bytes.len();
+        if len == 0 {
+            return None;
+        }
+
+        let mut blocks: Vec<(usize, usize)> = Vec::new();
+        let mut in_string = false;
+        let mut depth: i32 = 0;
+        let mut block_start: usize = 0;
+        let mut i = 0;
+
+        while i < len {
+            let ch = bytes[i];
+            if in_string {
+                if ch == b'\\' && i + 1 < len {
+                    i += 2;
+                    continue;
+                }
+                if ch == b'"' {
+                    in_string = false;
+                }
+                i += 1;
+                continue;
+            }
+            match ch {
+                b'"' => {
+                    in_string = true;
+                }
+                b'{' | b'[' => {
+                    if depth == 0 {
+                        block_start = i;
+                    }
+                    depth += 1;
+                }
+                b'}' | b']' => {
+                    if depth > 0 {
+                        depth -= 1;
+                        if depth == 0 {
+                            blocks.push((block_start, i));
+                        }
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+
+        for &(start, end) in blocks.iter().rev() {
+            let candidate = &text[start..=end];
+            if serde_json::from_str::<serde_json::Value>(candidate).is_ok() {
+                return Some(candidate.to_string());
+            }
+        }
+        None
     }
 
     /// 尝试在 BuiltinRegistry 中执行 tool，返回 None 表示未找到
@@ -88,7 +157,10 @@ impl Chat {
                     Value::String(s) => s,
                     other => other.to_string(),
                 };
-                info!("  ✅ [Builtin Tool] Result: {:.80}...", s.replace("\n", " "));
+                info!(
+                    "  ✅ [Builtin Tool] Result: {:.80}...",
+                    s.replace("\n", " ")
+                );
                 s
             }
             Ok(None) => {
@@ -111,7 +183,10 @@ impl Chat {
 
         info!("  🔧 [MCP Tool] Attempting: {} ...", tool_name);
         let result = executor.execute_mcp_tool(tool_name, args_str).await?;
-        info!("  ✅ [MCP Tool] Result: {:.80}...", result.replace("\n", " "));
+        info!(
+            "  ✅ [MCP Tool] Result: {:.80}...",
+            result.replace("\n", " ")
+        );
         Some(result)
     }
 
@@ -158,7 +233,10 @@ impl ChatToolHandler for WorkflowToolHandler {
                                 Value::String(s) => s,
                                 other => other.to_string(),
                             };
-                            info!("  ✅ [Builtin Tool] Result: {:.80}...", s.replace('\n', " "));
+                            info!(
+                                "  ✅ [Builtin Tool] Result: {:.80}...",
+                                s.replace('\n', " ")
+                            );
                             return Ok(s);
                         }
                         Ok(None) => {
@@ -178,8 +256,13 @@ impl ChatToolHandler for WorkflowToolHandler {
         if let Some(weak) = &self.builtin_registry {
             if let Some(registry) = weak.upgrade() {
                 if let Some(executor) = registry.get_executor() {
-                    if let Some(result) = executor.execute_mcp_tool(tool_name, arguments_json).await {
-                        info!("  ✅ [MCP Tool] {} → {:.80}...", tool_name, result.replace('\n', " "));
+                    if let Some(result) = executor.execute_mcp_tool(tool_name, arguments_json).await
+                    {
+                        info!(
+                            "  ✅ [MCP Tool] {} → {:.80}...",
+                            tool_name,
+                            result.replace('\n', " ")
+                        );
                         return Ok(result);
                     }
                 }
@@ -187,18 +270,23 @@ impl ChatToolHandler for WorkflowToolHandler {
         }
 
         // 3. Client bridge — 通过 SSE 发给前端执行
-        info!("  🌉 [Client Tool Bridge] Forwarding: {} to frontend", tool_name);
+        info!(
+            "  🌉 [Client Tool Bridge] Forwarding: {} to frontend",
+            tool_name
+        );
         let call = json!({
             "id": uuid::Uuid::new_v4().to_string(),
             "name": tool_name,
             "arguments": arguments_json
         });
-        let results = self.context.emit_tool_call_and_wait(
-            uuid::Uuid::new_v4().to_string(),
-            vec![call],
-            120,
-        ).await?;
-        Ok(results.first().map(|r| r.content.clone()).unwrap_or_default())
+        let results = self
+            .context
+            .emit_tool_call_and_wait(uuid::Uuid::new_v4().to_string(), vec![call], 120)
+            .await?;
+        Ok(results
+            .first()
+            .map(|r| r.content.clone())
+            .unwrap_or_default())
     }
 }
 
@@ -240,7 +328,8 @@ impl ChatToolHandler for OnToolCallHandler {
         if let Some(weak) = &self.builtin_registry {
             if let Some(registry) = weak.upgrade() {
                 if let Some(executor) = registry.get_executor() {
-                    if let Some(result) = executor.execute_mcp_tool(tool_name, arguments_json).await {
+                    if let Some(result) = executor.execute_mcp_tool(tool_name, arguments_json).await
+                    {
                         return Ok(result);
                     }
                 }
@@ -248,23 +337,31 @@ impl ChatToolHandler for OnToolCallHandler {
         }
 
         // 3. 路由到 workflow（替代 client bridge）
-        info!("  🌉 [On Tool Call] Routing {} to workflow: {}", tool_name, self.workflow_path);
+        info!(
+            "  🌉 [On Tool Call] Routing {} to workflow: {}",
+            tool_name, self.workflow_path
+        );
 
         let args_value: Value = serde_json::from_str(arguments_json).unwrap_or(json!({}));
-        self.context.set("input.tool_call".to_string(), json!({
-            "name": tool_name,
-            "arguments": args_value
-        }))?;
+        self.context.set(
+            "input.tool_call".to_string(),
+            json!({
+                "name": tool_name,
+                "arguments": args_value
+            }),
+        )?;
 
         if let Some(weak) = &self.builtin_registry {
             if let Some(registry) = weak.upgrade() {
                 let identifier = format!("on_tool_call:{}", tool_name);
-                let output = registry.execute_nested_workflow(
-                    &self.workflow_path,
-                    &self.base_dir,
-                    &self.context,
-                    identifier,
-                ).await?;
+                let output = registry
+                    .execute_nested_workflow(
+                        &self.workflow_path,
+                        &self.base_dir,
+                        &self.context,
+                        identifier,
+                    )
+                    .await?;
 
                 return Ok(match output {
                     Value::String(s) => s,
@@ -285,7 +382,9 @@ pub struct ExecuteWorkflow {
 
 impl ExecuteWorkflow {
     pub fn new() -> Self {
-        Self { builtin_registry: None }
+        Self {
+            builtin_registry: None,
+        }
     }
 
     pub fn set_registry(&mut self, registry: Weak<super::BuiltinRegistry>) {
@@ -304,10 +403,13 @@ impl Tool for ExecuteWorkflow {
         params: &HashMap<String, String>,
         context: &WorkflowContext,
     ) -> Result<Option<Value>> {
-        let path = params.get("path")
+        let path = params
+            .get("path")
             .ok_or_else(|| anyhow!("execute_workflow: Missing 'path' parameter"))?;
 
-        let registry = self.builtin_registry.as_ref()
+        let registry = self
+            .builtin_registry
+            .as_ref()
             .and_then(|w| w.upgrade())
             .ok_or_else(|| anyhow!("execute_workflow: BuiltinRegistry not available"))?;
 
@@ -322,7 +424,9 @@ impl Tool for ExecuteWorkflow {
         }
 
         info!("│   ⚡ execute_workflow: {}", path);
-        let output = registry.execute_nested_workflow(path, &base_dir, context, identifier).await?;
+        let output = registry
+            .execute_nested_workflow(path, &base_dir, context, identifier)
+            .await?;
         Ok(Some(output))
     }
 }
@@ -346,7 +450,9 @@ impl Tool for Chat {
         // 消息状态：支持组合语法 input:output
         // 单值: state="silent" → input=silent, output=silent
         // 组合: state="context_hidden:context_visible" → input=hidden, output=visible
-        let state_raw = params.get("state").cloned()
+        let state_raw = params
+            .get("state")
+            .cloned()
             .unwrap_or_else(|| "context_visible".to_string());
         let (input_state, output_state) = match state_raw.split_once(':') {
             Some((i, o)) => (i.to_string(), o.to_string()),
@@ -355,8 +461,10 @@ impl Tool for Chat {
         // should_stream 基于 output_state（AI 回复是否对用户可见）
         let should_stream = output_state == "context_visible" || output_state == "display_only";
         // should_persist: input 或 output 任一需要持久化，就继承 chat_id
-        let should_persist = input_state == "context_visible" || input_state == "context_hidden"
-            || output_state == "context_visible" || output_state == "context_hidden";
+        let should_persist = input_state == "context_visible"
+            || input_state == "context_hidden"
+            || output_state == "context_visible"
+            || output_state == "context_hidden";
         let system_prompt_manual_override = params.get("system_prompt").cloned();
         let requested_format_mode = params
             .get("format")
@@ -371,11 +479,13 @@ impl Tool for Chat {
             .flatten()
             .and_then(|v| v.as_str().map(|s| s.to_string()));
 
-        let tools_json_str = params.get("tools")
+        let tools_json_str = params
+            .get("tools")
             .or_else(|| client_tools_from_ctx.as_ref())
             .or_else(|| {
                 // 如果 chat 没有指定 tools，尝试从 agent 获取默认 tools
-                self.agent_registry.get(agent_slug_str)
+                self.agent_registry
+                    .get(agent_slug_str)
                     .and_then(|agent| agent.tools.as_ref())
             });
 
@@ -424,7 +534,8 @@ impl Tool for Chat {
                         } else {
                             // Fallback: 逐个解析 slug，支持 "devtools" 从 builtin schemas 获取
                             let mut all_tools = Vec::new();
-                            let tool_registry_opt = builtin_reg.get_executor()
+                            let tool_registry_opt = builtin_reg
+                                .get_executor()
                                 .map(|e| e.get_tool_registry().clone());
 
                             for slug in &slugs {
@@ -501,19 +612,28 @@ impl Tool for Chat {
                 None
             }
         } else {
-            debug!("Non-persist state ({}): Starting fresh session.", input_state);
+            debug!(
+                "Non-persist state ({}): Starting fresh session.",
+                input_state
+            );
             None
         };
 
         let final_agent_config = if let Some(local_res) = self.agent_registry.get(agent_slug_str) {
-            info!("│   Using local agent: {} (has_workflow: {})", agent_slug_str, local_res.workflow.is_some());
+            info!(
+                "│   Using local agent: {} (has_workflow: {})",
+                agent_slug_str,
+                local_res.workflow.is_some()
+            );
 
             // 【新增】检查 agent 是否有 workflow，如果有则执行嵌套 workflow
             if let Some(ref workflow_path) = local_res.workflow {
                 if let Some(registry_weak) = &self.builtin_registry {
                     if let Some(registry) = registry_weak.upgrade() {
                         // 获取 agent 文件的基准目录
-                        let agent_base_dir = if let Some((_, path)) = self.agent_registry.get_with_path(agent_slug_str) {
+                        let agent_base_dir = if let Some((_, path)) =
+                            self.agent_registry.get_with_path(agent_slug_str)
+                        {
                             path.parent().unwrap_or(std::path::Path::new("."))
                         } else {
                             std::path::Path::new(".")
@@ -523,21 +643,29 @@ impl Tool for Chat {
                         let identifier = format!("{}:{}", agent_slug_str, workflow_path);
 
                         // 获取超时配置（可选参数，默认无限制）
-                        let timeout = params.get("workflow_timeout")
+                        let timeout = params
+                            .get("workflow_timeout")
                             .and_then(|t| t.parse::<u64>().ok())
                             .map(std::time::Duration::from_secs);
 
                         if let Some(timeout_duration) = timeout {
-                            info!("│   ⚡ Executing workflow: {} (timeout: {:?})", workflow_path, timeout_duration);
+                            info!(
+                                "│   ⚡ Executing workflow: {} (timeout: {:?})",
+                                workflow_path, timeout_duration
+                            );
                         } else {
                             info!("│   ⚡ Executing workflow: {} (no timeout)", workflow_path);
                         }
 
                         // 【修复】保存原始 input.message，执行后恢复
-                        let original_input_message = context.resolve_path("input.message").ok().flatten();
+                        let original_input_message =
+                            context.resolve_path("input.message").ok().flatten();
 
                         // 设置 input.message 到 context（workflow 需要）
-                        context.set("input.message".to_string(), serde_json::json!(user_message_body))?;
+                        context.set(
+                            "input.message".to_string(),
+                            serde_json::json!(user_message_body),
+                        )?;
 
                         // 执行嵌套 workflow（带超时控制）
                         let workflow_future = registry.execute_nested_workflow(
@@ -573,7 +701,8 @@ impl Tool for Chat {
 
                                 if requested_format_mode == "json" {
                                     Ok(Some(
-                                        serde_json::from_str::<Value>(&output).unwrap_or(json!(output)),
+                                        serde_json::from_str::<Value>(&output)
+                                            .unwrap_or(json!(output)),
                                     ))
                                 } else {
                                     Ok(Some(json!(output)))
@@ -615,7 +744,10 @@ impl Tool for Chat {
                 resolved_sys_prompt = local_res.system_prompt.clone();
             }
 
-            info!("│   System prompt: {}...", &resolved_sys_prompt.chars().take(100).collect::<String>());
+            info!(
+                "│   System prompt: {}...",
+                &resolved_sys_prompt.chars().take(100).collect::<String>()
+            );
 
             json!({
                 "slug": local_res.slug,
@@ -650,35 +782,40 @@ impl Tool for Chat {
 
         // 创建工具执行回调 — tool_call 在 SSE 流内处理，无需 tool loop
         // 如果指定了 on_tool_call，未解析的 tool call 会路由到指定 workflow
-        let handler: Arc<dyn ChatToolHandler> = if let Some(on_tool_call_path) = params.get("on_tool_call") {
-            let base_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            info!("│   on_tool_call: {} (unresolved tools → workflow)", on_tool_call_path);
-            Arc::new(OnToolCallHandler {
-                builtin_registry: self.builtin_registry.clone(),
-                context: context.clone(),
-                workflow_path: on_tool_call_path.clone(),
-                base_dir,
-            })
-        } else {
-            Arc::new(WorkflowToolHandler {
-                builtin_registry: self.builtin_registry.clone(),
-                context: context.clone(),
-            })
-        };
+        let handler: Arc<dyn ChatToolHandler> =
+            if let Some(on_tool_call_path) = params.get("on_tool_call") {
+                let base_dir =
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                info!(
+                    "│   on_tool_call: {} (unresolved tools → workflow)",
+                    on_tool_call_path
+                );
+                Arc::new(OnToolCallHandler {
+                    builtin_registry: self.builtin_registry.clone(),
+                    context: context.clone(),
+                    workflow_path: on_tool_call_path.clone(),
+                    base_dir,
+                })
+            } else {
+                Arc::new(WorkflowToolHandler {
+                    builtin_registry: self.builtin_registry.clone(),
+                    context: context.clone(),
+                })
+            };
 
         let api_result = self
             .runtime
-            .chat(
-                final_agent_config,
-                chat_messages_buffer,
-                custom_tools_json_schema,
-                active_session_id.as_deref(),
-                effective_token_sender,
-                effective_meta_sender,
-                Some(&state_raw),
-                history_param,
-                Some(handler),
-            )
+            .chat(ChatRequest {
+                agent_config: final_agent_config,
+                messages: chat_messages_buffer,
+                tools: custom_tools_json_schema,
+                chat_id: active_session_id.clone(),
+                token_sender: effective_token_sender,
+                meta_sender: effective_meta_sender,
+                state: Some(state_raw.clone()),
+                history: history_param.map(|s| s.to_string()),
+                tool_handler: Some(handler),
+            })
             .await?;
 
         match api_result {
@@ -700,8 +837,14 @@ impl Tool for Chat {
 
                 if requested_format_mode == "json" {
                     let clean_json_str = self.clean_json_output_verbose(&text);
-                    info!("│   📋 [JSON mode] Raw text: {}", &text.chars().take(500).collect::<String>());
-                    info!("│   📋 [JSON mode] Cleaned: {}", &clean_json_str.chars().take(500).collect::<String>());
+                    info!(
+                        "│   📋 [JSON mode] Raw text: {}",
+                        &text.chars().take(500).collect::<String>()
+                    );
+                    info!(
+                        "│   📋 [JSON mode] Cleaned: {}",
+                        &clean_json_str.chars().take(500).collect::<String>()
+                    );
                     let parsed = serde_json::from_str::<Value>(&clean_json_str);
                     if let Err(ref e) = parsed {
                         warn!("│   ⚠️ [JSON mode] Parse failed: {}", e);
@@ -712,7 +855,9 @@ impl Tool for Chat {
             }
             ChatOutput::ToolCalls { .. } => {
                 // tool_handler 已提供时不应到达此分支
-                Err(anyhow!("Unexpected ToolCalls response — tool_handler should have handled inline"))
+                Err(anyhow!(
+                    "Unexpected ToolCalls response — tool_handler should have handled inline"
+                ))
             }
         }
     }
@@ -789,9 +934,13 @@ impl Tool for History {
             .map(|v| v.to_lowercase() == "true")
             .unwrap_or(false);
 
-        info!("📚 Fetching chat history for: {} (include_all: {})", chat_id, include_all);
+        info!(
+            "📚 Fetching chat history for: {} (include_all: {})",
+            chat_id, include_all
+        );
 
-        let messages = self.runtime
+        let messages = self
+            .runtime
             .fetch_chat_history(chat_id, include_all)
             .await?;
 
@@ -868,5 +1017,78 @@ impl Tool for Prompt {
             self.render_template_verbose(&template_body_content, params, context);
 
         Ok(Some(Value::String(finalized_output)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_pure_json() {
+        let input = r#"{"is_trade": true}"#;
+        let result = Chat::extract_last_json_block(input);
+        assert_eq!(result, Some(r#"{"is_trade": true}"#.to_string()));
+    }
+
+    #[test]
+    fn extract_json_from_prose_prefix() {
+        let input = "根据用户输入分析，这是一个交易意图。\n\n{\"is_trade\": true, \"symbol\": \"BTC\", \"direction\": \"long\", \"leverage\": 10}";
+        let result = Chat::extract_last_json_block(input).unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["is_trade"], json!(true));
+        assert_eq!(parsed["symbol"], json!("BTC"));
+    }
+
+    #[test]
+    fn extract_handles_braces_inside_strings() {
+        let input = r#"{"key": "value { } inside"}"#;
+        let result = Chat::extract_last_json_block(input).unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["key"], json!("value { } inside"));
+    }
+
+    #[test]
+    fn extract_handles_escaped_quotes() {
+        let input = r#"{"msg": "say \"hi\""}"#;
+        let result = Chat::extract_last_json_block(input).unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["msg"], json!("say \"hi\""));
+    }
+
+    #[test]
+    fn extract_returns_last_of_multiple_blocks() {
+        let input = r#"{"first": 1} some text {"second": 2}"#;
+        let result = Chat::extract_last_json_block(input).unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["second"], json!(2));
+    }
+
+    #[test]
+    fn extract_returns_none_for_plain_text() {
+        let input = "这是纯文本，没有任何 JSON 内容";
+        assert!(Chat::extract_last_json_block(input).is_none());
+    }
+
+    #[test]
+    fn extract_handles_nested_objects() {
+        let input = r#"前缀文字 {"outer": {"inner": [1, 2, 3]}} 后缀"#;
+        let result = Chat::extract_last_json_block(input).unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["outer"]["inner"], json!([1, 2, 3]));
+    }
+
+    #[test]
+    fn extract_handles_array_block() {
+        let input = r#"result: [{"a": 1}, {"b": 2}]"#;
+        let result = Chat::extract_last_json_block(input).unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert!(parsed.is_array());
+        assert_eq!(parsed[0]["a"], json!(1));
+    }
+
+    #[test]
+    fn extract_returns_none_for_empty_string() {
+        assert!(Chat::extract_last_json_block("").is_none());
     }
 }

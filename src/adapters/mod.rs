@@ -1,8 +1,8 @@
 // src/adapters/mod.rs
 #![cfg(not(target_arch = "wasm32"))]
 
-pub mod telegram;
 pub mod feishu;
+pub mod telegram;
 
 use anyhow::{anyhow, Result};
 use futures::StreamExt;
@@ -119,14 +119,20 @@ pub async fn chat_via_jug0(
                     let call_id = data["call_id"].as_str().unwrap_or("").to_string();
                     let tools = data["tools"].as_array().cloned().unwrap_or_default();
 
-                    info!("🔧 [Tool Bridge] Received {} tool call(s), call_id: {}", tools.len(), call_id);
+                    info!(
+                        "🔧 [Tool Bridge] Received {} tool call(s), call_id: {}",
+                        tools.len(),
+                        call_id
+                    );
 
                     let mut results = Vec::new();
                     for tool in &tools {
-                        let tool_name = tool["name"].as_str()
+                        let tool_name = tool["name"]
+                            .as_str()
                             .or_else(|| tool["function"]["name"].as_str())
                             .unwrap_or("unknown");
-                        let args_str = tool["arguments"].as_str()
+                        let args_str = tool["arguments"]
+                            .as_str()
                             .or_else(|| tool["function"]["arguments"].as_str())
                             .unwrap_or("{}");
                         let tool_call_id = tool["id"].as_str().unwrap_or("").to_string();
@@ -244,10 +250,7 @@ pub async fn run_agent_for_message(
     {
         use crate::core::tool_loader::ToolLoader;
         use crate::services::tool_registry::ToolRegistry;
-        let tool_pattern = project_root
-            .join("**/*.json")
-            .to_string_lossy()
-            .to_string();
+        let tool_pattern = project_root.join("**/*.json").to_string_lossy().to_string();
         if let Ok(tools) = ToolLoader::load_from_glob(&tool_pattern, project_root) {
             if !tools.is_empty() {
                 let mut registry = ToolRegistry::new();
@@ -265,27 +268,28 @@ pub async fn run_agent_for_message(
             || wf_ref.starts_with("../")
             || Path::new(wf_ref).is_absolute();
 
-        let wf_content = if is_file_path {
-            let full_wf_path = if Path::new(wf_ref).is_absolute() {
-                PathBuf::from(wf_ref)
+        let wf_content =
+            if is_file_path {
+                let full_wf_path = if Path::new(wf_ref).is_absolute() {
+                    PathBuf::from(wf_ref)
+                } else {
+                    agent_dir.join(wf_ref)
+                };
+                Some(fs::read_to_string(&full_wf_path).map_err(|e| {
+                    anyhow!("Workflow File Error: {} (tried {:?})", e, full_wf_path)
+                })?)
             } else {
-                agent_dir.join(wf_ref)
+                let pattern = project_root
+                    .join(format!("**/{}.jgflow", wf_ref))
+                    .to_string_lossy()
+                    .to_string();
+                glob::glob(&pattern)
+                    .ok()
+                    .and_then(|mut paths| paths.find_map(|p| p.ok()))
+                    .map(|path| fs::read_to_string(&path))
+                    .transpose()
+                    .map_err(|e| anyhow!("Workflow File Error: {}", e))?
             };
-            Some(fs::read_to_string(&full_wf_path).map_err(|e| {
-                anyhow!("Workflow File Error: {} (tried {:?})", e, full_wf_path)
-            })?)
-        } else {
-            let pattern = project_root
-                .join(format!("**/{}.jgflow", wf_ref))
-                .to_string_lossy()
-                .to_string();
-            glob::glob(&pattern)
-                .ok()
-                .and_then(|mut paths| paths.find_map(|p| p.ok()))
-                .map(|path| fs::read_to_string(&path))
-                .transpose()
-                .map_err(|e| anyhow!("Workflow File Error: {}", e))?
-        };
 
         match wf_content {
             Some(content) => Some(Arc::new(GraphParser::parse(&content)?)),
@@ -298,7 +302,8 @@ pub async fn run_agent_for_message(
     // 初始化 Python runtime + load workflow tools（需要 &mut self，必须在 Arc 前）
     if let Some(ref wf) = parsed_workflow {
         executor.load_tools(wf).await;
-        if let Err(e) = executor.init_python_runtime(wf) {
+        executor.apply_limits(&config.limits);
+        if let Err(e) = executor.init_python_runtime(wf, config.limits.python_workers) {
             warn!("Failed to initialize Python runtime: {}", e);
         }
     }
@@ -313,14 +318,26 @@ pub async fn run_agent_for_message(
     let ctx = WorkflowContext::with_sender(tx.clone());
 
     // 设置标准化事件输入
-    ctx.set("input.event_type".into(), json!(message.event_type)).ok();
-    ctx.set("input.event_data".into(), message.event_data.clone()).ok();
-    ctx.set("input.user_id".into(), json!(message.platform_user_id)).ok();
-    ctx.set("input.chat_id".into(), json!(message.platform_chat_id)).ok();
+    ctx.set("input.event_type".into(), json!(message.event_type))
+        .ok();
+    ctx.set("input.event_data".into(), message.event_data.clone())
+        .ok();
+    ctx.set("input.user_id".into(), json!(message.platform_user_id))
+        .ok();
+    ctx.set("input.chat_id".into(), json!(message.platform_chat_id))
+        .ok();
     ctx.set("input.text".into(), json!(message.text)).ok();
     ctx.set("input.message".into(), json!(message.text)).ok(); // 兼容
-    ctx.set("input.platform_chat_id".into(), json!(message.platform_chat_id)).ok();
-    ctx.set("input.platform_user_id".into(), json!(message.platform_user_id)).ok();
+    ctx.set(
+        "input.platform_chat_id".into(),
+        json!(message.platform_chat_id),
+    )
+    .ok();
+    ctx.set(
+        "input.platform_user_id".into(),
+        json!(message.platform_user_id),
+    )
+    .ok();
     if let Some(ref username) = message.username {
         ctx.set("input.username".into(), json!(username)).ok();
     }
@@ -380,15 +397,21 @@ pub async fn run_agent_for_message(
                     reply_text = format!("Error: {}", e);
                 }
             }
-            WorkflowEvent::ToolCall { tools, result_tx, .. } => {
+            WorkflowEvent::ToolCall {
+                tools, result_tx, ..
+            } => {
                 if let Some(executor) = tool_executor {
                     let mut results = vec![];
                     for tool in &tools {
-                        let tool_name = tool["name"].as_str()
+                        let tool_name = tool["name"]
+                            .as_str()
                             .or_else(|| tool.pointer("/function/name").and_then(|v| v.as_str()))
                             .unwrap_or("unknown");
-                        let args_str = tool["arguments"].as_str()
-                            .or_else(|| tool.pointer("/function/arguments").and_then(|v| v.as_str()))
+                        let args_str = tool["arguments"]
+                            .as_str()
+                            .or_else(|| {
+                                tool.pointer("/function/arguments").and_then(|v| v.as_str())
+                            })
                             .unwrap_or("{}");
                         let tool_call_id = tool["id"].as_str().unwrap_or("").to_string();
                         let args: Value = serde_json::from_str(args_str).unwrap_or(json!({}));
@@ -401,7 +424,10 @@ pub async fn run_agent_for_message(
                                 format!("Error: {}", e)
                             }
                         };
-                        results.push(crate::core::context::ToolResultPayload { tool_call_id, content });
+                        results.push(crate::core::context::ToolResultPayload {
+                            tool_call_id,
+                            content,
+                        });
                     }
                     let _ = result_tx.send(results);
                 } else {
@@ -420,9 +446,7 @@ pub async fn run_agent_for_message(
 
     // 如果 reply_text 为空，尝试从 context 获取
     if reply_text.is_empty() {
-        if let Ok(Some(val)) = WorkflowContext::new()
-            .resolve_path("reply.output")
-        {
+        if let Ok(Some(val)) = WorkflowContext::new().resolve_path("reply.output") {
             if let Some(s) = val.as_str() {
                 reply_text = s.to_string();
             }

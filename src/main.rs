@@ -21,23 +21,23 @@ use std::sync::Arc;
 use tracing::{error, info, warn};
 
 use core::agent_parser::AgentParser;
-use ui::{render::render_markdown, render::show_welcome, render::show_shortcuts, MultilineInput};
 use core::context::WorkflowContext;
 use core::executor::WorkflowExecutor;
 use core::parser::GraphParser;
 use core::prompt_parser::PromptParser;
 use core::renderer::JwlRenderer;
 use core::resolver;
+use core::skill_parser;
 use core::validator::WorkflowValidator;
 use services::agent_loader::AgentRegistry;
 use services::config::JuglansConfig;
+use services::github;
 use services::interface::JuglansRuntime;
 use services::jug0::Jug0Client;
 use services::mcp::McpClient;
 use services::prompt_loader::PromptRegistry;
-use services::github;
 use services::web_server;
-use core::skill_parser;
+use ui::{render::render_markdown, render::show_shortcuts, render::show_welcome, MultilineInput};
 
 #[derive(Parser)]
 #[command(name = "juglans", author = "Juglans Team", version = env!("CARGO_PKG_VERSION"))]
@@ -99,6 +99,9 @@ enum Commands {
         /// Recursively scan directories
         #[arg(long, short = 'r')]
         recursive: bool,
+        /// Override workflow endpoint URL (e.g. https://agent.juglans.ai)
+        #[arg(long)]
+        endpoint: Option<String>,
     },
     /// Validate syntax of .jgflow, .jgagent, .jgprompt files (like cargo check)
     Check {
@@ -209,10 +212,15 @@ fn resolve_input_data(cli: &Cli) -> Result<Option<String>> {
     }
 }
 
-fn resolve_import_patterns_verbose(base_dir_ref: &Path, raw_patterns: &[String]) -> Vec<String> {
+fn resolve_import_patterns_verbose(
+    base_dir_ref: &Path,
+    raw_patterns: &[String],
+    at_base: Option<&Path>,
+) -> Vec<String> {
+    let expanded = resolver::expand_at_prefixes(raw_patterns, at_base);
     let mut resolved_output_list = Vec::new();
-    for pattern_str in raw_patterns {
-        if pattern_str.starts_with("/") {
+    for pattern_str in &expanded {
+        if Path::new(pattern_str).is_absolute() {
             resolved_output_list.push(pattern_str.clone());
         } else {
             let combined_path_obj = base_dir_ref.join(pattern_str);
@@ -220,6 +228,150 @@ fn resolve_import_patterns_verbose(base_dir_ref: &Path, raw_patterns: &[String])
         }
     }
     resolved_output_list
+}
+
+/// Build a configured WorkflowExecutor with registries, MCP tools, and Python runtime.
+async fn build_executor(
+    config: &JuglansConfig,
+    prompt_registry: PromptRegistry,
+    agent_registry: AgentRegistry,
+    workflow: Option<&Arc<core::graph::WorkflowGraph>>,
+) -> Result<Arc<WorkflowExecutor>> {
+    let runtime: Arc<dyn JuglansRuntime> = Arc::new(Jug0Client::new(config));
+
+    let mut executor = WorkflowExecutor::new_with_debug(
+        Arc::new(prompt_registry),
+        Arc::new(agent_registry),
+        runtime,
+        config.debug.clone(),
+    )
+    .await;
+
+    executor.load_mcp_tools(config).await;
+    executor.apply_limits(&config.limits);
+
+    if let Some(wf) = workflow {
+        executor.load_tools(wf).await;
+        if let Err(e) = executor.init_python_runtime(wf, config.limits.python_workers) {
+            warn!("Failed to initialize Python runtime: {}", e);
+        }
+    }
+
+    let shared = Arc::new(executor);
+    shared.get_registry().set_executor(Arc::downgrade(&shared));
+
+    Ok(shared)
+}
+
+/// Run an interactive agent REPL loop (shared between local and remote agents).
+async fn run_agent_loop(
+    executor: Arc<WorkflowExecutor>,
+    agent_name: &str,
+    agent_slug: &str,
+    context: &WorkflowContext,
+    workflow: Option<&Arc<core::graph::WorkflowGraph>>,
+    cli_input: Option<&str>,
+    extra_chat_params: HashMap<String, String>,
+) -> Result<()> {
+    let mut input_widget = MultilineInput::new();
+
+    loop {
+        let session_input = if let Some(cmd_input) = cli_input {
+            cmd_input.to_string()
+        } else {
+            let chat_id = context
+                .resolve_path("reply.chat_id")
+                .ok()
+                .flatten()
+                .and_then(|v| v.as_str().map(|s| s.to_string()));
+
+            match input_widget.prompt(agent_name, chat_id.as_deref())? {
+                Some(input) => {
+                    let trimmed = input.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    if trimmed == "help" {
+                        show_shortcuts();
+                        continue;
+                    }
+                    if trimmed == "exit" || trimmed == "quit" {
+                        println!("\nGoodbye!");
+                        break;
+                    }
+                    trimmed.to_string()
+                }
+                None => {
+                    println!("\nGoodbye!");
+                    break;
+                }
+            }
+        };
+
+        if session_input.is_empty() {
+            continue;
+        }
+
+        context.set("input.message".to_string(), json!(session_input.clone()))?;
+        context.set("reply.output".to_string(), json!(""))?;
+        context.set("reply.status".to_string(), json!("processing"))?;
+
+        if let Some(target_flow) = workflow {
+            println!("\n⚡ Workflow Execution...");
+            if let Err(e) = executor
+                .clone()
+                .execute_graph(target_flow.clone(), context)
+                .await
+            {
+                error!("❌ Execution Failed: {}\n", e);
+            } else {
+                println!("✓ Workflow Completed\n");
+            }
+
+            let answer = context
+                .resolve_path("reply.output")?
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_default();
+
+            if !answer.is_empty() {
+                render_markdown(&answer);
+                println!();
+            }
+        } else {
+            let mut params = HashMap::from([
+                ("agent".to_string(), agent_slug.to_string()),
+                ("message".to_string(), session_input),
+            ]);
+            params.extend(extra_chat_params.clone());
+
+            match executor
+                .execute_tool_internal("chat", &params, context)
+                .await
+            {
+                Ok(Some(result)) => {
+                    if let Some(text) = result.as_str() {
+                        render_markdown(text);
+                        println!();
+                    } else if let Some(obj) = result.as_object() {
+                        if let Some(text) = obj.get("response").and_then(|v| v.as_str()) {
+                            render_markdown(text);
+                            println!();
+                        }
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    error!("❌ Chat error: {}", e);
+                }
+            }
+        }
+
+        if cli_input.is_some() {
+            break;
+        }
+    }
+
+    Ok(())
 }
 
 async fn handle_file_logic(cli: &Cli) -> Result<()> {
@@ -249,6 +401,14 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
         "jgflow" => {
             info!("🚀 Starting Workflow Graph Logic: {:?}", source_file_path);
             let local_config = JuglansConfig::load()?;
+
+            // 计算 @ 路径别名的基准目录
+            let at_base: Option<PathBuf> = local_config
+                .paths
+                .base
+                .as_ref()
+                .map(|b| project_root_path.join(b));
+
             let mut workflow_definition_obj = GraphParser::parse(&source_raw_text)?;
 
             // 解析 flow imports 并合并子图（编译时图合并）
@@ -257,6 +417,7 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
                 &mut workflow_definition_obj,
                 &relative_base_offset,
                 &mut import_stack,
+                at_base.as_deref(),
             )?;
 
             let mut prompt_registry_inst = PromptRegistry::new();
@@ -265,14 +426,17 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
             let resolved_p_patterns = resolve_import_patterns_verbose(
                 &relative_base_offset,
                 &workflow_definition_obj.prompt_patterns,
+                at_base.as_deref(),
             );
             let resolved_a_patterns = resolve_import_patterns_verbose(
                 &relative_base_offset,
                 &workflow_definition_obj.agent_patterns,
+                at_base.as_deref(),
             );
             let resolved_t_patterns = resolve_import_patterns_verbose(
                 &relative_base_offset,
                 &workflow_definition_obj.tool_patterns,
+                at_base.as_deref(),
             );
 
             // Update workflow with resolved tool patterns
@@ -286,30 +450,17 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
                 agent_registry_inst.load_from_paths(&resolved_a_patterns)?;
             }
 
-            let runtime_impl: Arc<dyn JuglansRuntime> = Arc::new(Jug0Client::new(&local_config));
-
-            let mut executor_instance_obj = WorkflowExecutor::new_with_debug(
-                Arc::new(prompt_registry_inst),
-                Arc::new(agent_registry_inst),
-                runtime_impl,
-                local_config.debug.clone(),
+            let shared_executor_engine = build_executor(
+                &local_config,
+                prompt_registry_inst,
+                agent_registry_inst,
+                Some(&workflow_definition_obj),
             )
-            .await;
-
-            executor_instance_obj.load_mcp_tools(&local_config).await;
-            executor_instance_obj.load_tools(&workflow_definition_obj).await;
-            executor_instance_obj.init_python_runtime(&workflow_definition_obj)?;
-
-            let shared_executor_engine = Arc::new(executor_instance_obj);
-
-            // 【新增】注入 executor 引用到 registry（用于嵌套 workflow 执行）
-            shared_executor_engine
-                .get_registry()
-                .set_executor(Arc::downgrade(&shared_executor_engine));
+            .await?;
 
             // 解析 CLI 输入
-            let input_value: Option<serde_json::Value> = resolve_input_data(cli)?
-                .and_then(|s| serde_json::from_str(&s).ok());
+            let input_value: Option<serde_json::Value> =
+                resolve_input_data(cli)?.and_then(|s| serde_json::from_str(&s).ok());
 
             shared_executor_engine
                 .run_with_input(workflow_definition_obj, &local_config, input_value)
@@ -328,8 +479,12 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
 
             let global_system_config = JuglansConfig::load()?;
 
-            let shared_runtime_ptr: Arc<dyn JuglansRuntime> =
-                Arc::new(Jug0Client::new(&global_system_config));
+            // 计算 @ 路径别名的基准目录
+            let at_base: Option<PathBuf> = global_system_config
+                .paths
+                .base
+                .as_ref()
+                .map(|b| project_root_path.join(b));
 
             let mut local_p_store = PromptRegistry::new();
             let mut local_a_store = AgentRegistry::new();
@@ -357,19 +512,23 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
                     &mut workflow_parsed_data,
                     wf_context_base_dir,
                     &mut import_stack,
+                    at_base.as_deref(),
                 )?;
 
                 let p_import_list = resolve_import_patterns_verbose(
                     wf_context_base_dir,
                     &workflow_parsed_data.prompt_patterns,
+                    at_base.as_deref(),
                 );
                 let a_import_list = resolve_import_patterns_verbose(
                     wf_context_base_dir,
                     &workflow_parsed_data.agent_patterns,
+                    at_base.as_deref(),
                 );
                 let t_import_list = resolve_import_patterns_verbose(
                     wf_context_base_dir,
                     &workflow_parsed_data.tool_patterns,
+                    at_base.as_deref(),
                 );
 
                 local_p_store.load_from_paths(&p_import_list)?;
@@ -381,132 +540,31 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
                 active_workflow_ptr = Some(Arc::new(workflow_parsed_data));
             }
 
-            let mut executor_temp = WorkflowExecutor::new_with_debug(
-                Arc::new(local_p_store),
-                Arc::new(local_a_store),
-                shared_runtime_ptr,
-                global_system_config.debug.clone(),
+            let primary_executor_ptr = build_executor(
+                &global_system_config,
+                local_p_store,
+                local_a_store,
+                active_workflow_ptr.as_ref(),
             )
-            .await;
-
-            executor_temp.load_mcp_tools(&global_system_config).await;
-
-            // Load tools from workflow if present
-            if let Some(ref wf_arc) = active_workflow_ptr {
-                executor_temp.load_tools(wf_arc).await;
-                if let Err(e) = executor_temp.init_python_runtime(wf_arc) {
-                    warn!("Failed to initialize Python runtime: {}", e);
-                }
-            }
-
-            let primary_executor_ptr = Arc::new(executor_temp);
-
-            // 【新增】注入 executor 引用到 registry（用于嵌套 workflow 执行）
-            primary_executor_ptr
-                .get_registry()
-                .set_executor(Arc::downgrade(&primary_executor_ptr));
+            .await?;
 
             let multi_turn_interaction_ctx = WorkflowContext::new();
             let resolved_cli_input = resolve_input_data(cli)?;
 
-            let mut input_widget = MultilineInput::new();
+            // Set agent definition in context (persists across REPL iterations)
+            multi_turn_interaction_ctx
+                .set("input.agent".to_string(), json!(agent_meta_definition))?;
 
-            loop {
-                let session_input_string = if let Some(cmd_input) = &resolved_cli_input {
-                    cmd_input.clone()
-                } else {
-                    // 获取当前 chat_id
-                    let chat_id = multi_turn_interaction_ctx
-                        .resolve_path("reply.chat_id")
-                        .ok()
-                        .flatten()
-                        .and_then(|v| v.as_str().map(|s| s.to_string()));
-
-                    // 使用 MultilineInput 获取输入
-                    match input_widget.prompt(
-                        &agent_meta_definition.name,
-                        chat_id.as_deref(),
-                    )? {
-                        Some(input) => {
-                            let trimmed = input.trim();
-                            if trimmed.is_empty() {
-                                continue;
-                            }
-                            // 处理特殊命令
-                            if trimmed == "help" {
-                                show_shortcuts();
-                                continue;
-                            }
-                            if trimmed == "exit" || trimmed == "quit" {
-                                println!("\nGoodbye!");
-                                break;
-                            }
-                            trimmed.to_string()
-                        }
-                        None => {
-                            println!("\nGoodbye!");
-                            break;
-                        }
-                    }
-                };
-
-                if session_input_string.is_empty() {
-                    continue;
-                }
-
-                multi_turn_interaction_ctx
-                    .set("input.message".to_string(), json!(session_input_string))?;
-                multi_turn_interaction_ctx
-                    .set("input.agent".to_string(), json!(agent_meta_definition))?;
-
-                multi_turn_interaction_ctx.set("reply.output".to_string(), json!(""))?;
-                multi_turn_interaction_ctx.set("reply.status".to_string(), json!("processing"))?;
-
-                if let Some(target_flow_obj) = &active_workflow_ptr {
-                    println!("\n⚡ Workflow Execution...");
-                    if let Err(logic_err) = primary_executor_ptr
-                        .clone()
-                        .execute_graph(target_flow_obj.clone(), &multi_turn_interaction_ctx)
-                        .await
-                    {
-                        error!("❌ Execution Failed: {}\n", logic_err);
-                    } else {
-                        println!("✓ Workflow Completed\n");
-                    }
-
-                    let final_concatenated_answer = multi_turn_interaction_ctx
-                        .resolve_path("reply.output")?
-                        .and_then(|v| v.as_str().map(|s| s.to_string()))
-                        .unwrap_or_default();
-
-                    if !final_concatenated_answer.is_empty() {
-                        // 使用 Markdown 渲染（不带边框）
-                        render_markdown(&final_concatenated_answer);
-                        println!();  // 添加空行
-                    }
-                } else {
-                    let chat_result_raw = primary_executor_ptr
-                        .execute_tool_internal(
-                            "chat",
-                            &HashMap::from([
-                                ("agent".to_string(), agent_meta_definition.slug.clone()),
-                                ("message".to_string(), session_input_string),
-                            ]),
-                            &multi_turn_interaction_ctx,
-                        )
-                        .await?;
-
-                    if let Some(Value::Object(map)) = chat_result_raw {
-                        if let Some(txt_content) = map.get("response").and_then(|v| v.as_str()) {
-                            println!("\nAssistant > {}", txt_content);
-                        }
-                    }
-                }
-
-                if resolved_cli_input.is_some() {
-                    break;
-                }
-            }
+            run_agent_loop(
+                primary_executor_ptr,
+                &agent_meta_definition.name,
+                &agent_meta_definition.slug,
+                &multi_turn_interaction_ctx,
+                active_workflow_ptr.as_ref(),
+                resolved_cli_input.as_deref(),
+                HashMap::new(),
+            )
+            .await?;
         }
 
         "jgprompt" => {
@@ -540,8 +598,6 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
 
 /// Handle remote agent via @handle (e.g., `juglans @jarvis`)
 async fn handle_remote_agent(cli: &Cli, handle: &str) -> Result<()> {
-    use crate::services::jug0::RemoteAgentDetail;
-
     info!("🌐 Connecting to remote agent: {}", handle);
 
     // Load config
@@ -551,126 +607,44 @@ async fn handle_remote_agent(cli: &Cli, handle: &str) -> Result<()> {
     // Fetch agent from jug0
     let agent_detail = jug0_client.get_agent(handle).await?;
 
-    let agent_name = agent_detail.name.clone().unwrap_or_else(|| handle.to_string());
+    let agent_name = agent_detail
+        .name
+        .clone()
+        .unwrap_or_else(|| handle.to_string());
     let agent_slug = agent_detail.slug.clone();
 
     // Show welcome
     show_welcome(&agent_name, &agent_slug, false);
 
-    // Create runtime
-    let runtime: Arc<dyn JuglansRuntime> = Arc::new(jug0_client);
-
-    // Empty registries (remote agent, no local files)
-    let prompt_registry = Arc::new(PromptRegistry::new());
-    let agent_registry = Arc::new(AgentRegistry::new());
-
-    let mut executor = WorkflowExecutor::new_with_debug(
-        prompt_registry,
-        agent_registry,
-        runtime,
-        config.debug.clone(),
-    )
-    .await;
-
-    executor.load_mcp_tools(&config).await;
-
-    let executor_ptr = Arc::new(executor);
-    executor_ptr
-        .get_registry()
-        .set_executor(Arc::downgrade(&executor_ptr));
+    // Build executor with empty registries (remote agent, no local files)
+    let executor_ptr =
+        build_executor(&config, PromptRegistry::new(), AgentRegistry::new(), None).await?;
 
     let context = WorkflowContext::new();
     let resolved_cli_input = resolve_input_data(cli)?;
 
-    let mut input_widget = MultilineInput::new();
-
-    // Build system prompt from remote agent
-    let system_prompt = agent_detail
-        .system_prompt
-        .as_ref()
-        .map(|p| p.content.clone());
-
-    loop {
-        let user_input = if let Some(ref cmd_input) = resolved_cli_input {
-            cmd_input.clone()
-        } else {
-            let chat_id = context
-                .resolve_path("reply.chat_id")
-                .ok()
-                .flatten()
-                .and_then(|v| v.as_str().map(|s| s.to_string()));
-
-            match input_widget.prompt(&agent_name, chat_id.as_deref())? {
-                Some(input) => {
-                    let trimmed = input.trim();
-                    if trimmed.is_empty() {
-                        continue;
-                    }
-                    if trimmed == "help" {
-                        show_shortcuts();
-                        continue;
-                    }
-                    if trimmed == "exit" || trimmed == "quit" {
-                        println!("\nGoodbye!");
-                        break;
-                    }
-                    trimmed.to_string()
-                }
-                None => {
-                    println!("\nGoodbye!");
-                    break;
-                }
-            }
-        };
-
-        if user_input.is_empty() {
-            continue;
-        }
-
-        // Build chat parameters
-        let mut params = HashMap::new();
-        params.insert("agent".to_string(), agent_slug.clone());
-        params.insert("message".to_string(), user_input);
-
-        if let Some(ref model) = agent_detail.default_model {
-            params.insert("model".to_string(), model.clone());
-        }
-        if let Some(ref sp) = system_prompt {
-            params.insert("system_prompt".to_string(), sp.clone());
-        }
-        if let Some(temp) = agent_detail.temperature {
-            params.insert("temperature".to_string(), temp.to_string());
-        }
-
-        // Execute chat
-        context.set("reply.output".to_string(), json!(""))?;
-        context.set("reply.status".to_string(), json!("processing"))?;
-
-        match executor_ptr
-            .execute_tool_internal("chat", &params, &context)
-            .await
-        {
-            Ok(Some(result)) => {
-                if let Some(text) = result.as_str() {
-                    render_markdown(text);
-                    println!();
-                } else if let Some(obj) = result.as_object() {
-                    if let Some(text) = obj.get("response").and_then(|v| v.as_str()) {
-                        render_markdown(text);
-                        println!();
-                    }
-                }
-            }
-            Ok(None) => {}
-            Err(e) => {
-                error!("❌ Chat error: {}", e);
-            }
-        }
-
-        if resolved_cli_input.is_some() {
-            break;
-        }
+    // Build extra chat parameters from remote agent config
+    let mut extra_chat_params = HashMap::new();
+    if let Some(ref model) = agent_detail.default_model {
+        extra_chat_params.insert("model".to_string(), model.clone());
     }
+    if let Some(ref sp) = agent_detail.system_prompt {
+        extra_chat_params.insert("system_prompt".to_string(), sp.content.clone());
+    }
+    if let Some(temp) = agent_detail.temperature {
+        extra_chat_params.insert("temperature".to_string(), temp.to_string());
+    }
+
+    run_agent_loop(
+        executor_ptr,
+        &agent_name,
+        &agent_slug,
+        &context,
+        None,
+        resolved_cli_input.as_deref(),
+        extra_chat_params,
+    )
+    .await?;
 
     Ok(())
 }
@@ -773,12 +747,17 @@ async fn handle_whoami(verbose: bool, check_connection: bool) -> Result<()> {
 
     // Try to get server user info
     let jug0_client = Jug0Client::new(&config);
-    let server_user = if config.account.api_key.is_some() && !config.account.api_key.as_ref().unwrap().is_empty() {
+    let server_user = if config.account.api_key.is_some()
+        && !config.account.api_key.as_ref().unwrap().is_empty()
+    {
         match jug0_client.get_current_user().await {
             Ok(user) => Some(user),
             Err(e) => {
                 if verbose {
-                    println!("\x1b[33m⚠️  Unable to fetch server user info: {}\x1b[0m\n", e);
+                    println!(
+                        "\x1b[33m⚠️  Unable to fetch server user info: {}\x1b[0m\n",
+                        e
+                    );
                 }
                 None
             }
@@ -799,7 +778,11 @@ async fn handle_whoami(verbose: bool, check_connection: bool) -> Result<()> {
             println!("Role:          {}", role);
         }
         if let Some(org_id) = &user.org_id {
-            println!("Organization:  {} ({})", user.org_name.as_deref().unwrap_or(""), org_id);
+            println!(
+                "Organization:  {} ({})",
+                user.org_name.as_deref().unwrap_or(""),
+                org_id
+            );
         }
         println!();
     }
@@ -878,7 +861,10 @@ async fn handle_whoami(verbose: bool, check_connection: bool) -> Result<()> {
 
     // Web server config (verbose)
     if verbose {
-        println!("Web Server:    {}:{}", config.server.host, config.server.port);
+        println!(
+            "Web Server:    {}:{}",
+            config.server.host, config.server.port
+        );
         println!();
     }
 
@@ -1254,6 +1240,7 @@ async fn handle_apply(
     dry_run: bool,
     resource_type: Option<String>,
     recursive: bool,
+    endpoint: Option<String>,
 ) -> Result<()> {
     let local_config = JuglansConfig::load()?;
 
@@ -1278,7 +1265,11 @@ async fn handle_apply(
                     all.extend(workspace.tools.clone());
                     all
                 }
-                _ => return Err(anyhow!("Invalid resource type. Use: workflow, agent, prompt, tool, all")),
+                _ => {
+                    return Err(anyhow!(
+                        "Invalid resource type. Use: workflow, agent, prompt, tool, all"
+                    ))
+                }
             };
 
             for pattern in patterns {
@@ -1318,10 +1309,10 @@ async fn handle_apply(
     files_to_apply.sort_by_key(|path| {
         let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
         match ext {
-            "jgflow" => 0,    // Workflows first (no dependencies)
-            "jgprompt" => 1,  // Prompts second (agents reference them)
-            "jgagent" => 2,   // Agents last (depend on workflows and prompts)
-            "json" => 3,      // Tool definitions last (local only)
+            "jgflow" => 0,   // Workflows first (no dependencies)
+            "jgprompt" => 1, // Prompts second (agents reference them)
+            "jgagent" => 2,  // Agents last (depend on workflows and prompts)
+            "json" => 3,     // Tool definitions last (local only)
             _ => 4,
         }
     });
@@ -1373,7 +1364,7 @@ async fn handle_apply(
     let mut error_count = 0;
 
     for file in &files_to_apply {
-        match apply_single_file(file, &jug0_api_ptr, &local_config, force).await {
+        match apply_single_file(file, &jug0_api_ptr, &local_config, force, &endpoint).await {
             Ok(ApplyResult::Success(msg)) => {
                 println!("  ✅ {}", msg);
                 success_count += 1;
@@ -1421,7 +1412,10 @@ enum ApplyResult {
 fn should_exclude(path: &Path, exclude_patterns: &[String]) -> bool {
     let path_str = path.to_str().unwrap_or("");
     for pattern in exclude_patterns {
-        if glob::Pattern::new(pattern).ok().map_or(false, |p| p.matches(path_str)) {
+        if glob::Pattern::new(pattern)
+            .ok()
+            .map_or(false, |p| p.matches(path_str))
+        {
             return true;
         }
     }
@@ -1468,23 +1462,33 @@ async fn apply_single_file(
     jug0_client: &Jug0Client,
     config: &JuglansConfig,
     force: bool,
+    endpoint: &Option<String>,
 ) -> Result<ApplyResult> {
     let raw_file_data = fs::read_to_string(file)?;
     let ext_str = file.extension().and_then(|s| s.to_str()).unwrap_or("");
-    let filename = file.file_name().and_then(|s| s.to_str()).unwrap_or("unknown");
+    let filename = file
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("unknown");
 
     match ext_str {
         "jgagent" => {
             let msg = jug0_client
                 .apply_agent(&AgentParser::parse(&raw_file_data)?, force)
                 .await?;
-            Ok(ApplyResult::Success(format!("agent: {} - {}", filename, msg)))
+            Ok(ApplyResult::Success(format!(
+                "agent: {} - {}",
+                filename, msg
+            )))
         }
         "jgprompt" => {
             let msg = jug0_client
                 .apply_prompt(&PromptParser::parse(&raw_file_data)?, force)
                 .await?;
-            Ok(ApplyResult::Success(format!("prompt: {} - {}", filename, msg)))
+            Ok(ApplyResult::Success(format!(
+                "prompt: {} - {}",
+                filename, msg
+            )))
         }
         "jgflow" => {
             let mut workflow = GraphParser::parse(&raw_file_data)?;
@@ -1497,15 +1501,32 @@ async fn apply_single_file(
                     .to_string();
             }
 
-            let endpoint_url = format!(
-                "http://{}:{}/api/chat",
-                config.server.host, config.server.port
-            );
+            // Priority: CLI --endpoint > config endpoint_url > default host:port
+            let endpoint_url = endpoint
+                .clone()
+                .or_else(|| config.server.endpoint_url.clone())
+                .map(|url| {
+                    let base = url.trim_end_matches('/');
+                    if base.ends_with("/api/chat") {
+                        base.to_string()
+                    } else {
+                        format!("{}/api/chat", base)
+                    }
+                })
+                .unwrap_or_else(|| {
+                    format!(
+                        "http://{}:{}/api/chat",
+                        config.server.host, config.server.port
+                    )
+                });
 
             let msg = jug0_client
                 .apply_workflow(&workflow, &raw_file_data, &endpoint_url, force)
                 .await?;
-            Ok(ApplyResult::Success(format!("workflow: {} - {}", filename, msg)))
+            Ok(ApplyResult::Success(format!(
+                "workflow: {} - {}",
+                filename, msg
+            )))
         }
         "json" => {
             // Tool definition files - skip for now as they don't need to be uploaded
@@ -1519,7 +1540,11 @@ async fn apply_single_file(
     }
 }
 
-async fn handle_bot(platform: &str, agent_override: Option<String>, port: Option<u16>) -> Result<()> {
+async fn handle_bot(
+    platform: &str,
+    agent_override: Option<String>,
+    port: Option<u16>,
+) -> Result<()> {
     let config = JuglansConfig::load()?;
     let current_dir = env::current_dir()?;
     let project_root = find_project_root(&current_dir)?;
@@ -1528,7 +1553,9 @@ async fn handle_bot(platform: &str, agent_override: Option<String>, port: Option
         "telegram" => {
             let agent_slug = agent_override
                 .or_else(|| {
-                    config.bot.as_ref()
+                    config
+                        .bot
+                        .as_ref()
                         .and_then(|b| b.telegram.as_ref())
                         .map(|t| t.agent.clone())
                 })
@@ -1538,13 +1565,17 @@ async fn handle_bot(platform: &str, agent_override: Option<String>, port: Option
         "feishu" | "lark" => {
             let agent_slug = agent_override
                 .or_else(|| {
-                    config.bot.as_ref()
+                    config
+                        .bot
+                        .as_ref()
                         .and_then(|b| b.feishu.as_ref())
                         .map(|f| f.agent.clone())
                 })
                 .unwrap_or_else(|| "default".to_string());
             let feishu_port = port.unwrap_or_else(|| {
-                config.bot.as_ref()
+                config
+                    .bot
+                    .as_ref()
                     .and_then(|b| b.feishu.as_ref())
                     .map(|f| f.port)
                     .unwrap_or(9000)
@@ -1552,7 +1583,10 @@ async fn handle_bot(platform: &str, agent_override: Option<String>, port: Option
             adapters::feishu::start(config, project_root, agent_slug, feishu_port).await?;
         }
         _ => {
-            return Err(anyhow!("Unknown platform '{}'. Supported: telegram, feishu", platform));
+            return Err(anyhow!(
+                "Unknown platform '{}'. Supported: telegram, feishu",
+                platform
+            ));
         }
     }
     Ok(())
@@ -1560,7 +1594,13 @@ async fn handle_bot(platform: &str, agent_override: Option<String>, port: Option
 
 async fn handle_skills(action: &SkillsAction) -> Result<()> {
     match action {
-        SkillsAction::Add { repo, skills, all, list, output } => {
+        SkillsAction::Add {
+            repo,
+            skills,
+            all,
+            list,
+            output,
+        } => {
             // --list: show available skills and exit
             if *list {
                 println!("Fetching skill list from {}...", repo);
@@ -1626,7 +1666,10 @@ async fn handle_skills(action: &SkillsAction) -> Result<()> {
                 success_count,
                 prompts_dir.display()
             );
-            println!("Use 'juglans apply {}/*.jgprompt' to push to jug0.", prompts_dir.display());
+            println!(
+                "Use 'juglans apply {}/*.jgprompt' to push to jug0.",
+                prompts_dir.display()
+            );
         }
         SkillsAction::List => {
             let prompts_dir = PathBuf::from("./prompts");
@@ -1675,8 +1718,23 @@ async fn main() -> Result<()> {
         match sub_command_enum {
             Commands::Init { name } => handle_init(name)?,
             Commands::Install => handle_install().await?,
-            Commands::Apply { paths, force, dry_run, r#type, recursive } => {
-                handle_apply(paths.clone(), *force, *dry_run, r#type.clone(), *recursive).await?
+            Commands::Apply {
+                paths,
+                force,
+                dry_run,
+                r#type,
+                recursive,
+                endpoint,
+            } => {
+                handle_apply(
+                    paths.clone(),
+                    *force,
+                    *dry_run,
+                    r#type.clone(),
+                    *recursive,
+                    endpoint.clone(),
+                )
+                .await?
             }
             Commands::Check { path, all, format } => {
                 handle_check(path.as_deref(), *all, format)?;
@@ -1714,10 +1772,17 @@ async fn main() -> Result<()> {
             Commands::Delete { slug, r#type } => {
                 handle_delete(slug, r#type).await?;
             }
-            Commands::Whoami { verbose, check_connection } => {
+            Commands::Whoami {
+                verbose,
+                check_connection,
+            } => {
                 handle_whoami(*verbose, *check_connection).await?;
             }
-            Commands::Bot { platform, agent, port } => {
+            Commands::Bot {
+                platform,
+                agent,
+                port,
+            } => {
                 handle_bot(platform, agent.clone(), *port).await?;
             }
             Commands::Skills { action } => {

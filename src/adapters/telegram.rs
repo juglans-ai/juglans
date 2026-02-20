@@ -6,12 +6,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{error, info};
 
-use crate::services::config::JuglansConfig;
 use super::{run_agent_for_message, PlatformMessage};
+use crate::services::config::JuglansConfig;
 
 /// 启动 Telegram Bot（long polling 模式）
 pub async fn start(config: JuglansConfig, project_root: PathBuf, agent_slug: String) -> Result<()> {
-    let bot_config = config.bot.as_ref()
+    let bot_config = config
+        .bot
+        .as_ref()
         .and_then(|b| b.telegram.as_ref())
         .ok_or_else(|| anyhow::anyhow!("Missing [bot.telegram] config in juglans.toml"))?;
 
@@ -35,9 +37,7 @@ pub async fn start(config: JuglansConfig, project_root: PathBuf, agent_slug: Str
         return Err(anyhow::anyhow!("Invalid Telegram bot token: {:?}", me_resp));
     }
 
-    let bot_name = me_resp["result"]["username"]
-        .as_str()
-        .unwrap_or("unknown");
+    let bot_name = me_resp["result"]["username"].as_str().unwrap_or("unknown");
     info!("   Bot: @{}", bot_name);
     info!("   Ready! Waiting for messages...");
 
@@ -129,8 +129,14 @@ pub async fn start(config: JuglansConfig, project_root: PathBuf, agent_slug: Str
                         .send()
                         .await;
 
-                    match run_agent_for_message(&config, &project_root, &agent_slug, &platform_msg, None)
-                        .await
+                    match run_agent_for_message(
+                        &config,
+                        &project_root,
+                        &agent_slug,
+                        &platform_msg,
+                        None,
+                    )
+                    .await
                     {
                         Ok(reply) => {
                             // 分段发送（Telegram 消息最大 4096 字符）
@@ -194,9 +200,7 @@ fn split_message(text: &str, max_len: usize) -> Vec<String> {
         }
 
         // 尝试在换行处分割
-        let split_pos = remaining[..max_len]
-            .rfind('\n')
-            .unwrap_or(max_len);
+        let split_pos = remaining[..max_len].rfind('\n').unwrap_or(max_len);
 
         chunks.push(remaining[..split_pos].to_string());
         remaining = &remaining[split_pos..].trim_start();

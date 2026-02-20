@@ -5,8 +5,8 @@
 use anyhow::{anyhow, Context, Result};
 use reqwest::Client;
 use serde::Deserialize;
-use std::path::{Path, PathBuf};
 use std::fs;
+use std::path::{Path, PathBuf};
 use tracing::info;
 
 /// A single file or directory entry from GitHub Contents API.
@@ -38,9 +38,12 @@ pub async fn fetch_skills(
     skill_names: &[String],
     output_dir: &Path,
 ) -> Result<Vec<FetchedSkill>> {
-    let (owner, repo) = owner_repo
-        .split_once('/')
-        .ok_or_else(|| anyhow!("Invalid repo format. Expected 'owner/repo', got '{}'", owner_repo))?;
+    let (owner, repo) = owner_repo.split_once('/').ok_or_else(|| {
+        anyhow!(
+            "Invalid repo format. Expected 'owner/repo', got '{}'",
+            owner_repo
+        )
+    })?;
 
     let client = Client::new();
     let mut results = Vec::new();
@@ -101,11 +104,7 @@ pub async fn list_remote_skills(owner_repo: &str) -> Result<Vec<String>> {
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(anyhow!(
-            "GitHub API returned {}: {}",
-            status,
-            body
-        ));
+        return Err(anyhow!("GitHub API returned {}: {}", status, body));
     }
 
     let entries: Vec<GitHubContent> = resp.json().await?;

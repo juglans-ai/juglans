@@ -51,6 +51,9 @@ pub struct ServerConfig {
     pub host: String,
     #[serde(default = "default_server_port")]
     pub port: u16,
+    /// 公网 endpoint URL，用于 apply workflow 时写入 jug0
+    /// 示例: "https://agent.juglans.ai"
+    pub endpoint_url: Option<String>,
 }
 
 // 【新增】Debug 配置部分
@@ -71,6 +74,58 @@ pub struct DebugConfig {
     /// 显示变量解析过程
     #[serde(default)]
     pub show_variables: bool,
+}
+
+// 运行时限制配置
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct RuntimeLimits {
+    /// Loop 最大迭代次数 (default: 100)
+    #[serde(default = "default_max_loop_iterations")]
+    pub max_loop_iterations: usize,
+
+    /// 嵌套执行最大深度 (default: 10)
+    #[serde(default = "default_max_execution_depth")]
+    pub max_execution_depth: usize,
+
+    /// HTTP 请求超时秒数 (default: 120)
+    #[serde(default = "default_http_timeout_secs")]
+    pub http_timeout_secs: u64,
+
+    /// Python worker 数量 (default: 1)
+    #[serde(default = "default_python_workers")]
+    pub python_workers: usize,
+}
+
+impl Default for RuntimeLimits {
+    fn default() -> Self {
+        Self {
+            max_loop_iterations: default_max_loop_iterations(),
+            max_execution_depth: default_max_execution_depth(),
+            http_timeout_secs: default_http_timeout_secs(),
+            python_workers: default_python_workers(),
+        }
+    }
+}
+
+fn default_max_loop_iterations() -> usize {
+    100
+}
+fn default_max_execution_depth() -> usize {
+    10
+}
+fn default_http_timeout_secs() -> u64 {
+    120
+}
+fn default_python_workers() -> usize {
+    1
+}
+
+// 路径别名配置
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub struct PathsConfig {
+    /// @ 路径别名的基准目录（相对于 project root）
+    /// None = 功能禁用，Some(".") = @ 指向项目根
+    pub base: Option<String>,
 }
 
 // Bot 配置
@@ -148,8 +203,16 @@ pub struct JuglansConfig {
     #[serde(default)]
     pub debug: DebugConfig,
 
+    // 运行时限制配置
+    #[serde(default)]
+    pub limits: RuntimeLimits,
+
     // Bot 配置
     pub bot: Option<BotConfig>,
+
+    // 路径别名配置
+    #[serde(default)]
+    pub paths: PathsConfig,
 }
 
 fn default_jug0_config() -> Jug0Config {
@@ -164,6 +227,7 @@ impl Default for ServerConfig {
         Self {
             host: default_server_host(),
             port: default_server_port(),
+            endpoint_url: None,
         }
     }
 }
@@ -196,7 +260,9 @@ impl JuglansConfig {
                 mcp_servers: vec![],
                 env: Default::default(),
                 debug: DebugConfig::default(),
+                limits: RuntimeLimits::default(),
                 bot: None,
+                paths: PathsConfig::default(),
             });
         }
 

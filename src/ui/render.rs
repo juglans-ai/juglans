@@ -69,6 +69,9 @@ pub fn show_shortcuts() {
     println!("  {}         Submit message", "Enter".cyan());
     println!("  {}   New line", "Shift+Enter".cyan());
     println!("  {}        Cancel input", "Ctrl+C".cyan());
-    println!("  {}      Exit program (or type 'exit'/'quit')", "Ctrl+D".cyan());
+    println!(
+        "  {}      Exit program (or type 'exit'/'quit')",
+        "Ctrl+D".cyan()
+    );
     println!();
 }

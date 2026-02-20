@@ -4,7 +4,7 @@ use glob::glob;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use crate::core::agent_parser::{AgentParser, AgentResource};
 

@@ -1,11 +1,13 @@
-FROM debian:bookworm-slim
+FROM juglansai/juglans:latest AS bin
+
+FROM debian:trixie-slim
 
 RUN apt-get update && apt-get install -y \
     ca-certificates python3 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY juglans /usr/local/bin/
-COPY workers/ /usr/local/bin/workers/
+COPY --from=bin /usr/local/bin/juglans /usr/local/bin/
+COPY --from=bin /usr/local/bin/workers/ /usr/local/bin/workers/
 
 WORKDIR /workspace
 EXPOSE 8080

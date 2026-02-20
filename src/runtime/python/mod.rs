@@ -124,7 +124,9 @@ impl PythonRuntime {
         let response = self.pool.call(&actual_target, &method, args, kwargs)?;
 
         if response.is_error() {
-            let error = response.error.ok_or_else(|| anyhow!("Unknown Python error"))?;
+            let error = response
+                .error
+                .ok_or_else(|| anyhow!("Unknown Python error"))?;
             return Err(anyhow!(
                 "Python error ({}): {}\n{}",
                 error.error_type,
@@ -144,7 +146,9 @@ impl PythonRuntime {
                     .unwrap_or(Value::Null)
             }))
         } else {
-            response.value.ok_or_else(|| anyhow!("Python call returned no value"))
+            response
+                .value
+                .ok_or_else(|| anyhow!("Python call returned no value"))
         }
     }
 
@@ -165,8 +169,8 @@ impl PythonRuntime {
             let remainder = &call_path[module.len()..];
             if remainder.starts_with('.') {
                 let method = &remainder[1..]; // Skip the dot
-                // Handle nested calls like "sklearn.ensemble.RandomForestClassifier"
-                // target = "sklearn.ensemble", method = "RandomForestClassifier"
+                                              // Handle nested calls like "sklearn.ensemble.RandomForestClassifier"
+                                              // target = "sklearn.ensemble", method = "RandomForestClassifier"
                 if let Some(last_dot) = method.rfind('.') {
                     let full_target = format!("{}.{}", module, &method[..last_dot]);
                     let final_method = &method[last_dot + 1..];
@@ -199,7 +203,9 @@ impl PythonRuntime {
         let response = self.pool.call(ref_id, method, args, kwargs)?;
 
         if response.is_error() {
-            let error = response.error.ok_or_else(|| anyhow!("Unknown Python error"))?;
+            let error = response
+                .error
+                .ok_or_else(|| anyhow!("Unknown Python error"))?;
             return Err(anyhow!(
                 "Python error ({}): {}",
                 error.error_type,
@@ -216,7 +222,9 @@ impl PythonRuntime {
                     .unwrap_or(Value::Null)
             }))
         } else {
-            response.value.ok_or_else(|| anyhow!("Python method returned no value"))
+            response
+                .value
+                .ok_or_else(|| anyhow!("Python method returned no value"))
         }
     }
 }

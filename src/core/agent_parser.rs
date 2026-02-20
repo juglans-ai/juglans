@@ -23,6 +23,8 @@ pub struct AgentResource {
     pub skills: Vec<String>,
     /// @username for this agent (auto-registers handle in jug0)
     pub username: Option<String>,
+    /// Avatar image (local file path or URL)
+    pub avatar: Option<String>,
 }
 
 pub struct AgentParser;
@@ -55,14 +57,14 @@ impl AgentParser {
                         Rule::string => {
                             let slug = inner.as_str().trim_matches('"');
                             format!("@{}", slug)
-                        },
+                        }
 
                         // 多个引用：tools: ["web-tools", "data-tools"]
                         // 解析为字符串数组并序列化为 JSON
                         Rule::list => {
                             let slugs = Self::parse_list(inner.clone());
                             serde_json::to_string(&slugs).unwrap_or_else(|_| "[]".to_string())
-                        },
+                        }
 
                         _ => String::new(),
                     });
@@ -74,6 +76,7 @@ impl AgentParser {
                 Rule::key_mcp => agent.mcp = Self::parse_list(pair),
                 Rule::key_skills => agent.skills = Self::parse_list(pair),
                 Rule::key_username => agent.username = Some(Self::parse_string(pair)),
+                Rule::key_avatar => agent.avatar = Some(Self::parse_string(pair)),
                 Rule::key_system => {
                     let inner = pair.into_inner().next().unwrap();
                     match inner.as_rule() {
@@ -93,11 +96,12 @@ impl AgentParser {
 
                             // Split into lines, skip the first (empty after "|")
                             let lines: Vec<&str> = body.lines().collect();
-                            let content_lines: Vec<&str> = if lines.first().map_or(false, |l| l.is_empty()) {
-                                lines[1..].to_vec()
-                            } else {
-                                lines
-                            };
+                            let content_lines: Vec<&str> =
+                                if lines.first().map_or(false, |l| l.is_empty()) {
+                                    lines[1..].to_vec()
+                                } else {
+                                    lines
+                                };
 
                             // Find minimum indentation (ignoring blank lines)
                             let min_indent = content_lines
@@ -171,10 +175,7 @@ impl AgentParser {
                             .trim_matches('"')
                             .to_string();
                         let value = Self::parse_json_value(pair_iter.next().unwrap());
-                        map.insert(
-                            key,
-                            serde_json::from_str(&value).unwrap_or(json!(value)),
-                        );
+                        map.insert(key, serde_json::from_str(&value).unwrap_or(json!(value)));
                     }
                 }
                 serde_json::to_string(&map).unwrap()
@@ -183,7 +184,9 @@ impl AgentParser {
                 let mut arr = Vec::new();
                 for inner_pair in pair.into_inner() {
                     let value = Self::parse_json_value(inner_pair);
-                    arr.push(serde_json::from_str::<serde_json::Value>(&value).unwrap_or(json!(value)));
+                    arr.push(
+                        serde_json::from_str::<serde_json::Value>(&value).unwrap_or(json!(value)),
+                    );
                 }
                 serde_json::to_string(&arr).unwrap()
             }
@@ -221,7 +224,9 @@ system_prompt: |
 "#;
         let agent = AgentParser::parse(input).expect("parse should succeed");
         assert_eq!(agent.slug, "test-agent");
-        assert!(agent.system_prompt.contains("你是一个专业的加密货币 AI 助手。"));
+        assert!(agent
+            .system_prompt
+            .contains("你是一个专业的加密货币 AI 助手。"));
         assert!(agent.system_prompt.contains("\n\n"));
         assert!(agent.system_prompt.contains("你的能力："));
         assert!(agent.system_prompt.contains("create_trade_suggestion"));

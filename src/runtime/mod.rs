@@ -4,4 +4,4 @@
 
 pub mod python;
 
-pub use python::{PythonRuntime, PythonWorkerPool, is_python_ref, get_python_ref};
+pub use python::{get_python_ref, is_python_ref, PythonRuntime, PythonWorkerPool};

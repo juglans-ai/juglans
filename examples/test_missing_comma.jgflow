@@ -1,0 +1,7 @@
+name: "Test Missing Comma"
+entry: [start]
+
+[start]: notify(message="hello" status="world")
+[end]: notify(message="done")
+
+[start] -> [end]

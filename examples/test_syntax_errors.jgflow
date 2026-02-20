@@ -1,0 +1,7 @@
+name: "Test Syntax Errors"
+entry: [start]
+
+# Missing value after equals
+[start]: notify(message=)
+
+[start] -> [end]

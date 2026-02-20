@@ -25,14 +25,9 @@ pub enum PythonRequest {
         attr: String,
     },
     /// Delete references (garbage collection)
-    Del {
-        id: String,
-        refs: Vec<String>,
-    },
+    Del { id: String, refs: Vec<String> },
     /// Health check
-    Ping {
-        id: String,
-    },
+    Ping { id: String },
 }
 
 impl PythonRequest {
@@ -130,7 +125,8 @@ mod tests {
 
     #[test]
     fn test_response_deserialization() {
-        let json = r#"{"id": "test-1", "type": "value", "value": {"a": 1}, "ref": null, "error": null}"#;
+        let json =
+            r#"{"id": "test-1", "type": "value", "value": {"a": 1}, "ref": null, "error": null}"#;
         let resp: PythonResponse = serde_json::from_str(json).unwrap();
 
         assert_eq!(resp.id, "test-1");

@@ -45,12 +45,15 @@ pub fn parse_skill_md(content: &str) -> Result<SkillResource> {
 
     // Must start with ---
     if !trimmed.starts_with("---") {
-        return Err(anyhow!("SKILL.md must start with '---' (YAML frontmatter delimiter)"));
+        return Err(anyhow!(
+            "SKILL.md must start with '---' (YAML frontmatter delimiter)"
+        ));
     }
 
     // Find the closing ---
     let after_first = &trimmed[3..];
-    let closing_pos = after_first.find("\n---")
+    let closing_pos = after_first
+        .find("\n---")
         .ok_or_else(|| anyhow!("Missing closing '---' for YAML frontmatter"))?;
 
     let frontmatter_str = &after_first[..closing_pos].trim();
@@ -123,7 +126,8 @@ fn parse_frontmatter(input: &str) -> Result<SkillFrontmatter> {
 
     Ok(SkillFrontmatter {
         name: name.ok_or_else(|| anyhow!("SKILL.md frontmatter missing required 'name' field"))?,
-        description: description.ok_or_else(|| anyhow!("SKILL.md frontmatter missing required 'description' field"))?,
+        description: description
+            .ok_or_else(|| anyhow!("SKILL.md frontmatter missing required 'description' field"))?,
         license,
         compatibility,
         allowed_tools,
@@ -193,10 +197,7 @@ pub fn skill_to_jgprompt(skill: &SkillResource) -> String {
     // Frontmatter
     out.push_str("---\n");
     out.push_str(&format!("slug: \"{}\"\n", skill.name));
-    out.push_str(&format!(
-        "name: \"{}\"\n",
-        skill.name.replace('-', " ")
-    ));
+    out.push_str(&format!("name: \"{}\"\n", skill.name.replace('-', " ")));
     out.push_str("type: \"system\"\n");
     out.push_str(&format!(
         "description: \"{}\"\n",

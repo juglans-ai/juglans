@@ -30,9 +30,27 @@ pub trait Tool: Send + Sync {
     ) -> Result<Option<Value>>;
 }
 
+/// Central registry of builtin tools.
+///
+/// # Circular dependency pattern
+///
+/// `WorkflowExecutor` owns `Arc<BuiltinRegistry>`, while `BuiltinRegistry` holds
+/// a `Weak<WorkflowExecutor>` back-reference for nested workflow execution, MCP tool
+/// dispatch, and tool registry resolution. This bidirectional relationship is required
+/// because builtin tools (Chat, ExecuteWorkflow) need executor capabilities at runtime.
+///
+/// The `Weak` reference breaks the ownership cycle and is set post-construction via
+/// `set_executor()`. Similarly, `Chat` and `ExecuteWorkflow` hold `Weak<BuiltinRegistry>`
+/// to access these capabilities without preventing deallocation.
+///
+/// **Future improvement**: Extract the three executor capabilities (`execute_mcp_tool`,
+/// `get_tool_registry`, `execute_graph`) into a trait. The blocker is that `execute_graph`
+/// uses `self: Arc<Self>` for `tokio::spawn`, which isn't compatible with `#[async_trait]`
+/// trait objects. A redesign of the parallel execution model would be needed first.
 pub struct BuiltinRegistry {
     tools: RwLock<HashMap<String, Arc<Box<dyn Tool>>>>,
-    // 用于执行嵌套 workflow（避免循环依赖）
+    /// Back-reference to WorkflowExecutor for nested execution and MCP dispatch.
+    /// Set post-construction via `set_executor()`. See struct-level docs for rationale.
     executor: RwLock<Option<std::sync::Weak<crate::core::executor::WorkflowExecutor>>>,
     prompt_registry: Arc<PromptRegistry>,
     agent_registry: Arc<AgentRegistry>,
@@ -89,7 +107,10 @@ impl BuiltinRegistry {
         {
             let mut guard = registry_arc.tools.write().expect("Lock poisoned");
             guard.insert("chat".to_string(), Arc::new(Box::new(chat_tool)));
-            guard.insert("execute_workflow".to_string(), Arc::new(Box::new(exec_wf_tool)));
+            guard.insert(
+                "execute_workflow".to_string(),
+                Arc::new(Box::new(exec_wf_tool)),
+            );
         }
 
         registry_arc
@@ -129,11 +150,7 @@ impl BuiltinRegistry {
 
     /// 获取 WorkflowExecutor 引用（用于访问 ToolRegistry）
     pub fn get_executor(&self) -> Option<Arc<crate::core::executor::WorkflowExecutor>> {
-        self.executor
-            .read()
-            .ok()?
-            .as_ref()?
-            .upgrade()
+        self.executor.read().ok()?.as_ref()?.upgrade()
     }
 
     /// 执行嵌套 workflow（由 Chat tool 调用）
@@ -164,12 +181,14 @@ impl BuiltinRegistry {
         let workflow_graph = GraphParser::parse(&workflow_content)?;
 
         // 3. 加载 workflow 依赖的 prompts 和 agents
-        let workflow_base_dir = abs_workflow_path.parent().unwrap_or(std::path::Path::new("."));
+        let workflow_base_dir = abs_workflow_path
+            .parent()
+            .unwrap_or(std::path::Path::new("."));
 
         // 解析并加载资源
         if !workflow_graph.prompt_patterns.is_empty() || !workflow_graph.agent_patterns.is_empty() {
-            use crate::services::prompt_loader::PromptRegistry;
             use crate::services::agent_loader::AgentRegistry;
+            use crate::services::prompt_loader::PromptRegistry;
 
             // TODO: 这里简化处理，实际应该有更好的资源隔离策略
             // 可以考虑创建临时 registry 或合并到当前 registry
@@ -177,19 +196,25 @@ impl BuiltinRegistry {
 
         // 4. 获取 executor 并执行
         let executor_weak = {
-            let guard = self.executor.read()
+            let guard = self
+                .executor
+                .read()
                 .map_err(|_| anyhow::anyhow!("Failed to acquire executor lock"))?;
-            guard.clone()
+            guard
+                .clone()
                 .ok_or_else(|| anyhow::anyhow!("WorkflowExecutor not initialized"))?
         };
 
-        let executor = executor_weak.upgrade()
+        let executor = executor_weak
+            .upgrade()
             .ok_or_else(|| anyhow::anyhow!("WorkflowExecutor has been dropped"))?;
 
         debug!("│   ├─ Executing nested workflow: {}", workflow_path);
 
         // 执行 workflow
-        executor.execute_graph(Arc::new(workflow_graph), context).await?;
+        executor
+            .execute_graph(Arc::new(workflow_graph), context)
+            .await?;
 
         // 5. 退出执行栈
         context.exit_execution()?;

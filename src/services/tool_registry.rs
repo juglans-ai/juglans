@@ -101,7 +101,11 @@ impl ToolRegistry {
         }
 
         let result: Vec<Value> = merged_tools.into_values().collect();
-        debug!("Resolved {} tool(s) from {} slug(s)", result.len(), slugs.len());
+        debug!(
+            "Resolved {} tool(s) from {} slug(s)",
+            result.len(),
+            slugs.len()
+        );
         Ok(result)
     }
 

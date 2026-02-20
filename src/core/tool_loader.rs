@@ -89,8 +89,8 @@ impl ToolLoader {
         let mut tools = Vec::new();
         let mut count = 0;
 
-        for entry in glob(pattern_str)
-            .with_context(|| format!("Invalid glob pattern: {}", pattern_str))?
+        for entry in
+            glob(pattern_str).with_context(|| format!("Invalid glob pattern: {}", pattern_str))?
         {
             match entry {
                 Ok(path) => {
@@ -102,7 +102,11 @@ impl ToolLoader {
                             }
                             Err(e) => {
                                 // Log error but continue loading other files
-                                tracing::warn!("Failed to load tool from {}: {}", path.display(), e);
+                                tracing::warn!(
+                                    "Failed to load tool from {}: {}",
+                                    path.display(),
+                                    e
+                                );
                             }
                         }
                     }

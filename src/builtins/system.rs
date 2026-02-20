@@ -123,7 +123,10 @@ impl Tool for Reply {
         let message = params.get("message").map(|s| s.as_str()).unwrap_or("");
 
         // 支持组合语法 input:output（与 chat() 一致）
-        let state_raw = params.get("state").map(|s| s.as_str()).unwrap_or("context_visible");
+        let state_raw = params
+            .get("state")
+            .map(|s| s.as_str())
+            .unwrap_or("context_visible");
         let (input_state, output_state) = match state_raw.split_once(':') {
             Some((i, o)) => (i, o),
             None => (state_raw, state_raw),
@@ -138,11 +141,15 @@ impl Tool for Reply {
         }
 
         // 持久化 reply 消息到 jug0（用 output_state 控制 reply 自身的持久化）
-        let should_persist_reply = output_state == "context_visible" || output_state == "context_hidden";
+        let should_persist_reply =
+            output_state == "context_visible" || output_state == "context_hidden";
         if should_persist_reply {
             if let Ok(Some(chat_id_val)) = context.resolve_path("reply.chat_id") {
                 if let Some(chat_id) = chat_id_val.as_str() {
-                    let _ = self.runtime.create_message(chat_id, "assistant", message, output_state).await;
+                    let _ = self
+                        .runtime
+                        .create_message(chat_id, "assistant", message, output_state)
+                        .await;
                 }
             }
         }
@@ -153,17 +160,24 @@ impl Tool for Reply {
             context.resolve_path("reply.user_message_id"),
         ) {
             if let (Some(chat_id), Some(umid)) = (chat_id_val.as_str(), umid_val.as_i64()) {
-                let _ = self.runtime.update_message_state(chat_id, umid as i32, input_state).await;
+                let _ = self
+                    .runtime
+                    .update_message_state(chat_id, umid as i32, input_state)
+                    .await;
             }
         }
 
         // 更新 reply.output（与 chat() 一致）
-        let current = context.resolve_path("reply.output")
+        let current = context
+            .resolve_path("reply.output")
             .ok()
             .flatten()
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .unwrap_or_default();
-        context.set("reply.output".to_string(), json!(format!("{}{}", current, message)))?;
+        context.set(
+            "reply.output".to_string(),
+            json!(format!("{}{}", current, message)),
+        )?;
 
         Ok(Some(json!({
             "content": message,
@@ -199,12 +213,12 @@ impl Tool for FeishuWebhook {
         } else {
             // 尝试从配置文件加载
             match crate::services::config::JuglansConfig::load() {
-                Ok(config) => {
-                    config.bot.as_ref()
-                        .and_then(|b| b.feishu.as_ref())
-                        .and_then(|f| f.webhook_url.clone())
-                        .ok_or_else(|| anyhow!("No webhook_url in [bot.feishu] config"))?
-                }
+                Ok(config) => config
+                    .bot
+                    .as_ref()
+                    .and_then(|b| b.feishu.as_ref())
+                    .and_then(|f| f.webhook_url.clone())
+                    .ok_or_else(|| anyhow!("No webhook_url in [bot.feishu] config"))?,
                 Err(_) => return Err(anyhow!("Cannot load config for feishu webhook_url")),
             }
         };
