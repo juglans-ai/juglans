@@ -31,8 +31,8 @@ jobs:
         with:
           key: docker-${{ github.ref_name }}-x86_64-unknown-linux-gnu
 
-      - name: Force rebuild on version change
-        run: touch Cargo.toml src/main.rs
+      - name: Clean stale build artifacts
+        run: cargo clean
 
       - name: Build release binary
         run: cargo build --release --target x86_64-unknown-linux-gnu
