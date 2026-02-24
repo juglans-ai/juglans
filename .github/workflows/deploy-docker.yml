@@ -29,7 +29,7 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          key: docker-x86_64-unknown-linux-gnu
+          key: docker-${{ github.ref_name }}-x86_64-unknown-linux-gnu
 
       - name: Build release binary
         run: cargo build --release --target x86_64-unknown-linux-gnu
