@@ -1,0 +1,15 @@
+[book]
+title = "Juglans"
+description = "AI Workflow Orchestration Framework"
+authors = ["Juglans"]
+language = "en"
+src = "."
+
+[build]
+build-dir = "../target/book"
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/juglans-ai/juglans"
+edit-url-template = "https://github.com/juglans-ai/juglans/edit/main/docs/{path}"
