@@ -50,7 +50,7 @@ getrandom = { version = "0.2", features = ["js"] }
 tokio = { version = "1.0", features = ["full"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "multipart"] }
 clap = { version = "4.4", features = ["derive"] }
-toml = "0.8"
+toml = "1.0"
 include_dir = "0.7"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 eventsource-stream = "0.2"
