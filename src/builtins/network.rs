@@ -62,7 +62,7 @@ impl Tool for FetchUrl {
             "method": method,
             "url": url,
             "content": content_value,
-            "ok": status >= 200 && status < 300
+            "ok": (200..300).contains(&status)
         })))
     }
 }
@@ -124,7 +124,7 @@ impl Tool for Fetch {
 
         Ok(Some(json!({
             "status": status,
-            "ok": status >= 200 && status < 300,
+            "ok": (200..300).contains(&status),
             "data": data
         })))
     }

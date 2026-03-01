@@ -22,9 +22,9 @@
 
 ```
 Entry Agent (test.jgagent)
-  ├─ workflow: test.jgflow
+  ├─ workflow: test.jg
   │
-  └─ test.jgflow
+  └─ test.jg
       ├─ prompts: [test.jgprompt]
       ├─ agents: [test-worker.jgagent]  ← Pure Agent
       │
@@ -41,7 +41,7 @@ Entry Agent (test.jgagent)
 2. **依赖关系清晰**
 
    - workflow 的 `agents:` 列表明确声明了所有依赖
-   - 避免隐式依赖（如之前 test.jgflow 使用 "test" agent 但未声明）
+   - 避免隐式依赖（如之前 test.jg 使用 "test" agent 但未声明）
 3. **职责分离**
 
    - Entry agent：定义入口点和绑定顶层 workflow
@@ -84,7 +84,7 @@ if let Some(local_res) = self.agent_registry.get(agent_slug_str) {
 ❌ **不推荐**（虽然可以工作）：
 
 ```yaml
-# bad-example.jgflow
+# bad-example.jg
 prompts: ["./test.jgprompt"]
 # agents: []  ← 没有声明依赖
 
@@ -97,7 +97,7 @@ prompts: ["./test.jgprompt"]
 ✅ **推荐**：
 
 ```yaml
-e# good-example.jgflow
+e# good-example.jg
 prompts: ["./test.jgprompt"]
 agents: ["./agents/test-worker.jgagent"]  ← 明确声明
 
@@ -113,13 +113,13 @@ agents: ["./agents/test-worker.jgagent"]  ← 明确声明
 
    - Entry agent: `xxx.jgagent`（如 `test.jgagent`）
    - Pure agent: `xxx-worker.jgagent` 或 `xxx-assistant.jgagent`
-   - Workflow: 与 entry agent 同名（如 `test.jgflow`）
+   - Workflow: 与 entry agent 同名（如 `test.jg`）
 2. **目录结构**
 
    ```
    examples/
    ├── test.jgagent           # Entry agent with workflow
-   ├── test.jgflow            # Workflow definition
+   ├── test.jg            # Workflow definition
    ├── test.jgprompt          # Prompt template
    ├── agents/
    │   └── test-worker.jgagent  # Pure agent for workflow

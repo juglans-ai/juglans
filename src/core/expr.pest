@@ -29,9 +29,17 @@ array_lit   = { "[" ~ (expr ~ ("," ~ expr)*)? ~ ","? ~ "]" }
 object_pair = { (string | identifier) ~ ":" ~ expr }
 object_lit  = { "{" ~ (object_pair ~ ("," ~ object_pair)*)? ~ ","? ~ "}" }
 
+// ========== Lambda Expressions ==========
+
+lambda_params_single = { identifier }
+lambda_params_multi  = { "(" ~ identifier ~ ("," ~ identifier)* ~ ")" }
+lambda_params        = { lambda_params_multi | lambda_params_single }
+lambda_expr          = { lambda_params ~ "=>" ~ expr }
+
 // ========== Calls ==========
 
-call_args = { (expr ~ ("," ~ expr)*)? }
+call_arg  = { lambda_expr | expr }
+call_args = { (call_arg ~ ("," ~ call_arg)*)? }
 func_call = { identifier ~ "(" ~ call_args ~ ")" }
 
 // ========== Postfix Operations ==========

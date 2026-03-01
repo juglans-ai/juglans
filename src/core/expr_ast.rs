@@ -60,6 +60,12 @@ pub enum Expr {
         filter: String,
         args: Vec<Expr>,
     },
+
+    /// Lambda expression: `x => x + 1` or `(x, y) => x + y`
+    Lambda {
+        params: Vec<String>,
+        body: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

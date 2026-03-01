@@ -1,250 +1,266 @@
-# 内置 Web 服务器
+# Built-in Web Server
 
-Juglans 内置 Web 服务器，可将工作流作为 HTTP API 暴露。
+Juglans includes a built-in web server that exposes workflows as HTTP APIs. It supports two modes:
 
-## 启动服务器
+1. **Built-in APIs** — Chat (SSE streaming), resource listing (agents, prompts, workflows)
+2. **serve() HTTP Backend** — Turn any workflow into a custom HTTP API using `serve()` and `response()` builtins
 
-### 基本启动
-
-```bash
-juglans serve
-```
-
-默认监听 `http://127.0.0.1:8080`。
-
-### 配置选项
+## Quick Start
 
 ```bash
-# 指定端口
-juglans serve --port 3030
-
-# 绑定所有网卡
-juglans serve --host 0.0.0.0
-
-# 指定工作流目录
-juglans serve --dir ./workflows
-
-# 启用热重载
-juglans serve --watch
-
-# 组合选项
-juglans serve --host 0.0.0.0 --port 8080 --dir ./workflows --watch
+juglans web
 ```
 
-## 配置文件
+Default: `http://127.0.0.1:8080`
 
-### juglans.toml
+### CLI Options
+
+```bash
+# Custom port
+juglans web --port 3030
+
+# Bind to all interfaces
+juglans web --host 0.0.0.0
+
+# Combined
+juglans web --host 0.0.0.0 --port 8080
+```
+
+### Configuration
+
+In `juglans.toml`:
 
 ```toml
 [server]
 host = "127.0.0.1"
 port = 8080
-cors_origins = ["http://localhost:5173", "https://app.example.com"]
-
-[server.auth]
-enabled = true
-api_keys = ["key1", "key2"]
 ```
 
-## API 端点
+**Priority:** CLI args > `juglans.toml` > defaults (`127.0.0.1:8080`)
 
-### 工作流执行
+---
 
-#### POST /api/workflows/:name/execute
+## serve() and response() — HTTP Backend Builtins
 
-执行指定工作流。
+The core new feature: define HTTP APIs entirely in `.jg` workflows.
 
-**请求：**
+### serve()
 
-```bash
-curl -X POST http://localhost:8080/api/workflows/my-flow/execute \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer your_api_key" \
-  -d '{"query": "Hello, world!"}'
+Marks a workflow node as the HTTP entry point. When the web server starts, it scans all `**/*.jg` files in the project. If a workflow contains a `serve()` node, it's registered as the **catch-all HTTP handler** for all unmatched routes.
+
+**What it does at runtime:**
+
+1. Reads pre-injected request data from `$input.*`
+2. Computes `$input.route = "METHOD /path"` (e.g., `"GET /api/hello"`)
+3. Returns a request summary for debugging
+
+**Injected variables** (set by web server before workflow execution):
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| `$input.method` | string | HTTP method (`GET`, `POST`, etc.) |
+| `$input.path` | string | Request path (`/api/hello`) |
+| `$input.query` | object | Query parameters (`{key: "value"}`) |
+| `$input.body` | any | Request body (parsed as JSON, or string fallback) |
+| `$input.headers` | object | HTTP headers |
+| `$input.route` | string | Auto-computed: `"METHOD /path"` for switch routing |
+
+### response()
+
+Sets the HTTP response status, body, and headers.
+
+```
+response(status=200, body={"message": "OK"}, headers={"X-Custom": "value"})
 ```
 
-**响应（非流式）：**
+**Parameters:**
 
-```json
-{
-  "success": true,
-  "result": {
-    "response": "Hello! How can I help you today?"
-  },
-  "execution_time_ms": 1234
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `status` | int | `200` | HTTP status code |
+| `body` | any | — | Response body (JSON) |
+| `headers` | object | — | Custom response headers |
+
+Writes to `$response.status`, `$response.body`, `$response.headers` which the web server reads after workflow execution.
+
+**Default behavior:** If `response()` is never called, the server returns status `200` with `$output` as the body.
+
+### Example: HTTP API Workflow
+
+```yaml
+slug: "serve-test"
+name: "HTTP Backend Test"
+description: "Simple HTTP backend using serve() builtin"
+entry: [request]
+
+# Entry point — marks this workflow as an HTTP handler
+[request]: serve()
+
+# Handler nodes
+[hello]: response(status=200, body={"message": "Hello from Juglans!"})
+[echo]: response(status=200, body={"method": "GET", "query": $input.query, "path": $input.path})
+[echo_post]: response(status=200, body={"method": "POST", "body": $input.body, "path": $input.path})
+[not_found]: response(status=404, body={"error": "Not found", "path": $input.path, "method": $input.method})
+
+# Routing — switch on "METHOD /path"
+[request] -> switch $input.route {
+  "GET /api/hello": [hello]
+  "GET /api/echo": [echo]
+  "POST /api/echo": [echo_post]
+  default: [not_found]
 }
 ```
 
-**响应（流式）：**
-
-使用 `Accept: text/event-stream` 获取 SSE 流：
+Test it:
 
 ```bash
-curl -X POST http://localhost:8080/api/workflows/my-flow/execute \
+# Start server
+juglans web
+
+# Hit endpoints
+curl http://localhost:8080/api/hello
+# → {"message": "Hello from Juglans!"}
+
+curl http://localhost:8080/api/echo?name=alice
+# → {"method": "GET", "query": {"name": "alice"}, "path": "/api/echo"}
+
+curl -X POST http://localhost:8080/api/echo \
   -H "Content-Type: application/json" \
-  -H "Accept: text/event-stream" \
-  -d '{"query": "Hello"}'
+  -d '{"data": "test"}'
+# → {"method": "POST", "body": {"data": "test"}, "path": "/api/echo"}
+
+curl http://localhost:8080/unknown
+# → 404 {"error": "Not found", "path": "/unknown", "method": "GET"}
 ```
 
+### Auto-Discovery
+
+On startup, the web server:
+
+1. Scans `**/*.jg` under the project root
+2. Parses each workflow and looks for nodes calling `serve()`
+3. If found, registers the workflow as a catch-all fallback handler
+4. Logs: `🌐 Discovered serve() workflow: <slug> (node: [<id>]) at <path>`
+
+Only **one** serve() workflow is supported. The first one discovered is used.
+
+### Data Flow
+
 ```
-event: node_start
-data: {"node": "classify", "timestamp": "2024-01-15T10:30:00Z"}
-
-event: content
-data: {"text": "Hello! "}
-
-event: content
-data: {"text": "How can I help?"}
-
-event: node_complete
-data: {"node": "classify", "duration_ms": 500}
-
-event: done
-data: {"success": true, "total_duration_ms": 1234}
-```
-
-### Prompt 渲染
-
-#### POST /api/prompts/:slug/render
-
-渲染 Prompt 模板。
-
-**请求：**
-
-```bash
-curl -X POST http://localhost:8080/api/prompts/greeting/render \
-  -H "Content-Type: application/json" \
-  -d '{"name": "Alice", "style": "formal"}'
-```
-
-**响应：**
-
-```json
-{
-  "success": true,
-  "result": "Dear Alice,\n\nIt is my pleasure to assist you today..."
-}
+HTTP Request (any method, any path)
+    ↓
+handle_serve_request()
+    ├── Parse HTTP: method, path, query, body, headers
+    ├── Load & parse .jg from disk
+    ├── Resolve flow imports
+    ├── Build executor (prompts, agents, tools, MCP)
+    └── Create context, inject $input.*
+         ↓
+Workflow Execution
+    ├── serve() node reads $input.*, computes $input.route
+    ├── switch routes to matching handler
+    └── Handler calls response(status, body, headers)
+         ↓
+HTTP Response
+    ├── Read $response.status (default: 200)
+    ├── Read $response.body (default: $output)
+    └── Return (StatusCode, JSON)
 ```
 
-### 资源列表
+---
 
-#### GET /api/workflows
+## Built-in API Endpoints
 
-列出所有可用工作流。
+These are always available, regardless of whether a serve() workflow exists.
 
-```bash
-curl http://localhost:8080/api/workflows
-```
+### GET /
 
-```json
-{
-  "workflows": [
-    {
-      "name": "chat-flow",
-      "description": "Basic chat workflow",
-      "entry": ["start"],
-      "exit": ["end"]
-    },
-    {
-      "name": "analysis-flow",
-      "description": "Data analysis workflow",
-      "entry": ["input"],
-      "exit": ["output"]
-    }
-  ]
-}
-```
+HTML dashboard showing server status, loaded resources (agents, prompts, workflows), uptime, and configuration.
 
-#### GET /api/prompts
+### GET /api/agents
 
-列出所有 Prompt。
-
-```bash
-curl http://localhost:8080/api/prompts
-```
-
-#### GET /api/agents
-
-列出所有 Agent。
+List local `.jgagent` files.
 
 ```bash
 curl http://localhost:8080/api/agents
 ```
 
-### 健康检查
+Supports `?pattern=` query to filter by glob pattern (default: `**/*.jgagent`).
 
-#### GET /health
+### GET /api/prompts
 
-```bash
-curl http://localhost:8080/health
-```
-
-```json
-{
-  "status": "healthy",
-  "version": "0.1.0",
-  "uptime_seconds": 3600
-}
-```
-
-## 认证
-
-### API Key 认证
-
-启用认证：
-
-```toml
-[server.auth]
-enabled = true
-api_keys = ["key1", "key2"]
-```
-
-请求时携带：
+List local `.jgprompt` files.
 
 ```bash
-curl -H "Authorization: Bearer key1" http://localhost:8080/api/workflows
+curl http://localhost:8080/api/prompts
 ```
 
-### 环境变量
+Supports `?pattern=` query to filter by glob pattern.
+
+### GET /api/workflows
+
+List local `.jg` files with validation info (node count, validity, errors/warnings).
 
 ```bash
-export JUGLANS_SERVER_API_KEYS="key1,key2"
+curl http://localhost:8080/api/workflows
 ```
 
-## CORS 配置
+Supports `?pattern=` query to filter by glob pattern.
 
-### 允许特定域
+### POST /api/chat
 
-```toml
-[server]
-cors_origins = [
-  "http://localhost:5173",
-  "https://app.example.com"
-]
+SSE streaming chat endpoint. Jug0-compatible request format.
+
+**Request:**
+
+```bash
+curl -X POST http://localhost:8080/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "chat_id": "@my-agent",
+    "messages": [
+      {"role": "user", "content": "Hello"}
+    ]
+  }'
 ```
 
-### 允许所有域（开发用）
+**Request fields:**
 
-```toml
-[server]
-cors_origins = ["*"]
-```
+| Field | Type | Description |
+|-------|------|-------------|
+| `chat_id` | UUID or `@handle` | Existing chat UUID, or `@agent-slug` to start with agent |
+| `messages` | array | Message parts with `role` and `content` |
+| `agent` | object | Agent config override (`slug`, `model`, `tools`, `system_prompt`) |
+| `model` | string | Model override |
+| `tools` | array | Custom tool definitions |
+| `stream` | bool | Enable streaming |
+| `memory` | bool | Enable memory |
+| `variables` | object | Workflow variables (Juglans-specific) |
+| `state` | string | Message state: `context_visible`, `context_hidden`, `display_only`, `silent` |
+
+**Response:** Server-Sent Events stream (see [SSE Streaming](#sse-streaming) below).
+
+### POST /api/chat/tool-result
+
+Returns client tool execution results back to the server (see [Client Tool Bridge](#client-tool-bridge) below).
+
+---
 
 ## Client Tool Bridge
 
-当 workflow 中 LLM 返回的 tool call 未匹配任何 builtin 或 MCP 工具时，自动通过 SSE 转发给前端执行。
+When a workflow's LLM returns tool calls that don't match any builtin or MCP tool, they're automatically forwarded to the client via SSE for frontend execution.
 
-### 工具解析优先级
+### Tool Resolution Priority
 
 ```
-1. Builtin Registry  →  chat(), p(), notify(), fetch_url() 等
-2. MCP Tools         →  通过 MCP server 注册的工具
-3. Client Bridge     →  自动转发给前端（SSE）
+1. Builtin Registry  →  chat(), p(), notify(), fetch_url(), serve(), response(), etc.
+2. MCP Tools         →  Tools registered via MCP servers
+3. Client Bridge     →  Auto-forwarded to frontend (SSE)
 ```
 
-### SSE ToolCall 事件
+### SSE tool_call Event
 
-当需要前端执行工具时，服务器发送 `tool_call` 事件：
+When client-side execution is needed:
 
 ```
 event: tool_call
@@ -260,11 +276,9 @@ data: {
 }
 ```
 
-### 返回工具结果
+### Returning Tool Results
 
-前端执行完工具后，通过 POST 请求返回结果：
-
-#### POST /api/chat/tool-result
+After the client executes the tool, POST results back:
 
 ```bash
 curl -X POST http://localhost:8080/api/chat/tool-result \
@@ -280,20 +294,20 @@ curl -X POST http://localhost:8080/api/chat/tool-result \
   }'
 ```
 
-### Terminal vs Functional 工具
+### Terminal vs Functional Tools
 
-| 类型 | `executed_on_client` | LLM 循环 | 示例 |
-|------|---------------------|----------|------|
-| **Terminal** | `true` | 结束 | `create_trade_suggestion` |
-| **Functional** | `false` 或不存在 | 继续 | `get_market_data` |
+| Type | `executed_on_client` | LLM Loop | Example |
+|------|---------------------|----------|---------|
+| **Terminal** | `true` | Stops | `create_trade_suggestion` |
+| **Functional** | `false` or absent | Continues | `get_market_data` |
 
-- **Terminal 工具**: 前端执行后直接结束（如创建 UI 组件），结果中包含 `executed_on_client: true`
-- **Functional 工具**: 前端执行后返回数据，LLM 继续处理（如获取实时数据）
+- **Terminal tools**: Client executes and completes (e.g., rendering a UI component). Result includes `executed_on_client: true`.
+- **Functional tools**: Client returns data for the LLM to continue processing (e.g., fetching live market data).
 
-### 前端集成示例
+### Frontend Integration Example
 
 ```javascript
-const eventSource = new EventSource('/api/chat/execute');
+const eventSource = new EventSource('/api/chat');
 
 eventSource.addEventListener('tool_call', async (event) => {
   const { call_id, tools } = JSON.parse(event.data);
@@ -315,52 +329,29 @@ eventSource.addEventListener('tool_call', async (event) => {
 });
 ```
 
-## 流式响应
+---
 
-### SSE 事件类型
+## SSE Streaming
 
-| 事件 | 说明 |
-|------|------|
-| `node_start` | 节点开始执行 |
-| `node_complete` | 节点执行完成 |
-| `content` | 内容输出（LLM 生成的文本） |
-| `tool_call` | 需要前端执行的工具调用 |
-| `error` | 错误发生 |
-| `done` | 执行完成 |
+### Event Types
 
-### 客户端处理
+| Event | Description |
+|-------|-------------|
+| `node_start` | Node begins execution |
+| `node_complete` | Node finished execution |
+| `content` | Text content output (LLM-generated) |
+| `tool_call` | Tool call forwarded to client |
+| `error` | Error occurred |
+| `done` | Execution complete |
 
-```javascript
-const eventSource = new EventSource('/api/workflows/chat/execute');
-
-eventSource.addEventListener('content', (event) => {
-  const data = JSON.parse(event.data);
-  console.log('Content:', data.text);
-});
-
-eventSource.addEventListener('done', (event) => {
-  const data = JSON.parse(event.data);
-  console.log('Complete:', data);
-  eventSource.close();
-});
-
-eventSource.addEventListener('error', (event) => {
-  console.error('Error:', event);
-  eventSource.close();
-});
-```
-
-### fetch + SSE
+### Client-Side Handling
 
 ```javascript
-async function executeWorkflow(name, input) {
-  const response = await fetch(`/api/workflows/${name}/execute`, {
+async function chat(messages) {
+  const response = await fetch('/api/chat', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Accept': 'text/event-stream',
-    },
-    body: JSON.stringify(input),
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages }),
   });
 
   const reader = response.body.getReader();
@@ -371,9 +362,7 @@ async function executeWorkflow(name, input) {
     if (done) break;
 
     const text = decoder.decode(value);
-    const lines = text.split('\n');
-
-    for (const line of lines) {
+    for (const line of text.split('\n')) {
       if (line.startsWith('data: ')) {
         const data = JSON.parse(line.slice(6));
         handleEvent(data);
@@ -383,39 +372,11 @@ async function executeWorkflow(name, input) {
 }
 ```
 
-## 目录结构
+---
 
-服务器加载的资源目录结构：
+## Production Deployment
 
-```
-./workflows/           # --dir 指定的目录
-├── chat.jgflow        # 工作流文件
-├── analysis.jgflow
-├── prompts/           # Prompt 目录
-│   ├── greeting.jgprompt
-│   └── summary.jgprompt
-└── agents/            # Agent 目录
-    ├── assistant.jgagent
-    └── analyst.jgagent
-```
-
-## 热重载
-
-启用 `--watch` 后，文件修改会自动重新加载：
-
-```bash
-juglans serve --watch
-```
-
-支持监听：
-- `.jgflow` 文件变化
-- `.jgprompt` 文件变化
-- `.jgagent` 文件变化
-- `juglans.toml` 配置变化
-
-## 生产部署
-
-### 使用 systemd
+### systemd
 
 ```ini
 # /etc/systemd/system/juglans.service
@@ -427,10 +388,9 @@ After=network.target
 Type=simple
 User=juglans
 WorkingDirectory=/opt/juglans
-ExecStart=/usr/local/bin/juglans serve --host 0.0.0.0 --port 8080 --dir /opt/juglans/workflows
+ExecStart=/usr/local/bin/juglans web --host 0.0.0.0 --port 8080
 Restart=always
 RestartSec=5
-Environment=JUGLANS_API_KEY=your_key
 
 [Install]
 WantedBy=multi-user.target
@@ -441,7 +401,7 @@ sudo systemctl enable juglans
 sudo systemctl start juglans
 ```
 
-### Docker 部署
+### Docker
 
 ```dockerfile
 FROM rust:1.75 as builder
@@ -451,18 +411,18 @@ RUN cargo build --release
 
 FROM debian:bookworm-slim
 COPY --from=builder /app/target/release/juglans /usr/local/bin/
-COPY workflows/ /app/workflows/
+COPY . /app/
 WORKDIR /app
 EXPOSE 8080
-CMD ["juglans", "serve", "--host", "0.0.0.0", "--port", "8080", "--dir", "/app/workflows"]
+CMD ["juglans", "web", "--host", "0.0.0.0", "--port", "8080"]
 ```
 
 ```bash
 docker build -t juglans-server .
-docker run -p 8080:8080 -e JUGLANS_API_KEY=key juglans-server
+docker run -p 8080:8080 juglans-server
 ```
 
-### Nginx 反向代理
+### Nginx Reverse Proxy
 
 ```nginx
 upstream juglans {
@@ -483,47 +443,7 @@ server {
         proxy_set_header Connection "upgrade";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_buffering off;  # 重要：SSE 需要禁用缓冲
+        proxy_buffering off;  # Required for SSE
     }
 }
 ```
-
-## 监控
-
-### Prometheus 指标
-
-```
-GET /metrics
-```
-
-返回 Prometheus 格式指标：
-
-```
-# HELP juglans_workflow_executions_total Total workflow executions
-# TYPE juglans_workflow_executions_total counter
-juglans_workflow_executions_total{workflow="chat",status="success"} 1234
-juglans_workflow_executions_total{workflow="chat",status="error"} 12
-
-# HELP juglans_workflow_duration_seconds Workflow execution duration
-# TYPE juglans_workflow_duration_seconds histogram
-juglans_workflow_duration_seconds_bucket{workflow="chat",le="0.1"} 100
-juglans_workflow_duration_seconds_bucket{workflow="chat",le="1"} 900
-juglans_workflow_duration_seconds_bucket{workflow="chat",le="10"} 1200
-```
-
-### 日志
-
-```toml
-[logging]
-level = "info"
-format = "json"  # JSON 格式便于日志收集
-```
-
-## 最佳实践
-
-1. **认证必选** - 生产环境始终启用认证
-2. **CORS 限制** - 只允许必要的域
-3. **超时设置** - 为长时间工作流设置合理超时
-4. **负载均衡** - 高流量时使用多实例 + 负载均衡
-5. **日志收集** - 使用 JSON 格式便于 ELK/Loki 收集
-6. **健康检查** - 配置 /health 端点用于监控

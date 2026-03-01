@@ -1,7 +1,7 @@
 // src/core/graph.rs
 use petgraph::graph::{DiGraph, NodeIndex};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone)]
 pub struct Action {
@@ -16,6 +16,7 @@ pub enum NodeType {
         item: String,
         list: String,
         body: Box<WorkflowGraph>,
+        parallel: bool,
     },
     Literal(Value),
     Loop {
@@ -23,7 +24,7 @@ pub enum NodeType {
         body: Box<WorkflowGraph>,
     },
     /// External call (e.g., Python module.function)
-    ExternalCall {
+    _ExternalCall {
         /// Full call path (e.g., "pandas.read_csv" or "$df.describe")
         call_path: String,
         /// Positional arguments
@@ -70,6 +71,7 @@ pub struct WorkflowGraph {
     pub slug: String,
     pub name: String,
     pub version: String,
+    pub source: String,
     pub author: String,
     pub description: String,
     pub graph: DiGraph<Node, Edge>,
@@ -90,6 +92,19 @@ pub struct WorkflowGraph {
     pub flow_imports: HashMap<String, String>,
     // 【新增】待解析的边（引用了命名空间节点，需要在 flow 合并后才能 commit）
     pub pending_edges: Vec<(String, String, Edge)>,
+    // 【新增】函数节点定义（带参数的可复用节点）
+    pub functions: HashMap<String, FunctionDef>,
+    // 【新增】库导入映射 (namespace → path)
+    pub lib_imports: HashMap<String, String>,
+    // 【新增】列表形式导入的自动命名空间集合（resolver 中允许被 slug 覆盖）
+    pub lib_auto_namespaces: HashSet<String>,
+}
+
+/// 函数节点定义：带参数的可复用节点
+#[derive(Debug, Clone)]
+pub struct FunctionDef {
+    pub params: Vec<String>,
+    pub body: Box<WorkflowGraph>,
 }
 
 impl Default for WorkflowGraph {
@@ -98,6 +113,7 @@ impl Default for WorkflowGraph {
             slug: String::new(),
             name: String::new(),
             version: String::new(),
+            source: String::new(),
             author: String::new(),
             description: String::new(),
             graph: DiGraph::new(),
@@ -113,6 +129,9 @@ impl Default for WorkflowGraph {
             switch_routes: HashMap::new(),
             flow_imports: HashMap::new(),
             pending_edges: Vec::new(),
+            functions: HashMap::new(),
+            lib_imports: HashMap::new(),
+            lib_auto_namespaces: HashSet::new(),
         }
     }
 }

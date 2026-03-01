@@ -1,6 +1,6 @@
 # 工作流组合（Flow Imports）
 
-通过 `flows:` 声明，可以将多个 `.jgflow` 文件组合成一张统一的执行图。子工作流的节点以命名空间前缀合并到父 DAG 中，实现跨文件的自由分支设计。
+通过 `flows:` 声明，可以将多个 `.jg` 文件组合成一张统一的执行图。子工作流的节点以命名空间前缀合并到父 DAG 中，实现跨文件的自由分支设计。
 
 ## 基本语法
 
@@ -10,12 +10,12 @@
 
 ```yaml
 flows: {
-  auth: "./workflows/auth.jgflow"
-  trading: "./workflows/trading.jgflow"
+  auth: "./auth.jg"
+  trading: "./trading.jg"
 }
 ```
 
-键为别名（alias），值为相对路径（相对于当前 `.jgflow` 文件所在目录）。
+键为别名（alias），值为相对路径（相对于当前 `.jg` 文件所在目录）。
 
 ### 引用子工作流节点
 
@@ -37,8 +37,8 @@ prompts: ["./prompts/*.jgprompt"]
 agents: ["./agents/*.jgagent"]
 
 flows: {
-  trading: "./workflows/trading.jgflow"
-  events: "./workflows/events.jgflow"
+  trading: "./trading.jg"
+  events: "./events.jg"
 }
 
 [start]: set_context(event_type=$input.event_type, message=$input.message)
@@ -93,9 +93,9 @@ flows: {
 
 ```
 解析阶段：
-  parent.jgflow  →  WorkflowGraph (含 pending edges)
-  trading.jgflow →  WorkflowGraph
-  events.jgflow  →  WorkflowGraph
+  parent.jg  →  WorkflowGraph (含 pending edges)
+  trading.jg →  WorkflowGraph
+  events.jg  →  WorkflowGraph
 
 合并阶段：
   parent + trading.* + events.* → 统一 DAG
@@ -125,14 +125,14 @@ flows: {
 子工作流可以有自己的 `flows:` 声明，实现多层组合：
 
 ```yaml
-# main.jgflow
+# main.jg
 flows: {
-  order: "./workflows/order.jgflow"
+  order: "./order.jg"
 }
 
-# order.jgflow
+# order.jg
 flows: {
-  payment: "./workflows/payment.jgflow"
+  payment: "./payment.jg"
 }
 ```
 
@@ -149,8 +149,8 @@ order.start → order.validate → order.payment.charge → order.payment.confir
 如果出现循环导入（A 导入 B，B 又导入 A），编译器会报错：
 
 ```
-Error: Circular flow import detected: 'auth' (/path/to/auth.jgflow)
-Import chain: ["/path/to/main.jgflow", "/path/to/auth.jgflow"]
+Error: Circular flow import detected: 'auth' (/path/to/auth.jg)
+Import chain: ["/path/to/main.jg", "/path/to/auth.jg"]
 ```
 
 ---
@@ -160,9 +160,9 @@ Import chain: ["/path/to/main.jgflow", "/path/to/auth.jgflow"]
 子工作流声明的资源导入（prompts、agents、tools）会自动合并到父工作流，路径相对于子工作流文件所在目录解析：
 
 ```yaml
-# workflows/trading.jgflow
-prompts: ["./prompts/*.jgprompt"]    # 相对于 workflows/ 目录
-agents: ["./agents/*.jgagent"]
+# src/trading.jg
+prompts: ["./prompts/*.jgprompt"]    # 相对于 .jg 文件所在目录（src/）
+agents: ["./pure-agents/*.jgagent"]
 ```
 
 合并后，父工作流可以使用子工作流引入的 prompts 和 agents。Python 模块导入也会自动合并（去重）。
@@ -176,28 +176,26 @@ agents: ["./agents/*.jgagent"]
 ```
 my-project/
 ├── juglans.toml
-├── main.jgflow
-├── prompts/
-│   └── system.jgprompt
-├── agents/
-│   └── router.jgagent
-└── workflows/
-    ├── trading.jgflow
-    ├── events.jgflow
-    └── agents/
+└── src/
+    ├── main.jg
+    ├── trading.jg
+    ├── events.jg
+    ├── agents/
+    │   └── router.jgagent
+    └── pure-agents/
         ├── trader.jgagent
         └── event-handler.jgagent
 ```
 
-### 主工作流 — `main.jgflow`
+### 主工作流 — `src/main.jg`
 
 ```yaml
 name: "Event Router"
 agents: ["./agents/*.jgagent"]
 
 flows: {
-  trading: "./workflows/trading.jgflow"
-  events: "./workflows/events.jgflow"
+  trading: "./trading.jg"
+  events: "./events.jg"
 }
 
 entry: [start]
@@ -226,11 +224,11 @@ exit: [done]
 [trading.done] -> [done]
 ```
 
-### 子工作流 — `workflows/trading.jgflow`
+### 子工作流 — `src/trading.jg`
 
 ```yaml
 name: "Trading Flow"
-agents: ["./agents/*.jgagent"]
+agents: ["./pure-agents/*.jgagent"]
 
 entry: [start]
 exit: [done]

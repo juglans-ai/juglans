@@ -16,7 +16,7 @@ members = ["u_demo"]
 
 # Resource paths (glob patterns supported)
 agents = ["agents/**/*.jgagent"]
-workflows = ["workflows/**/*.jgflow"]
+workflows = ["workflows/**/*.jg"]
 prompts = ["prompts/**/*.jgprompt"]
 tools = ["tools/**/*.json"]
 

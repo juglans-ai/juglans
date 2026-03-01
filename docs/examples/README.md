@@ -44,10 +44,10 @@ git clone https://github.com/juglans-ai/juglans-examples.git
 cd juglans-examples
 
 # 运行基础示例
-juglans basic-chat.jgflow --input '{"message": "Hello!"}'
+juglans basic-chat.jg --input '{"message": "Hello!"}'
 
 # 运行带配置的示例
-juglans rag-pipeline.jgflow --input '{"query": "What is Juglans?"}' --config juglans.toml
+juglans rag-pipeline.jg --input '{"query": "What is Juglans?"}' --config juglans.toml
 ```
 
 ## 示例结构
@@ -56,7 +56,7 @@ juglans rag-pipeline.jgflow --input '{"query": "What is Juglans?"}' --config jug
 
 ```
 example-name/
-├── workflow.jgflow      # 主工作流
+├── workflow.jg      # 主工作流
 ├── prompts/             # Prompt 模板
 │   └── *.jgprompt
 ├── agents/              # Agent 定义

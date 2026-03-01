@@ -14,4 +14,4 @@ temperature: 0.7
 system_prompt: "你是一个友好、专业的 AI 助手。"
 
 # 绑定工作流（意图识别 + 智能回复）
-workflow: "./test.jgflow"
+workflow: "./test.jg"

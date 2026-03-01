@@ -26,6 +26,12 @@ struct ExprParser;
 
 pub struct ExprEvaluator;
 
+impl Default for ExprEvaluator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ExprEvaluator {
     pub fn new() -> Self {
         Self
@@ -51,11 +57,11 @@ impl ExprEvaluator {
             .ok_or_else(|| anyhow!("Empty parse result for '{}'", trimmed))?;
 
         let ast = self.parse_expression(expr_pair)?;
-        self.eval_expr(&ast, resolver)
+        self.eval_expr(&ast, resolver as &dyn Fn(&str) -> Option<Value>)
     }
 
     /// Evaluate and return as bool using Python truthiness
-    pub fn eval_as_bool<F>(&self, expr_str: &str, resolver: &F) -> Result<bool>
+    pub fn _eval_as_bool<F>(&self, expr_str: &str, resolver: &F) -> Result<bool>
     where
         F: Fn(&str) -> Option<Value>,
     {
@@ -64,7 +70,7 @@ impl ExprEvaluator {
     }
 
     /// Evaluate and return as a Vec<Value> for iteration
-    pub fn eval_as_array<F>(&self, expr_str: &str, resolver: &F) -> Result<Vec<Value>>
+    pub fn _eval_as_array<F>(&self, expr_str: &str, resolver: &F) -> Result<Vec<Value>>
     where
         F: Fn(&str) -> Option<Value>,
     {
@@ -88,7 +94,7 @@ pub fn is_truthy(val: &Value) -> bool {
     match val {
         Value::Null => false,
         Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64().map_or(false, |f| f != 0.0),
+        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0),
         Value::String(s) => !s.is_empty(),
         Value::Array(a) => !a.is_empty(),
         Value::Object(o) => !o.is_empty(),
@@ -391,8 +397,42 @@ impl ExprEvaluator {
 
     fn parse_call_args(&self, pair: pest::iterators::Pair<Rule>) -> Result<Vec<Expr>> {
         pair.into_inner()
-            .map(|p| self.parse_expression(p))
+            .map(|p| match p.as_rule() {
+                Rule::call_arg => {
+                    let inner = p.into_inner().next().unwrap();
+                    match inner.as_rule() {
+                        Rule::lambda_expr => self.parse_lambda(inner),
+                        _ => self.parse_expression(inner),
+                    }
+                }
+                _ => self.parse_expression(p),
+            })
             .collect()
+    }
+
+    fn parse_lambda(&self, pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
+        let mut inner = pair.into_inner();
+        let params_pair = inner.next().unwrap();
+        let params = self.parse_lambda_params(params_pair)?;
+        let body = self.parse_expression(inner.next().unwrap())?;
+        Ok(Expr::Lambda {
+            params,
+            body: Box::new(body),
+        })
+    }
+
+    fn parse_lambda_params(&self, pair: pest::iterators::Pair<Rule>) -> Result<Vec<String>> {
+        let inner = pair.into_inner().next().unwrap();
+        match inner.as_rule() {
+            Rule::lambda_params_single => Ok(vec![inner.as_str().to_string()]),
+            Rule::lambda_params_multi => {
+                Ok(inner.into_inner().map(|p| p.as_str().to_string()).collect())
+            }
+            _ => Err(anyhow!(
+                "Unexpected lambda params rule: {:?}",
+                inner.as_rule()
+            )),
+        }
     }
 
     fn parse_number(&self, pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
@@ -443,10 +483,7 @@ impl ExprEvaluator {
 // ============================================================
 
 impl ExprEvaluator {
-    fn eval_expr<F>(&self, expr: &Expr, resolver: &F) -> Result<Value>
-    where
-        F: Fn(&str) -> Option<Value>,
-    {
+    fn eval_expr(&self, expr: &Expr, resolver: &dyn Fn(&str) -> Option<Value>) -> Result<Value> {
         match expr {
             Expr::Number(n) => {
                 // Preserve integer type when the f64 is a whole number
@@ -509,9 +546,13 @@ impl ExprEvaluator {
             }
 
             Expr::FuncCall { name, args } => {
-                let arg_vals: Result<Vec<Value>> =
-                    args.iter().map(|a| self.eval_expr(a, resolver)).collect();
-                call_builtin(name, &arg_vals?)
+                if args.iter().any(|a| matches!(a, Expr::Lambda { .. })) {
+                    self.eval_higher_order_call(name, args, resolver)
+                } else {
+                    let arg_vals: Result<Vec<Value>> =
+                        args.iter().map(|a| self.eval_expr(a, resolver)).collect();
+                    call_builtin(name, &arg_vals?)
+                }
             }
 
             Expr::MethodCall {
@@ -519,13 +560,19 @@ impl ExprEvaluator {
                 method,
                 args,
             } => {
-                // Desugar: obj.method(args) → method(obj, args)
-                let obj_val = self.eval_expr(object, resolver)?;
-                let mut all_args = vec![obj_val];
-                for a in args {
-                    all_args.push(self.eval_expr(a, resolver)?);
+                if args.iter().any(|a| matches!(a, Expr::Lambda { .. })) {
+                    // Desugar: obj.method(lambda) → method(obj, lambda)
+                    let mut all_args = vec![object.as_ref().clone()];
+                    all_args.extend(args.iter().cloned());
+                    self.eval_higher_order_call(method, &all_args, resolver)
+                } else {
+                    let obj_val = self.eval_expr(object, resolver)?;
+                    let mut all_args = vec![obj_val];
+                    for a in args {
+                        all_args.push(self.eval_expr(a, resolver)?);
+                    }
+                    call_builtin(method, &all_args)
                 }
-                call_builtin(method, &all_args)
             }
 
             Expr::Pipe {
@@ -533,27 +580,34 @@ impl ExprEvaluator {
                 filter,
                 args,
             } => {
-                // Desugar: value | filter(args) → filter(value, args)
-                let val = self.eval_expr(value, resolver)?;
-                let mut all_args = vec![val];
-                for a in args {
-                    all_args.push(self.eval_expr(a, resolver)?);
+                if args.iter().any(|a| matches!(a, Expr::Lambda { .. })) {
+                    // Desugar: value | filter(lambda) → filter(value, lambda)
+                    let mut all_args = vec![value.as_ref().clone()];
+                    all_args.extend(args.iter().cloned());
+                    self.eval_higher_order_call(filter, &all_args, resolver)
+                } else {
+                    let val = self.eval_expr(value, resolver)?;
+                    let mut all_args = vec![val];
+                    for a in args {
+                        all_args.push(self.eval_expr(a, resolver)?);
+                    }
+                    call_builtin(filter, &all_args)
                 }
-                call_builtin(filter, &all_args)
+            }
+
+            Expr::Lambda { .. } => {
+                Err(anyhow!("Lambda expressions can only be used as arguments to higher-order functions (map, filter, reduce, etc.)"))
             }
         }
     }
 
-    fn eval_binary_op<F>(
+    fn eval_binary_op(
         &self,
         left_expr: &Expr,
         op: BinOp,
         right_expr: &Expr,
-        resolver: &F,
-    ) -> Result<Value>
-    where
-        F: Fn(&str) -> Option<Value>,
-    {
+        resolver: &dyn Fn(&str) -> Option<Value>,
+    ) -> Result<Value> {
         // Short-circuit for and/or
         match op {
             BinOp::And => {
@@ -615,6 +669,470 @@ impl ExprEvaluator {
 
             BinOp::And | BinOp::Or => unreachable!(), // handled above
         }
+    }
+
+    // ============================================================
+    // Higher-Order Functions (lambda support)
+    // ============================================================
+
+    /// Dispatch higher-order function calls that contain lambda arguments.
+    fn eval_higher_order_call(
+        &self,
+        name: &str,
+        args: &[Expr],
+        resolver: &dyn Fn(&str) -> Option<Value>,
+    ) -> Result<Value> {
+        match name {
+            "map" => {
+                if args.len() != 2 {
+                    return Err(anyhow!("map() expects 2 arguments, got {}", args.len()));
+                }
+                let collection = self.eval_expr(&args[0], resolver)?;
+                let (params, body) = self.expect_lambda(&args[1])?;
+                match &collection {
+                    Value::Array(arr) => {
+                        let results: Result<Vec<Value>> = arr
+                            .iter()
+                            .map(|item| {
+                                self.apply_lambda(
+                                    params,
+                                    body,
+                                    std::slice::from_ref(item),
+                                    resolver,
+                                )
+                            })
+                            .collect();
+                        Ok(Value::Array(results?))
+                    }
+                    Value::Object(obj) => {
+                        let results: Result<Vec<Value>> = obj
+                            .iter()
+                            .map(|(k, v)| {
+                                let entry = json!([k, v]);
+                                self.apply_lambda(params, body, &[entry], resolver)
+                            })
+                            .collect();
+                        Ok(Value::Array(results?))
+                    }
+                    _ => Err(anyhow!(
+                        "map() expects list or dict, got {}",
+                        type_name(&collection)
+                    )),
+                }
+            }
+
+            "filter" => {
+                if args.len() != 2 {
+                    return Err(anyhow!("filter() expects 2 arguments, got {}", args.len()));
+                }
+                let collection = self.eval_expr(&args[0], resolver)?;
+                let (params, body) = self.expect_lambda(&args[1])?;
+                match &collection {
+                    Value::Array(arr) => {
+                        let mut results = Vec::new();
+                        for item in arr {
+                            let test = self.apply_lambda(
+                                params,
+                                body,
+                                std::slice::from_ref(item),
+                                resolver,
+                            )?;
+                            if is_truthy(&test) {
+                                results.push(item.clone());
+                            }
+                        }
+                        Ok(Value::Array(results))
+                    }
+                    _ => Err(anyhow!(
+                        "filter() expects list, got {}",
+                        type_name(&collection)
+                    )),
+                }
+            }
+
+            "reduce" => {
+                if args.len() != 3 {
+                    return Err(anyhow!(
+                        "reduce() expects 3 arguments (list, lambda, initial), got {}",
+                        args.len()
+                    ));
+                }
+                let collection = self.eval_expr(&args[0], resolver)?;
+                let (params, body) = self.expect_lambda(&args[1])?;
+                if params.len() != 2 {
+                    return Err(anyhow!(
+                        "reduce() lambda must have 2 parameters (acc, item), got {}",
+                        params.len()
+                    ));
+                }
+                let initial = self.eval_expr(&args[2], resolver)?;
+                match &collection {
+                    Value::Array(arr) => {
+                        let mut acc = initial;
+                        for item in arr {
+                            acc =
+                                self.apply_lambda(params, body, &[acc, item.clone()], resolver)?;
+                        }
+                        Ok(acc)
+                    }
+                    _ => Err(anyhow!(
+                        "reduce() expects list, got {}",
+                        type_name(&collection)
+                    )),
+                }
+            }
+
+            "sort_by" => {
+                if args.len() != 2 {
+                    return Err(anyhow!("sort_by() expects 2 arguments, got {}", args.len()));
+                }
+                let collection = self.eval_expr(&args[0], resolver)?;
+                let (params, body) = self.expect_lambda(&args[1])?;
+                match &collection {
+                    Value::Array(arr) => {
+                        // Compute keys for each element
+                        let mut keyed: Vec<(Value, Value)> = Vec::new();
+                        for item in arr {
+                            let key = self.apply_lambda(
+                                params,
+                                body,
+                                std::slice::from_ref(item),
+                                resolver,
+                            )?;
+                            keyed.push((key, item.clone()));
+                        }
+                        keyed.sort_by(|(a, _), (b, _)| match (a.as_f64(), b.as_f64()) {
+                            (Some(fa), Some(fb)) => {
+                                fa.partial_cmp(&fb).unwrap_or(std::cmp::Ordering::Equal)
+                            }
+                            _ => value_to_string(a).cmp(&value_to_string(b)),
+                        });
+                        Ok(Value::Array(keyed.into_iter().map(|(_, v)| v).collect()))
+                    }
+                    _ => Err(anyhow!(
+                        "sort_by() expects list, got {}",
+                        type_name(&collection)
+                    )),
+                }
+            }
+
+            "find_by" => {
+                if args.len() != 2 {
+                    return Err(anyhow!("find_by() expects 2 arguments, got {}", args.len()));
+                }
+                let collection = self.eval_expr(&args[0], resolver)?;
+                let (params, body) = self.expect_lambda(&args[1])?;
+                match &collection {
+                    Value::Array(arr) => {
+                        for item in arr {
+                            let test = self.apply_lambda(
+                                params,
+                                body,
+                                std::slice::from_ref(item),
+                                resolver,
+                            )?;
+                            if is_truthy(&test) {
+                                return Ok(item.clone());
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    _ => Err(anyhow!(
+                        "find_by() expects list, got {}",
+                        type_name(&collection)
+                    )),
+                }
+            }
+
+            "group_by" => {
+                if args.len() != 2 {
+                    return Err(anyhow!(
+                        "group_by() expects 2 arguments, got {}",
+                        args.len()
+                    ));
+                }
+                let collection = self.eval_expr(&args[0], resolver)?;
+                let (params, body) = self.expect_lambda(&args[1])?;
+                match &collection {
+                    Value::Array(arr) => {
+                        let mut groups: serde_json::Map<String, Value> = serde_json::Map::new();
+                        for item in arr {
+                            let key = self.apply_lambda(
+                                params,
+                                body,
+                                std::slice::from_ref(item),
+                                resolver,
+                            )?;
+                            let key_str = value_to_string(&key);
+                            let group = groups.entry(key_str).or_insert_with(|| json!([]));
+                            group.as_array_mut().unwrap().push(item.clone());
+                        }
+                        Ok(Value::Object(groups))
+                    }
+                    _ => Err(anyhow!(
+                        "group_by() expects list, got {}",
+                        type_name(&collection)
+                    )),
+                }
+            }
+
+            "flat_map" => {
+                if args.len() != 2 {
+                    return Err(anyhow!(
+                        "flat_map() expects 2 arguments, got {}",
+                        args.len()
+                    ));
+                }
+                let collection = self.eval_expr(&args[0], resolver)?;
+                let (params, body) = self.expect_lambda(&args[1])?;
+                match &collection {
+                    Value::Array(arr) => {
+                        let mut results = Vec::new();
+                        for item in arr {
+                            let mapped = self.apply_lambda(
+                                params,
+                                body,
+                                std::slice::from_ref(item),
+                                resolver,
+                            )?;
+                            match mapped {
+                                Value::Array(inner) => results.extend(inner),
+                                other => results.push(other),
+                            }
+                        }
+                        Ok(Value::Array(results))
+                    }
+                    _ => Err(anyhow!(
+                        "flat_map() expects list, got {}",
+                        type_name(&collection)
+                    )),
+                }
+            }
+
+            "count_by" => {
+                if args.len() != 2 {
+                    return Err(anyhow!(
+                        "count_by() expects 2 arguments, got {}",
+                        args.len()
+                    ));
+                }
+                let collection = self.eval_expr(&args[0], resolver)?;
+                let (params, body) = self.expect_lambda(&args[1])?;
+                match &collection {
+                    Value::Array(arr) => {
+                        let mut counts: serde_json::Map<String, Value> = serde_json::Map::new();
+                        for item in arr {
+                            let key = self.apply_lambda(
+                                params,
+                                body,
+                                std::slice::from_ref(item),
+                                resolver,
+                            )?;
+                            let key_str = value_to_string(&key);
+                            let count = counts.entry(key_str).or_insert_with(|| json!(0));
+                            *count = json!(count.as_i64().unwrap_or(0) + 1);
+                        }
+                        Ok(Value::Object(counts))
+                    }
+                    _ => Err(anyhow!(
+                        "count_by() expects list, got {}",
+                        type_name(&collection)
+                    )),
+                }
+            }
+
+            "min_by" => {
+                if args.len() != 2 {
+                    return Err(anyhow!("min_by() expects 2 arguments, got {}", args.len()));
+                }
+                let collection = self.eval_expr(&args[0], resolver)?;
+                let (params, body) = self.expect_lambda(&args[1])?;
+                match &collection {
+                    Value::Array(arr) if arr.is_empty() => Ok(Value::Null),
+                    Value::Array(arr) => {
+                        let mut best = &arr[0];
+                        let mut best_key =
+                            self.apply_lambda(params, body, &[arr[0].clone()], resolver)?;
+                        for item in &arr[1..] {
+                            let key = self.apply_lambda(
+                                params,
+                                body,
+                                std::slice::from_ref(item),
+                                resolver,
+                            )?;
+                            let is_less = match (key.as_f64(), best_key.as_f64()) {
+                                (Some(a), Some(b)) => a < b,
+                                _ => value_to_string(&key) < value_to_string(&best_key),
+                            };
+                            if is_less {
+                                best = item;
+                                best_key = key;
+                            }
+                        }
+                        Ok(best.clone())
+                    }
+                    _ => Err(anyhow!(
+                        "min_by() expects list, got {}",
+                        type_name(&collection)
+                    )),
+                }
+            }
+
+            "max_by" => {
+                if args.len() != 2 {
+                    return Err(anyhow!("max_by() expects 2 arguments, got {}", args.len()));
+                }
+                let collection = self.eval_expr(&args[0], resolver)?;
+                let (params, body) = self.expect_lambda(&args[1])?;
+                match &collection {
+                    Value::Array(arr) if arr.is_empty() => Ok(Value::Null),
+                    Value::Array(arr) => {
+                        let mut best = &arr[0];
+                        let mut best_key =
+                            self.apply_lambda(params, body, &[arr[0].clone()], resolver)?;
+                        for item in &arr[1..] {
+                            let key = self.apply_lambda(
+                                params,
+                                body,
+                                std::slice::from_ref(item),
+                                resolver,
+                            )?;
+                            let is_greater = match (key.as_f64(), best_key.as_f64()) {
+                                (Some(a), Some(b)) => a > b,
+                                _ => value_to_string(&key) > value_to_string(&best_key),
+                            };
+                            if is_greater {
+                                best = item;
+                                best_key = key;
+                            }
+                        }
+                        Ok(best.clone())
+                    }
+                    _ => Err(anyhow!(
+                        "max_by() expects list, got {}",
+                        type_name(&collection)
+                    )),
+                }
+            }
+
+            "every" => {
+                if args.len() != 2 {
+                    return Err(anyhow!("every() expects 2 arguments, got {}", args.len()));
+                }
+                let collection = self.eval_expr(&args[0], resolver)?;
+                let (params, body) = self.expect_lambda(&args[1])?;
+                match &collection {
+                    Value::Array(arr) => {
+                        for item in arr {
+                            let test = self.apply_lambda(
+                                params,
+                                body,
+                                std::slice::from_ref(item),
+                                resolver,
+                            )?;
+                            if !is_truthy(&test) {
+                                return Ok(json!(false));
+                            }
+                        }
+                        Ok(json!(true))
+                    }
+                    _ => Err(anyhow!(
+                        "every() expects list, got {}",
+                        type_name(&collection)
+                    )),
+                }
+            }
+
+            "some" => {
+                if args.len() != 2 {
+                    return Err(anyhow!("some() expects 2 arguments, got {}", args.len()));
+                }
+                let collection = self.eval_expr(&args[0], resolver)?;
+                let (params, body) = self.expect_lambda(&args[1])?;
+                match &collection {
+                    Value::Array(arr) => {
+                        for item in arr {
+                            let test = self.apply_lambda(
+                                params,
+                                body,
+                                std::slice::from_ref(item),
+                                resolver,
+                            )?;
+                            if is_truthy(&test) {
+                                return Ok(json!(true));
+                            }
+                        }
+                        Ok(json!(false))
+                    }
+                    _ => Err(anyhow!(
+                        "some() expects list, got {}",
+                        type_name(&collection)
+                    )),
+                }
+            }
+
+            _ => Err(anyhow!("{}() does not accept lambda arguments", name)),
+        }
+    }
+
+    /// Extract lambda parameters and body from an Expr::Lambda
+    fn expect_lambda<'a>(&self, expr: &'a Expr) -> Result<(&'a [String], &'a Expr)> {
+        match expr {
+            Expr::Lambda { params, body } => Ok((params.as_slice(), body.as_ref())),
+            _ => Err(anyhow!("Expected lambda expression")),
+        }
+    }
+
+    /// Evaluate a lambda body with bound parameters.
+    /// Creates a scoped resolver that binds lambda params, then falls through to outer scope.
+    fn apply_lambda(
+        &self,
+        params: &[String],
+        body: &Expr,
+        values: &[Value],
+        outer: &dyn Fn(&str) -> Option<Value>,
+    ) -> Result<Value> {
+        if params.len() != values.len() {
+            return Err(anyhow!(
+                "Lambda expects {} parameter(s), got {}",
+                params.len(),
+                values.len()
+            ));
+        }
+
+        let lambda_resolver = |path: &str| -> Option<Value> {
+            // Check lambda parameter bindings first
+            for (name, val) in params.iter().zip(values.iter()) {
+                if path == name {
+                    return Some(val.clone());
+                }
+                // Support dot access on lambda params: x.field
+                if let Some(rest) = path
+                    .strip_prefix(name.as_str())
+                    .and_then(|s| s.strip_prefix('.'))
+                {
+                    let mut current = val.clone();
+                    for part in rest.split('.') {
+                        current = match &current {
+                            Value::Object(map) => map.get(part).cloned().unwrap_or(Value::Null),
+                            Value::Array(arr) => {
+                                if let Ok(idx) = part.parse::<usize>() {
+                                    arr.get(idx).cloned().unwrap_or(Value::Null)
+                                } else {
+                                    Value::Null
+                                }
+                            }
+                            _ => Value::Null,
+                        };
+                    }
+                    return Some(current);
+                }
+            }
+            // Fall through to outer scope (captures $ctx, $input, etc.)
+            outer(path)
+        };
+
+        self.eval_expr(body, &lambda_resolver)
     }
 }
 
@@ -1023,7 +1541,944 @@ fn call_builtin(name: &str, args: &[Value]) -> Result<Value> {
             Ok(Value::String(value_to_string(&args[0]).trim().to_string()))
         }
 
+        // ============================================================
+        // String operations (extended)
+        // ============================================================
+        "find" => {
+            require_args(name, args, 2)?;
+            let s = value_to_string(&args[0]);
+            let sub = value_to_string(&args[1]);
+            match s.find(&sub) {
+                Some(byte_pos) => {
+                    // Convert byte position to char position
+                    let char_pos = s[..byte_pos].chars().count();
+                    Ok(json!(char_pos as i64))
+                }
+                None => Ok(json!(-1)),
+            }
+        }
+
+        "slice" => {
+            if args.len() < 2 || args.len() > 3 {
+                return Err(anyhow!("slice() expects 2-3 arguments, got {}", args.len()));
+            }
+            let start = value_to_f64(&args[1])? as i64;
+            let end = if args.len() == 3 {
+                Some(value_to_f64(&args[2])? as i64)
+            } else {
+                None
+            };
+            match &args[0] {
+                Value::String(s) => {
+                    let len = s.chars().count() as i64;
+                    let s_start = normalize_index(start, len) as usize;
+                    let s_end = end.map_or(len as usize, |e| normalize_index(e, len) as usize);
+                    let sliced: String = s
+                        .chars()
+                        .skip(s_start)
+                        .take(s_end.saturating_sub(s_start))
+                        .collect();
+                    Ok(Value::String(sliced))
+                }
+                Value::Array(arr) => {
+                    let len = arr.len() as i64;
+                    let s_start = normalize_index(start, len) as usize;
+                    let s_end = end.map_or(len as usize, |e| normalize_index(e, len) as usize);
+                    let sliced: Vec<Value> = arr
+                        .iter()
+                        .skip(s_start)
+                        .take(s_end.saturating_sub(s_start))
+                        .cloned()
+                        .collect();
+                    Ok(Value::Array(sliced))
+                }
+                _ => Err(anyhow!(
+                    "slice() expects str or list, got {}",
+                    type_name(&args[0])
+                )),
+            }
+        }
+
+        "count" => {
+            require_args(name, args, 2)?;
+            let s = value_to_string(&args[0]);
+            let sub = value_to_string(&args[1]);
+            if sub.is_empty() {
+                return Err(anyhow!("count() substring cannot be empty"));
+            }
+            Ok(json!(s.matches(&sub).count()))
+        }
+
+        "capitalize" => {
+            require_args(name, args, 1)?;
+            let s = value_to_string(&args[0]);
+            let cap = if s.is_empty() {
+                s
+            } else {
+                let mut chars = s.chars();
+                let first: String = chars.next().unwrap().to_uppercase().collect();
+                format!("{}{}", first, chars.as_str().to_lowercase())
+            };
+            Ok(Value::String(cap))
+        }
+
+        "title" => {
+            require_args(name, args, 1)?;
+            let s = value_to_string(&args[0]);
+            let titled: String = s
+                .split_whitespace()
+                .map(|word| {
+                    let mut chars = word.chars();
+                    match chars.next() {
+                        Some(c) => {
+                            let first: String = c.to_uppercase().collect();
+                            format!("{}{}", first, chars.as_str().to_lowercase())
+                        }
+                        None => String::new(),
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            Ok(Value::String(titled))
+        }
+
+        "lpad" => {
+            if args.len() < 2 || args.len() > 3 {
+                return Err(anyhow!("lpad() expects 2-3 arguments, got {}", args.len()));
+            }
+            let s = value_to_string(&args[0]);
+            let width = value_to_f64(&args[1])? as usize;
+            let pad_char = if args.len() == 3 {
+                let p = value_to_string(&args[2]);
+                p.chars().next().unwrap_or(' ')
+            } else {
+                ' '
+            };
+            let char_count = s.chars().count();
+            if char_count >= width {
+                Ok(Value::String(s))
+            } else {
+                let padding: String = std::iter::repeat(pad_char)
+                    .take(width - char_count)
+                    .collect();
+                Ok(Value::String(format!("{}{}", padding, s)))
+            }
+        }
+
+        "rpad" => {
+            if args.len() < 2 || args.len() > 3 {
+                return Err(anyhow!("rpad() expects 2-3 arguments, got {}", args.len()));
+            }
+            let s = value_to_string(&args[0]);
+            let width = value_to_f64(&args[1])? as usize;
+            let pad_char = if args.len() == 3 {
+                let p = value_to_string(&args[2]);
+                p.chars().next().unwrap_or(' ')
+            } else {
+                ' '
+            };
+            let char_count = s.chars().count();
+            if char_count >= width {
+                Ok(Value::String(s))
+            } else {
+                let padding: String = std::iter::repeat(pad_char)
+                    .take(width - char_count)
+                    .collect();
+                Ok(Value::String(format!("{}{}", s, padding)))
+            }
+        }
+
+        "repeat" => {
+            require_args(name, args, 2)?;
+            let s = value_to_string(&args[0]);
+            let n = value_to_f64(&args[1])? as usize;
+            Ok(Value::String(s.repeat(n)))
+        }
+
+        // ============================================================
+        // Collection operations
+        // ============================================================
+        "sort" => {
+            require_args(name, args, 1)?;
+            match &args[0] {
+                Value::Array(arr) => {
+                    let mut sorted = arr.clone();
+                    sorted.sort_by(|a, b| {
+                        // Numbers first, then strings, then by JSON repr
+                        match (a.as_f64(), b.as_f64()) {
+                            (Some(fa), Some(fb)) => {
+                                fa.partial_cmp(&fb).unwrap_or(std::cmp::Ordering::Equal)
+                            }
+                            _ => value_to_string(a).cmp(&value_to_string(b)),
+                        }
+                    });
+                    Ok(Value::Array(sorted))
+                }
+                _ => Err(anyhow!("sort() expects list, got {}", type_name(&args[0]))),
+            }
+        }
+
+        "reverse" => {
+            require_args(name, args, 1)?;
+            match &args[0] {
+                Value::Array(arr) => {
+                    let mut rev = arr.clone();
+                    rev.reverse();
+                    Ok(Value::Array(rev))
+                }
+                Value::String(s) => Ok(Value::String(s.chars().rev().collect())),
+                _ => Err(anyhow!(
+                    "reverse() expects list or str, got {}",
+                    type_name(&args[0])
+                )),
+            }
+        }
+
+        "unique" => {
+            require_args(name, args, 1)?;
+            match &args[0] {
+                Value::Array(arr) => {
+                    let mut seen = Vec::new();
+                    let mut result = Vec::new();
+                    for item in arr {
+                        let key = serde_json::to_string(item).unwrap_or_default();
+                        if !seen.contains(&key) {
+                            seen.push(key);
+                            result.push(item.clone());
+                        }
+                    }
+                    Ok(Value::Array(result))
+                }
+                _ => Err(anyhow!(
+                    "unique() expects list, got {}",
+                    type_name(&args[0])
+                )),
+            }
+        }
+
+        "flatten" => {
+            require_args(name, args, 1)?;
+            match &args[0] {
+                Value::Array(arr) => {
+                    let mut result = Vec::new();
+                    for item in arr {
+                        match item {
+                            Value::Array(inner) => result.extend(inner.clone()),
+                            other => result.push(other.clone()),
+                        }
+                    }
+                    Ok(Value::Array(result))
+                }
+                _ => Err(anyhow!(
+                    "flatten() expects list, got {}",
+                    type_name(&args[0])
+                )),
+            }
+        }
+
+        "sum" => {
+            require_args(name, args, 1)?;
+            match &args[0] {
+                Value::Array(arr) => {
+                    let mut total = 0.0f64;
+                    for item in arr {
+                        total += value_to_f64(item)?;
+                    }
+                    Ok(json_number(total))
+                }
+                _ => Err(anyhow!("sum() expects list, got {}", type_name(&args[0]))),
+            }
+        }
+
+        "zip" => {
+            require_args(name, args, 2)?;
+            match (&args[0], &args[1]) {
+                (Value::Array(a), Value::Array(b)) => {
+                    let pairs: Vec<Value> =
+                        a.iter().zip(b.iter()).map(|(x, y)| json!([x, y])).collect();
+                    Ok(Value::Array(pairs))
+                }
+                _ => Err(anyhow!("zip() expects two lists")),
+            }
+        }
+
+        "enumerate" => {
+            require_args(name, args, 1)?;
+            match &args[0] {
+                Value::Array(arr) => {
+                    let pairs: Vec<Value> =
+                        arr.iter().enumerate().map(|(i, v)| json!([i, v])).collect();
+                    Ok(Value::Array(pairs))
+                }
+                _ => Err(anyhow!(
+                    "enumerate() expects list, got {}",
+                    type_name(&args[0])
+                )),
+            }
+        }
+
+        "first" => {
+            require_args(name, args, 1)?;
+            match &args[0] {
+                Value::Array(arr) => Ok(arr.first().cloned().unwrap_or(Value::Null)),
+                _ => Err(anyhow!("first() expects list, got {}", type_name(&args[0]))),
+            }
+        }
+
+        "last" => {
+            require_args(name, args, 1)?;
+            match &args[0] {
+                Value::Array(arr) => Ok(arr.last().cloned().unwrap_or(Value::Null)),
+                _ => Err(anyhow!("last() expects list, got {}", type_name(&args[0]))),
+            }
+        }
+
+        "chunk" => {
+            require_args(name, args, 2)?;
+            match &args[0] {
+                Value::Array(arr) => {
+                    let size = value_to_f64(&args[1])? as usize;
+                    if size == 0 {
+                        return Err(anyhow!("chunk() size must be > 0"));
+                    }
+                    let chunks: Vec<Value> =
+                        arr.chunks(size).map(|c| Value::Array(c.to_vec())).collect();
+                    Ok(Value::Array(chunks))
+                }
+                _ => Err(anyhow!("chunk() expects list, got {}", type_name(&args[0]))),
+            }
+        }
+
+        // ============================================================
+        // Math operations (extended)
+        // ============================================================
+        "floor" => {
+            require_args(name, args, 1)?;
+            let n = value_to_f64(&args[0])?;
+            Ok(json!(n.floor() as i64))
+        }
+
+        "ceil" => {
+            require_args(name, args, 1)?;
+            let n = value_to_f64(&args[0])?;
+            Ok(json!(n.ceil() as i64))
+        }
+
+        "pow" => {
+            require_args(name, args, 2)?;
+            let base = value_to_f64(&args[0])?;
+            let exp = value_to_f64(&args[1])?;
+            Ok(json_number(base.powf(exp)))
+        }
+
+        "sqrt" => {
+            require_args(name, args, 1)?;
+            let n = value_to_f64(&args[0])?;
+            if n < 0.0 {
+                return Err(anyhow!("sqrt() of negative number"));
+            }
+            Ok(json_number(n.sqrt()))
+        }
+
+        "log" => {
+            if args.is_empty() || args.len() > 2 {
+                return Err(anyhow!("log() expects 1-2 arguments, got {}", args.len()));
+            }
+            let n = value_to_f64(&args[0])?;
+            if n <= 0.0 {
+                return Err(anyhow!("log() of non-positive number"));
+            }
+            let result = if args.len() == 2 {
+                let base = value_to_f64(&args[1])?;
+                n.log(base)
+            } else {
+                n.ln()
+            };
+            Ok(json_number(result))
+        }
+
+        "random" => {
+            require_args(name, args, 0)?;
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                use rand::Rng;
+                let mut rng = rand::thread_rng();
+                Ok(json!(rng.gen::<f64>()))
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                Ok(json!(0.5)) // Fallback for WASM
+            }
+        }
+
+        "randint" => {
+            require_args(name, args, 2)?;
+            let min_val = value_to_f64(&args[0])? as i64;
+            let max_val = value_to_f64(&args[1])? as i64;
+            if min_val > max_val {
+                return Err(anyhow!("randint() min must be <= max"));
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                use rand::Rng;
+                let mut rng = rand::thread_rng();
+                Ok(json!(rng.gen_range(min_val..=max_val)))
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                Ok(json!(min_val))
+            }
+        }
+
+        "clamp" => {
+            require_args(name, args, 3)?;
+            let n = value_to_f64(&args[0])?;
+            let min_val = value_to_f64(&args[1])?;
+            let max_val = value_to_f64(&args[2])?;
+            Ok(json_number(n.max(min_val).min(max_val)))
+        }
+
+        // ============================================================
+        // Data / JSON operations
+        // ============================================================
+        "from_json" => {
+            require_args(name, args, 1)?;
+            let s = value_to_string(&args[0]);
+            let parsed: Value =
+                serde_json::from_str(&s).map_err(|e| anyhow!("from_json() parse error: {}", e))?;
+            Ok(parsed)
+        }
+
+        "merge" => {
+            require_args(name, args, 2)?;
+            match (&args[0], &args[1]) {
+                (Value::Object(a), Value::Object(b)) => {
+                    let mut merged = a.clone();
+                    for (k, v) in b {
+                        merged.insert(k.clone(), v.clone());
+                    }
+                    Ok(Value::Object(merged))
+                }
+                _ => Err(anyhow!("merge() expects two dicts")),
+            }
+        }
+
+        "pick" => {
+            require_args(name, args, 2)?;
+            match (&args[0], &args[1]) {
+                (Value::Object(obj), Value::Array(keys)) => {
+                    let mut result = serde_json::Map::new();
+                    for key in keys {
+                        if let Value::String(k) = key {
+                            if let Some(v) = obj.get(k) {
+                                result.insert(k.clone(), v.clone());
+                            }
+                        }
+                    }
+                    Ok(Value::Object(result))
+                }
+                _ => Err(anyhow!("pick() expects (dict, list_of_keys)")),
+            }
+        }
+
+        "omit" => {
+            require_args(name, args, 2)?;
+            match (&args[0], &args[1]) {
+                (Value::Object(obj), Value::Array(keys)) => {
+                    let exclude: Vec<String> = keys
+                        .iter()
+                        .filter_map(|k| k.as_str().map(|s| s.to_string()))
+                        .collect();
+                    let mut result = obj.clone();
+                    for k in &exclude {
+                        result.remove(k);
+                    }
+                    Ok(Value::Object(result))
+                }
+                _ => Err(anyhow!("omit() expects (dict, list_of_keys)")),
+            }
+        }
+
+        "has" => {
+            require_args(name, args, 2)?;
+            match &args[0] {
+                Value::Object(obj) => {
+                    let key = value_to_string(&args[1]);
+                    Ok(json!(obj.contains_key(&key)))
+                }
+                Value::Array(arr) => Ok(json!(arr.contains(&args[1]))),
+                _ => Err(anyhow!("has() expects dict or list as first argument")),
+            }
+        }
+
+        "get" => {
+            if args.len() < 2 || args.len() > 3 {
+                return Err(anyhow!("get() expects 2-3 arguments, got {}", args.len()));
+            }
+            let default = if args.len() == 3 {
+                args[2].clone()
+            } else {
+                Value::Null
+            };
+            match &args[0] {
+                Value::Object(obj) => {
+                    let key = value_to_string(&args[1]);
+                    Ok(obj.get(&key).cloned().unwrap_or(default))
+                }
+                Value::Array(arr) => {
+                    let idx = value_to_f64(&args[1])? as i64;
+                    let len = arr.len() as i64;
+                    let normalized = if idx < 0 { idx + len } else { idx };
+                    if normalized >= 0 && (normalized as usize) < arr.len() {
+                        Ok(arr[normalized as usize].clone())
+                    } else {
+                        Ok(default)
+                    }
+                }
+                _ => Err(anyhow!("get() expects dict or list as first argument")),
+            }
+        }
+
+        "items" => {
+            require_args(name, args, 1)?;
+            match &args[0] {
+                Value::Object(obj) => {
+                    let pairs: Vec<Value> = obj.iter().map(|(k, v)| json!([k, v])).collect();
+                    Ok(Value::Array(pairs))
+                }
+                _ => Err(anyhow!("items() expects dict, got {}", type_name(&args[0]))),
+            }
+        }
+
+        "from_entries" => {
+            require_args(name, args, 1)?;
+            match &args[0] {
+                Value::Array(arr) => {
+                    let mut map = serde_json::Map::new();
+                    for item in arr {
+                        match item {
+                            Value::Array(pair) if pair.len() == 2 => {
+                                let key = value_to_string(&pair[0]);
+                                map.insert(key, pair[1].clone());
+                            }
+                            _ => {
+                                return Err(anyhow!(
+                                    "from_entries() expects list of [key, value] pairs"
+                                ))
+                            }
+                        }
+                    }
+                    Ok(Value::Object(map))
+                }
+                _ => Err(anyhow!(
+                    "from_entries() expects list, got {}",
+                    type_name(&args[0])
+                )),
+            }
+        }
+
+        // ============================================================
+        // Date/Time operations
+        // ============================================================
+        "now" => {
+            require_args(name, args, 0)?;
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let now = chrono::Utc::now();
+                Ok(json!(now.to_rfc3339()))
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                Ok(json!("1970-01-01T00:00:00+00:00"))
+            }
+        }
+
+        "timestamp" => {
+            require_args(name, args, 0)?;
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let ts = chrono::Utc::now().timestamp();
+                Ok(json!(ts))
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                Ok(json!(0))
+            }
+        }
+
+        "timestamp_ms" => {
+            require_args(name, args, 0)?;
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let ts = chrono::Utc::now().timestamp_millis();
+                Ok(json!(ts))
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                Ok(json!(0))
+            }
+        }
+
+        "format_date" => {
+            require_args(name, args, 2)?;
+            let iso_str = value_to_string(&args[0]);
+            let fmt = value_to_string(&args[1]);
+            let dt = chrono::DateTime::parse_from_rfc3339(&iso_str)
+                .map_err(|e| anyhow!("format_date() invalid ISO 8601: {}", e))?;
+            Ok(json!(dt.format(&fmt).to_string()))
+        }
+
+        "parse_date" => {
+            require_args(name, args, 2)?;
+            let date_str = value_to_string(&args[0]);
+            let fmt = value_to_string(&args[1]);
+            let naive = chrono::NaiveDateTime::parse_from_str(&date_str, &fmt)
+                .map_err(|e| anyhow!("parse_date() parse error: {}", e))?;
+            let dt = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(naive, chrono::Utc);
+            Ok(json!(dt.to_rfc3339()))
+        }
+
+        // ============================================================
+        // Encoding operations
+        // ============================================================
+        "base64_encode" => {
+            require_args(name, args, 1)?;
+            let s = value_to_string(&args[0]);
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                use base64::Engine;
+                Ok(json!(
+                    base64::engine::general_purpose::STANDARD.encode(s.as_bytes())
+                ))
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                Ok(json!(s)) // Fallback
+            }
+        }
+
+        "base64_decode" => {
+            require_args(name, args, 1)?;
+            let s = value_to_string(&args[0]);
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                use base64::Engine;
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(s.as_bytes())
+                    .map_err(|e| anyhow!("base64_decode() error: {}", e))?;
+                let decoded = String::from_utf8(bytes)
+                    .map_err(|e| anyhow!("base64_decode() not valid UTF-8: {}", e))?;
+                Ok(json!(decoded))
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                Ok(json!(s))
+            }
+        }
+
+        "url_encode" => {
+            require_args(name, args, 1)?;
+            let s = value_to_string(&args[0]);
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                Ok(json!(urlencoding::encode(&s).into_owned()))
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                Ok(json!(s))
+            }
+        }
+
+        "url_decode" => {
+            require_args(name, args, 1)?;
+            let s = value_to_string(&args[0]);
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let decoded =
+                    urlencoding::decode(&s).map_err(|e| anyhow!("url_decode() error: {}", e))?;
+                Ok(json!(decoded.into_owned()))
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                Ok(json!(s))
+            }
+        }
+
+        "md5" => {
+            require_args(name, args, 1)?;
+            let s = value_to_string(&args[0]);
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                use md5::Digest;
+                let mut hasher = md5::Md5::new();
+                hasher.update(s.as_bytes());
+                let result = hasher.finalize();
+                Ok(json!(format!("{:x}", result)))
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                Ok(json!(""))
+            }
+        }
+
+        "sha256" => {
+            require_args(name, args, 1)?;
+            let s = value_to_string(&args[0]);
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                use sha2::Digest;
+                let mut hasher = sha2::Sha256::new();
+                hasher.update(s.as_bytes());
+                let result = hasher.finalize();
+                Ok(json!(format!("{:x}", result)))
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                Ok(json!(""))
+            }
+        }
+
+        // ============================================================
+        // Type checking
+        // ============================================================
+        "is_null" => {
+            require_args(name, args, 1)?;
+            Ok(json!(args[0].is_null()))
+        }
+
+        "is_string" => {
+            require_args(name, args, 1)?;
+            Ok(json!(args[0].is_string()))
+        }
+
+        "is_number" => {
+            require_args(name, args, 1)?;
+            Ok(json!(args[0].is_number()))
+        }
+
+        "is_bool" => {
+            require_args(name, args, 1)?;
+            Ok(json!(args[0].is_boolean()))
+        }
+
+        "is_array" => {
+            require_args(name, args, 1)?;
+            Ok(json!(args[0].is_array()))
+        }
+
+        "is_object" => {
+            require_args(name, args, 1)?;
+            Ok(json!(args[0].is_object()))
+        }
+
+        // ============================================================
+        // Path operations
+        // ============================================================
+        "basename" => {
+            require_args(name, args, 1)?;
+            let s = value_to_string(&args[0]);
+            let path = std::path::Path::new(&s);
+            Ok(json!(path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")))
+        }
+
+        "dirname" => {
+            require_args(name, args, 1)?;
+            let s = value_to_string(&args[0]);
+            let path = std::path::Path::new(&s);
+            Ok(json!(path
+                .parent()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default()))
+        }
+
+        "extname" => {
+            require_args(name, args, 1)?;
+            let s = value_to_string(&args[0]);
+            let path = std::path::Path::new(&s);
+            match path.extension().and_then(|e| e.to_str()) {
+                Some(ext) => Ok(json!(format!(".{}", ext))),
+                None => Ok(json!("")),
+            }
+        }
+
+        "join_path" => {
+            require_min_args(name, args, 2)?;
+            let mut path = std::path::PathBuf::from(value_to_string(&args[0]));
+            for arg in &args[1..] {
+                path = path.join(value_to_string(arg));
+            }
+            Ok(json!(path.to_string_lossy().into_owned()))
+        }
+
+        // ============================================================
+        // Phase 2: Practical built-ins (no lambda needed)
+        // ============================================================
+        "all" => {
+            require_args(name, args, 1)?;
+            match &args[0] {
+                Value::Array(arr) => Ok(json!(arr.iter().all(is_truthy))),
+                _ => Err(anyhow!("all() expects list, got {}", type_name(&args[0]))),
+            }
+        }
+
+        "any" => {
+            require_args(name, args, 1)?;
+            match &args[0] {
+                Value::Array(arr) => Ok(json!(arr.iter().any(is_truthy))),
+                _ => Err(anyhow!("any() expects list, got {}", type_name(&args[0]))),
+            }
+        }
+
+        "chr" => {
+            require_args(name, args, 1)?;
+            let n = value_to_f64(&args[0])? as u32;
+            let c = char::from_u32(n).ok_or_else(|| anyhow!("chr() invalid code point: {}", n))?;
+            Ok(json!(c.to_string()))
+        }
+
+        "ord" => {
+            require_args(name, args, 1)?;
+            let s = value_to_string(&args[0]);
+            let c = s
+                .chars()
+                .next()
+                .ok_or_else(|| anyhow!("ord() expects non-empty string"))?;
+            Ok(json!(c as u32))
+        }
+
+        "hex" => {
+            require_args(name, args, 1)?;
+            let n = value_to_f64(&args[0])? as i64;
+            Ok(json!(format!("0x{:x}", n)))
+        }
+
+        "bin" => {
+            require_args(name, args, 1)?;
+            let n = value_to_f64(&args[0])? as i64;
+            Ok(json!(format!("0b{:b}", n)))
+        }
+
+        "oct" => {
+            require_args(name, args, 1)?;
+            let n = value_to_f64(&args[0])? as i64;
+            Ok(json!(format!("0o{:o}", n)))
+        }
+
+        "regex_match" => {
+            require_args(name, args, 2)?;
+            let s = value_to_string(&args[0]);
+            let pat = value_to_string(&args[1]);
+            let re = regex::Regex::new(&pat)
+                .map_err(|e| anyhow!("regex_match() invalid pattern: {}", e))?;
+            Ok(json!(re.is_match(&s)))
+        }
+
+        "regex_find" => {
+            require_args(name, args, 2)?;
+            let s = value_to_string(&args[0]);
+            let pat = value_to_string(&args[1]);
+            let re = regex::Regex::new(&pat)
+                .map_err(|e| anyhow!("regex_find() invalid pattern: {}", e))?;
+            match re.find(&s) {
+                Some(m) => Ok(json!(m.as_str())),
+                None => Ok(Value::Null),
+            }
+        }
+
+        "regex_find_all" => {
+            require_args(name, args, 2)?;
+            let s = value_to_string(&args[0]);
+            let pat = value_to_string(&args[1]);
+            let re = regex::Regex::new(&pat)
+                .map_err(|e| anyhow!("regex_find_all() invalid pattern: {}", e))?;
+            let matches: Vec<Value> = re.find_iter(&s).map(|m| json!(m.as_str())).collect();
+            Ok(Value::Array(matches))
+        }
+
+        "regex_replace" => {
+            require_args(name, args, 3)?;
+            let s = value_to_string(&args[0]);
+            let pat = value_to_string(&args[1]);
+            let rep = value_to_string(&args[2]);
+            let re = regex::Regex::new(&pat)
+                .map_err(|e| anyhow!("regex_replace() invalid pattern: {}", e))?;
+            Ok(json!(re.replace_all(&s, rep.as_str()).into_owned()))
+        }
+
+        "uuid" => {
+            require_args(name, args, 0)?;
+            Ok(json!(uuid::Uuid::new_v4().to_string()))
+        }
+
+        "env" => {
+            if args.is_empty() || args.len() > 2 {
+                return Err(anyhow!("env() expects 1-2 arguments, got {}", args.len()));
+            }
+            let name_str = value_to_string(&args[0]);
+            match std::env::var(&name_str) {
+                Ok(val) => Ok(json!(val)),
+                Err(_) => {
+                    if args.len() == 2 {
+                        Ok(args[1].clone())
+                    } else {
+                        Ok(Value::Null)
+                    }
+                }
+            }
+        }
+
+        "format" => {
+            require_min_args(name, args, 1)?;
+            let template = value_to_string(&args[0]);
+            let format_args = &args[1..];
+            let mut result = String::new();
+            let mut arg_idx = 0;
+            let mut chars = template.chars().peekable();
+            while let Some(c) = chars.next() {
+                if c == '{' {
+                    if chars.peek() == Some(&'}') {
+                        chars.next(); // consume '}'
+                        if arg_idx < format_args.len() {
+                            result.push_str(&value_to_string(&format_args[arg_idx]));
+                            arg_idx += 1;
+                        } else {
+                            result.push_str("{}");
+                        }
+                    } else if chars.peek() == Some(&'{') {
+                        chars.next(); // escape {{
+                        result.push('{');
+                    } else {
+                        result.push(c);
+                    }
+                } else if c == '}' && chars.peek() == Some(&'}') {
+                    chars.next(); // escape }}
+                    result.push('}');
+                } else {
+                    result.push(c);
+                }
+            }
+            Ok(json!(result))
+        }
+
+        "json_pretty" => {
+            require_args(name, args, 1)?;
+            let pretty = serde_json::to_string_pretty(&args[0]).unwrap_or_default();
+            Ok(json!(pretty))
+        }
+
         _ => Err(anyhow!("Unknown function: {}()", name)),
+    }
+}
+
+/// Normalize a negative index (Python-style): -1 → len-1, etc.
+fn normalize_index(idx: i64, len: i64) -> i64 {
+    if idx < 0 {
+        (len + idx).max(0)
+    } else {
+        idx.min(len)
     }
 }
 
@@ -1091,7 +2546,7 @@ mod tests {
     fn eval_bool(expr: &str, ctx: Value) -> bool {
         let evaluator = ExprEvaluator::new();
         let resolver = make_resolver(ctx);
-        evaluator.eval_as_bool(expr, &resolver).unwrap()
+        evaluator._eval_as_bool(expr, &resolver).unwrap()
     }
 
     // ---- Truthiness ----
@@ -1484,5 +2939,569 @@ mod tests {
         let ctx = json!({"name": "Alice", "items": [1, 2, 3]});
         assert_eq!(eval_with("name", ctx.clone()), json!("Alice"));
         assert!(eval_bool("items", ctx)); // truthy (non-empty array)
+    }
+
+    // ---- Extended String Operations ----
+
+    #[test]
+    fn test_string_extended() {
+        // find
+        assert_eq!(eval("find(\"hello world\", \"world\")"), json!(6));
+        assert_eq!(eval("find(\"hello\", \"xyz\")"), json!(-1));
+        assert_eq!(eval("find(\"abcabc\", \"bc\")"), json!(1));
+
+        // slice
+        assert_eq!(eval("slice(\"hello\", 1, 4)"), json!("ell"));
+        assert_eq!(eval("slice(\"hello\", 2)"), json!("llo"));
+        assert_eq!(eval("slice(\"hello\", -3)"), json!("llo"));
+        assert_eq!(eval("slice([1,2,3,4,5], 1, 3)"), json!([2, 3]));
+
+        // count
+        assert_eq!(eval("count(\"abcabc\", \"ab\")"), json!(2));
+        assert_eq!(eval("count(\"hello\", \"x\")"), json!(0));
+
+        // capitalize
+        assert_eq!(eval("capitalize(\"hello world\")"), json!("Hello world"));
+        assert_eq!(eval("capitalize(\"HELLO\")"), json!("Hello"));
+
+        // title
+        assert_eq!(eval("title(\"hello world\")"), json!("Hello World"));
+        assert_eq!(
+            eval("title(\"the quick brown fox\")"),
+            json!("The Quick Brown Fox")
+        );
+
+        // lpad / rpad
+        assert_eq!(eval("lpad(\"42\", 5, \"0\")"), json!("00042"));
+        assert_eq!(eval("lpad(\"hi\", 5)"), json!("   hi"));
+        assert_eq!(eval("rpad(\"hi\", 5)"), json!("hi   "));
+        assert_eq!(eval("rpad(\"42\", 5, \".\")"), json!("42..."));
+
+        // repeat
+        assert_eq!(eval("repeat(\"ab\", 3)"), json!("ababab"));
+        assert_eq!(eval("repeat(\"-\", 5)"), json!("-----"));
+    }
+
+    // ---- Extended Collection Operations ----
+
+    #[test]
+    fn test_collection_extended() {
+        // sort
+        assert_eq!(eval("sort([3, 1, 2])"), json!([1, 2, 3]));
+        assert_eq!(eval("sort([\"c\", \"a\", \"b\"])"), json!(["a", "b", "c"]));
+
+        // reverse
+        assert_eq!(eval("reverse([1, 2, 3])"), json!([3, 2, 1]));
+        assert_eq!(eval("reverse(\"hello\")"), json!("olleh"));
+
+        // unique
+        assert_eq!(eval("unique([1, 2, 2, 3, 1])"), json!([1, 2, 3]));
+
+        // flatten
+        assert_eq!(eval("flatten([[1, 2], [3, 4], 5])"), json!([1, 2, 3, 4, 5]));
+
+        // sum
+        assert_eq!(eval("sum([1, 2, 3, 4])"), json!(10));
+
+        // zip
+        assert_eq!(
+            eval("zip([1, 2, 3], [\"a\", \"b\", \"c\"])"),
+            json!([[1, "a"], [2, "b"], [3, "c"]])
+        );
+
+        // enumerate
+        assert_eq!(
+            eval("enumerate([\"a\", \"b\", \"c\"])"),
+            json!([[0, "a"], [1, "b"], [2, "c"]])
+        );
+
+        // first / last
+        assert_eq!(eval("first([10, 20, 30])"), json!(10));
+        assert_eq!(eval("last([10, 20, 30])"), json!(30));
+        assert_eq!(eval("first([])"), Value::Null);
+        assert_eq!(eval("last([])"), Value::Null);
+
+        // chunk
+        assert_eq!(
+            eval("chunk([1, 2, 3, 4, 5], 2)"),
+            json!([[1, 2], [3, 4], [5]])
+        );
+    }
+
+    // ---- Extended Math Operations ----
+
+    #[test]
+    fn test_math_extended() {
+        // floor / ceil
+        assert_eq!(eval("floor(3.7)"), json!(3));
+        assert_eq!(eval("floor(-2.3)"), json!(-3));
+        assert_eq!(eval("ceil(3.2)"), json!(4));
+        assert_eq!(eval("ceil(-2.7)"), json!(-2));
+
+        // pow
+        assert_eq!(eval("pow(2, 10)"), json!(1024));
+        assert_eq!(eval("pow(3, 2)"), json!(9));
+
+        // sqrt
+        assert_eq!(eval("sqrt(16)"), json!(4));
+        assert_eq!(eval("sqrt(2)"), json!(std::f64::consts::SQRT_2));
+
+        // log
+        let ln_e = eval("log(2.718281828459045)");
+        assert!((ln_e.as_f64().unwrap() - 1.0).abs() < 0.001);
+        let log10 = eval("log(100, 10)");
+        assert!((log10.as_f64().unwrap() - 2.0).abs() < 0.001);
+
+        // clamp
+        assert_eq!(eval("clamp(5, 0, 10)"), json!(5));
+        assert_eq!(eval("clamp(-5, 0, 10)"), json!(0));
+        assert_eq!(eval("clamp(15, 0, 10)"), json!(10));
+    }
+
+    // ---- Data / JSON Operations ----
+
+    #[test]
+    fn test_data_operations() {
+        // from_json
+        assert_eq!(eval("from_json(\"{\\\"a\\\": 1}\")"), json!({"a": 1}));
+        assert_eq!(eval("from_json(\"[1,2,3]\")"), json!([1, 2, 3]));
+
+        // merge
+        let ctx = json!({"a": {"x": 1}, "b": {"y": 2, "x": 99}});
+        assert_eq!(eval_with("merge($a, $b)", ctx), json!({"x": 99, "y": 2}));
+
+        // pick
+        let ctx = json!({"d": {"a": 1, "b": 2, "c": 3}});
+        assert_eq!(
+            eval_with("pick($d, [\"a\", \"c\"])", ctx),
+            json!({"a": 1, "c": 3})
+        );
+
+        // omit
+        let ctx = json!({"d": {"a": 1, "b": 2, "c": 3}});
+        assert_eq!(eval_with("omit($d, [\"b\"])", ctx), json!({"a": 1, "c": 3}));
+
+        // has
+        let ctx = json!({"d": {"name": "alice"}, "arr": [1, 2, 3]});
+        assert_eq!(eval_with("has($d, \"name\")", ctx.clone()), json!(true));
+        assert_eq!(eval_with("has($d, \"age\")", ctx.clone()), json!(false));
+        assert_eq!(eval_with("has($arr, 2)", ctx.clone()), json!(true));
+        assert_eq!(eval_with("has($arr, 5)", ctx.clone()), json!(false));
+
+        // get
+        let ctx = json!({"d": {"a": 1}});
+        assert_eq!(eval_with("get($d, \"a\")", ctx.clone()), json!(1));
+        assert_eq!(
+            eval_with("get($d, \"missing\", \"default\")", ctx),
+            json!("default")
+        );
+
+        // items
+        let ctx = json!({"d": {"x": 1, "y": 2}});
+        let items = eval_with("items($d)", ctx);
+        let arr = items.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+
+        // from_entries
+        assert_eq!(
+            eval("from_entries([[\"a\", 1], [\"b\", 2]])"),
+            json!({"a": 1, "b": 2})
+        );
+    }
+
+    // ---- Date/Time Operations ----
+
+    #[test]
+    fn test_datetime() {
+        // now() returns an ISO 8601 string
+        let result = eval("now()");
+        assert!(result.as_str().unwrap().contains("T"));
+
+        // timestamp() returns a positive number
+        let ts = eval("timestamp()");
+        assert!(ts.as_i64().unwrap() > 1_700_000_000);
+
+        // timestamp_ms()
+        let ts_ms = eval("timestamp_ms()");
+        assert!(ts_ms.as_i64().unwrap() > 1_700_000_000_000);
+
+        // format_date
+        assert_eq!(
+            eval("format_date(\"2024-01-15T10:30:00+00:00\", \"%Y-%m-%d\")"),
+            json!("2024-01-15")
+        );
+
+        // parse_date
+        let parsed = eval("parse_date(\"2024-01-15 10:30:00\", \"%Y-%m-%d %H:%M:%S\")");
+        assert!(parsed.as_str().unwrap().starts_with("2024-01-15"));
+    }
+
+    // ---- Encoding Operations ----
+
+    #[test]
+    fn test_encoding() {
+        // base64
+        assert_eq!(eval("base64_encode(\"hello\")"), json!("aGVsbG8="));
+        assert_eq!(eval("base64_decode(\"aGVsbG8=\")"), json!("hello"));
+
+        // url encode/decode
+        assert_eq!(eval("url_encode(\"hello world\")"), json!("hello%20world"));
+        assert_eq!(eval("url_decode(\"hello%20world\")"), json!("hello world"));
+
+        // md5
+        assert_eq!(
+            eval("md5(\"hello\")"),
+            json!("5d41402abc4b2a76b9719d911017c592")
+        );
+
+        // sha256
+        assert_eq!(
+            eval("sha256(\"hello\")"),
+            json!("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
+        );
+    }
+
+    // ---- Type Checking ----
+
+    #[test]
+    fn test_type_checks() {
+        assert_eq!(eval("is_null(null)"), json!(true));
+        assert_eq!(eval("is_null(1)"), json!(false));
+
+        assert_eq!(eval("is_string(\"hello\")"), json!(true));
+        assert_eq!(eval("is_string(42)"), json!(false));
+
+        assert_eq!(eval("is_number(42)"), json!(true));
+        assert_eq!(eval("is_number(3.14)"), json!(true));
+        assert_eq!(eval("is_number(\"42\")"), json!(false));
+
+        assert_eq!(eval("is_bool(true)"), json!(true));
+        assert_eq!(eval("is_bool(1)"), json!(false));
+
+        assert_eq!(eval("is_array([1, 2])"), json!(true));
+        assert_eq!(eval("is_array(\"[1,2]\")"), json!(false));
+
+        assert_eq!(eval("is_object({\"a\": 1})"), json!(true));
+        assert_eq!(eval("is_object([1])"), json!(false));
+    }
+
+    // ---- Path Operations ----
+
+    #[test]
+    fn test_path_operations() {
+        // basename
+        assert_eq!(
+            eval("basename(\"/usr/local/bin/juglans\")"),
+            json!("juglans")
+        );
+        assert_eq!(eval("basename(\"file.txt\")"), json!("file.txt"));
+
+        // dirname
+        assert_eq!(
+            eval("dirname(\"/usr/local/bin/juglans\")"),
+            json!("/usr/local/bin")
+        );
+
+        // extname
+        assert_eq!(eval("extname(\"file.txt\")"), json!(".txt"));
+        assert_eq!(eval("extname(\"archive.tar.gz\")"), json!(".gz"));
+        assert_eq!(eval("extname(\"noext\")"), json!(""));
+
+        // join_path
+        assert_eq!(
+            eval("join_path(\"/usr\", \"local\", \"bin\")"),
+            json!("/usr/local/bin")
+        );
+    }
+
+    // ---- Phase 2: Practical Built-ins ----
+
+    #[test]
+    fn test_all_any() {
+        assert_eq!(eval("all([true, true, true])"), json!(true));
+        assert_eq!(eval("all([true, false, true])"), json!(false));
+        assert_eq!(eval("all([1, 2, 3])"), json!(true));
+        assert_eq!(eval("all([1, 0, 3])"), json!(false));
+        assert_eq!(eval("all([])"), json!(true)); // vacuous truth
+
+        assert_eq!(eval("any([false, false, true])"), json!(true));
+        assert_eq!(eval("any([false, false])"), json!(false));
+        assert_eq!(eval("any([0, \"\", null])"), json!(false));
+        assert_eq!(eval("any([0, 1])"), json!(true));
+        assert_eq!(eval("any([])"), json!(false));
+    }
+
+    #[test]
+    fn test_chr_ord() {
+        assert_eq!(eval("chr(65)"), json!("A"));
+        assert_eq!(eval("chr(97)"), json!("a"));
+        assert_eq!(eval("chr(20320)"), json!("你")); // Unicode
+        assert_eq!(eval("ord(\"A\")"), json!(65));
+        assert_eq!(eval("ord(\"a\")"), json!(97));
+        assert_eq!(eval("ord(\"你\")"), json!(20320));
+    }
+
+    #[test]
+    fn test_hex_bin_oct() {
+        assert_eq!(eval("hex(255)"), json!("0xff"));
+        assert_eq!(eval("hex(16)"), json!("0x10"));
+        assert_eq!(eval("bin(10)"), json!("0b1010"));
+        assert_eq!(eval("bin(255)"), json!("0b11111111"));
+        assert_eq!(eval("oct(8)"), json!("0o10"));
+        assert_eq!(eval("oct(63)"), json!("0o77"));
+    }
+
+    #[test]
+    fn test_regex() {
+        // regex_match
+        assert_eq!(
+            eval("regex_match(\"hello123\", \"[a-z]+\\\\d+\")"),
+            json!(true)
+        );
+        assert_eq!(eval("regex_match(\"hello\", \"\\\\d+\")"), json!(false));
+
+        // regex_find
+        assert_eq!(
+            eval("regex_find(\"price: $42.50\", \"\\\\d+\\\\.\\\\d+\")"),
+            json!("42.50")
+        );
+        assert_eq!(eval("regex_find(\"no numbers\", \"\\\\d+\")"), Value::Null);
+
+        // regex_find_all
+        assert_eq!(
+            eval("regex_find_all(\"a1 b2 c3\", \"[a-z]\\\\d\")"),
+            json!(["a1", "b2", "c3"])
+        );
+
+        // regex_replace
+        assert_eq!(
+            eval("regex_replace(\"hello world\", \"\\\\s+\", \"-\")"),
+            json!("hello-world")
+        );
+    }
+
+    #[test]
+    fn test_uuid() {
+        let result = eval("uuid()");
+        let s = result.as_str().unwrap();
+        assert_eq!(s.len(), 36); // UUID format: 8-4-4-4-12
+        assert!(s.contains('-'));
+    }
+
+    #[test]
+    fn test_env_fn() {
+        // PATH should always exist
+        let result = eval("env(\"PATH\")");
+        assert!(result.is_string());
+        assert!(!result.as_str().unwrap().is_empty());
+
+        // Non-existent var returns null
+        assert_eq!(eval("env(\"JUGLANS_TEST_NONEXISTENT_VAR\")"), Value::Null);
+
+        // Non-existent var with default
+        assert_eq!(
+            eval("env(\"JUGLANS_TEST_NONEXISTENT_VAR\", \"fallback\")"),
+            json!("fallback")
+        );
+    }
+
+    #[test]
+    fn test_format_fn() {
+        assert_eq!(
+            eval("format(\"hello {}\", \"world\")"),
+            json!("hello world")
+        );
+        assert_eq!(
+            eval("format(\"{} + {} = {}\", 1, 2, 3)"),
+            json!("1 + 2 = 3")
+        );
+        assert_eq!(eval("format(\"no args\")"), json!("no args"));
+        assert_eq!(eval("format(\"escape {{}}\")"), json!("escape {}"));
+    }
+
+    #[test]
+    fn test_json_pretty() {
+        let result = eval("json_pretty({\"a\": 1})");
+        let s = result.as_str().unwrap();
+        assert!(s.contains('\n')); // Pretty-printed has newlines
+        assert!(s.contains("\"a\""));
+    }
+
+    // ---- Lambda & Higher-Order Functions ----
+
+    #[test]
+    fn test_lambda_map() {
+        assert_eq!(eval("map([1, 2, 3], x => x * 2)"), json!([2, 4, 6]));
+        assert_eq!(
+            eval("map([\"a\", \"b\"], s => upper(s))"),
+            json!(["A", "B"])
+        );
+        // Map over empty list
+        assert_eq!(eval("map([], x => x + 1)"), json!([]));
+    }
+
+    #[test]
+    fn test_lambda_filter() {
+        assert_eq!(eval("filter([1, 2, 3, 4, 5], x => x > 3)"), json!([4, 5]));
+        assert_eq!(
+            eval("filter([\"hello\", \"\", \"world\"], s => s)"),
+            json!(["hello", "world"])
+        );
+    }
+
+    #[test]
+    fn test_lambda_reduce() {
+        assert_eq!(
+            eval("reduce([1, 2, 3, 4], (acc, x) => acc + x, 0)"),
+            json!(10)
+        );
+        assert_eq!(
+            eval("reduce([\"a\", \"b\", \"c\"], (acc, x) => acc + x, \"\")"),
+            json!("abc")
+        );
+    }
+
+    #[test]
+    fn test_lambda_sort_by() {
+        let ctx = json!({"items": [
+            {"name": "Charlie", "age": 30},
+            {"name": "Alice", "age": 25},
+            {"name": "Bob", "age": 35}
+        ]});
+        let result = eval_with("sort_by($items, x => x.age)", ctx);
+        let arr = result.as_array().unwrap();
+        assert_eq!(arr[0]["name"], json!("Alice"));
+        assert_eq!(arr[1]["name"], json!("Charlie"));
+        assert_eq!(arr[2]["name"], json!("Bob"));
+    }
+
+    #[test]
+    fn test_lambda_find_by() {
+        let ctx = json!({"items": [
+            {"name": "Alice", "age": 25},
+            {"name": "Bob", "age": 35}
+        ]});
+        assert_eq!(
+            eval_with("find_by($items, x => x.age > 30)", ctx.clone()),
+            json!({"name": "Bob", "age": 35})
+        );
+        assert_eq!(
+            eval_with("find_by($items, x => x.age > 100)", ctx),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn test_lambda_group_by() {
+        let ctx = json!({"items": [
+            {"type": "fruit", "name": "apple"},
+            {"type": "veggie", "name": "carrot"},
+            {"type": "fruit", "name": "banana"}
+        ]});
+        let result = eval_with("group_by($items, x => x.type)", ctx);
+        let obj = result.as_object().unwrap();
+        assert_eq!(obj["fruit"].as_array().unwrap().len(), 2);
+        assert_eq!(obj["veggie"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_lambda_flat_map() {
+        assert_eq!(
+            eval("flat_map([[1, 2], [3, 4]], x => x)"),
+            json!([1, 2, 3, 4])
+        );
+        assert_eq!(
+            eval("flat_map([1, 2, 3], x => [x, x * 10])"),
+            json!([1, 10, 2, 20, 3, 30])
+        );
+    }
+
+    #[test]
+    fn test_lambda_count_by() {
+        let result = eval("count_by([\"a\", \"b\", \"a\", \"c\", \"b\", \"a\"], x => x)");
+        let obj = result.as_object().unwrap();
+        assert_eq!(obj["a"], json!(3));
+        assert_eq!(obj["b"], json!(2));
+        assert_eq!(obj["c"], json!(1));
+    }
+
+    #[test]
+    fn test_lambda_min_max_by() {
+        let ctx = json!({"items": [
+            {"name": "Alice", "score": 85},
+            {"name": "Bob", "score": 92},
+            {"name": "Charlie", "score": 78}
+        ]});
+        assert_eq!(
+            eval_with("min_by($items, x => x.score)", ctx.clone()),
+            json!({"name": "Charlie", "score": 78})
+        );
+        assert_eq!(
+            eval_with("max_by($items, x => x.score)", ctx),
+            json!({"name": "Bob", "score": 92})
+        );
+        // Empty list
+        assert_eq!(eval("min_by([], x => x)"), Value::Null);
+        assert_eq!(eval("max_by([], x => x)"), Value::Null);
+    }
+
+    #[test]
+    fn test_lambda_every_some() {
+        assert_eq!(eval("every([2, 4, 6], x => x > 0)"), json!(true));
+        assert_eq!(eval("every([2, -1, 6], x => x > 0)"), json!(false));
+        assert_eq!(eval("every([], x => x > 0)"), json!(true)); // vacuous truth
+
+        assert_eq!(eval("some([0, 0, 1], x => x > 0)"), json!(true));
+        assert_eq!(eval("some([0, 0, 0], x => x > 0)"), json!(false));
+        assert_eq!(eval("some([], x => x > 0)"), json!(false));
+    }
+
+    #[test]
+    fn test_lambda_capture_outer_scope() {
+        let ctx = json!({"offset": 10, "items": [1, 2, 3]});
+        assert_eq!(
+            eval_with("map($items, x => x + $offset)", ctx),
+            json!([11, 12, 13])
+        );
+    }
+
+    #[test]
+    fn test_lambda_nested() {
+        // Nested lambdas: map inside map
+        assert_eq!(
+            eval("map([[1, 2], [3, 4]], row => map(row, x => x * 10))"),
+            json!([[10, 20], [30, 40]])
+        );
+    }
+
+    #[test]
+    fn test_lambda_method_call() {
+        // Method call syntax: [1,2,3].map(x => x * 2)
+        assert_eq!(eval("[1, 2, 3].map(x => x * 2)"), json!([2, 4, 6]));
+        assert_eq!(eval("[1, 2, 3, 4, 5].filter(x => x > 3)"), json!([4, 5]));
+    }
+
+    #[test]
+    fn test_lambda_pipe() {
+        // Pipe syntax: [1,2,3] | map(x => x * 2)
+        assert_eq!(eval("[1, 2, 3] | map(x => x * 2)"), json!([2, 4, 6]));
+        // Chained pipes with lambdas
+        assert_eq!(
+            eval("[1, 2, 3, 4, 5] | filter(x => x > 2) | map(x => x * 10)"),
+            json!([30, 40, 50])
+        );
+    }
+
+    #[test]
+    fn test_lambda_multi_param() {
+        assert_eq!(
+            eval("reduce([1, 2, 3, 4], (acc, x) => acc + x, 0)"),
+            json!(10)
+        );
+        // Multi-param lambda for zip + map
+        assert_eq!(
+            eval("map(zip([1, 2, 3], [10, 20, 30]), pair => first(pair) + last(pair))"),
+            json!([11, 22, 33])
+        );
     }
 }

@@ -6,6 +6,12 @@ use std::io::{self, Write};
 
 pub struct MultilineInput;
 
+impl Default for MultilineInput {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MultilineInput {
     pub fn new() -> Self {
         Self

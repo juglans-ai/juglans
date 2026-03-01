@@ -518,11 +518,10 @@ fn collect_files(path: &str, include: Option<&str>) -> Result<Vec<String>> {
     };
 
     let mut files = Vec::new();
-    for entry in glob::glob(&pattern).with_context(|| format!("Invalid glob: {}", pattern))? {
-        if let Ok(p) = entry {
-            if p.is_file() {
-                files.push(p.display().to_string());
-            }
+    for p in (glob::glob(&pattern).with_context(|| format!("Invalid glob: {}", pattern))?).flatten()
+    {
+        if p.is_file() {
+            files.push(p.display().to_string());
         }
     }
 

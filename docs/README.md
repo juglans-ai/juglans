@@ -1,16 +1,100 @@
 # Juglans
 
-**Juglans** 是一个基于 Rust 的 AI 工作流编排框架，提供声明式 DSL 来定义和执行复杂的 AI Agent 工作流。
+**Juglans** is the first AI orchestration language that treats **graph topology as a first-class programming primitive**.
 
-## 特性
+> Others write code to draw graphs. We write graphs as code.
 
-- **声明式 DSL** - 使用 `.jgflow`、`.jgprompt`、`.jgagent` 三种文件格式定义工作流
-- **图执行引擎** - 支持条件分支、循环、错误处理的 DAG 执行
-- **模板系统** - Jinja 风格的 Prompt 模板，支持变量插值和控制流
-- **多 Agent 协作** - 灵活配置多个 Agent 协同工作
-- **MCP 集成** - 支持 Model Context Protocol 扩展工具能力
-- **Jug0 后端** - 与 Jug0 AI 平台无缝集成
-- **跨平台** - 支持 Native + WebAssembly
+In traditional programming, execution is fundamentally sequential — even async/await is syntactic sugar over linear control flow. In traditional workflow tools, the graph is a scheduling artifact generated from code. **Juglans inverts this: the graph topology IS the program.**
+
+## Why Topology Matters
+
+In the era of AI agents, the **structure of how agents interact** — who talks to whom, in what order, with what branching — is often more important than any individual agent's capability.
+
+Juglans makes this structure **explicit, composable, and verifiable**:
+
+```yaml
+[classify] -> switch $output.intent {
+    "question": [answer]
+    "task": [execute]
+    default: [fallback]
+}
+[answer] -> [review]
+[execute] -> [review]
+[review] if $output.quality < 0.8 -> [refine]
+[refine] -> [review]
+```
+
+The topology of this code — branching, convergence, cycles — **IS** the architecture diagram. No separate drawing needed.
+
+## What Makes Juglans Different
+
+### Node = Function
+
+A node is simultaneously a **graph vertex** (with edges, topological position) and a **callable function** (with parameters, a body, reusable). Function calls don't flatten the topology — sub-graphs are expanded in place, preserving structure.
+
+```yaml
+[deploy(env, version)]: {
+  bash(command="docker build -t app:" + $version + " .")
+  bash(command="kubectl apply --namespace=" + $env)
+}
+
+[staging]: deploy(env="staging", version="1.2.0")
+[production]: deploy(env="production", version="1.2.0")
+[staging] -> [production]
+```
+
+### Topology-Preserving Composition
+
+`flows:` imports perform **graph merging** — the sub-workflow's complete topology (nodes, edges, branches) is embedded into the parent graph with namespace prefixes. This is an **embedding**, not a projection. No structural information is lost.
+
+```yaml
+flows: {
+  auth: "./auth.jg"
+  trading: "./trading.jg"
+}
+[route] if $ctx.need_auth -> [auth.start]
+[auth.done] -> [trading.begin]
+```
+
+Compare: Python function calls flatten the call stack. Microservice calls hide network topology. Juglans sub-graphs remain **fully visible, reasonnable, and optimizable** within the parent graph.
+
+### Computation Topology = API Topology
+
+With `serve()`, the routing topology of your HTTP API and the execution topology of your computation are **the same graph**:
+
+```yaml
+[request]: serve()
+[request] -> switch $input.route {
+  "GET /api/hello": [hello]
+  "POST /api/data": [process]
+  default: [not_found]
+}
+```
+
+### How We Compare
+
+| Paradigm | Role of Graph | Limitation |
+|----------|--------------|------------|
+| Airflow / Prefect | Python code **generates** DAG; graph is a scheduling artifact | Graph is a second-class citizen |
+| Terraform | Declarative dependency graph | No control flow, no functions, no runtime branching |
+| BPMN / workflow engines | Visual XML graphs | Verbose, no function abstraction, not composable |
+| LangGraph / CrewAI | State machines between agents | State machines are not graphs — no true topological composition |
+| **Juglans** | **Graph topology IS the program** | — |
+
+## Features
+
+- **Declarative DSL** — Three file formats: `.jg` (workflows), `.jgprompt` (templates), `.jgagent` (agents)
+- **Graph Execution Engine** — DAG traversal with conditionals, switch routing, loops (`while`, `foreach`), error handling
+- **Function Definitions** — `[name(params)]: { steps }` — reusable parameterized node blocks
+- **Topology-Preserving Composition** — `flows:` merges sub-workflow graphs with namespace isolation
+- **Template System** — Jinja-style prompt templates with variable interpolation
+- **Expression Language** — Python-like expressions with 30+ built-in functions
+- **HTTP Backend** — `serve()` + `response()` turn workflows into HTTP APIs
+- **Multi-Agent Collaboration** — Declarative agent interaction topology
+- **MCP Integration** — Model Context Protocol for extensible tool capabilities
+- **Client Tool Bridge** — Unresolved tool calls forwarded to frontend via SSE
+- **Jug0 Backend** — Seamless integration with Jug0 AI platform
+- **Cross-Platform** — Native + WebAssembly
 
 ## 安装
 
@@ -118,7 +202,7 @@ Hello, {{ name }}! How can I help you today?
 ### 创建工作流
 
 ```yaml
-# chat-flow.jgflow
+# chat-flow.jg
 name: "Simple Chat"
 version: "0.1.0"
 
@@ -137,7 +221,7 @@ exit: [end]
 
 运行：
 ```bash
-juglans chat-flow.jgflow --input '{"question": "What is Juglans?"}'
+juglans chat-flow.jg --input '{"question": "What is Juglans?"}'
 ```
 
 ## 文档
@@ -155,7 +239,7 @@ juglans chat-flow.jgflow --input '{"question": "What is Juglans?"}'
 │                      Juglans CLI                        │
 ├─────────────────────────────────────────────────────────┤
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐     │
-│  │  .jgflow    │  │  .jgprompt  │  │  .jgagent   │     │
+│  │  .jg    │  │  .jgprompt  │  │  .jgagent   │     │
 │  │  Parser     │  │  Parser     │  │  Parser     │     │
 │  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘     │
 │         │                │                │             │
@@ -178,7 +262,7 @@ juglans chat-flow.jgflow --input '{"question": "What is Juglans?"}'
 
 | 扩展名 | 用途 | 说明 |
 |--------|------|------|
-| `.jgflow` | 工作流 | 定义节点、边、执行逻辑 |
+| `.jg` | 工作流 | 定义节点、边、执行逻辑 |
 | `.jgprompt` | Prompt 模板 | 可复用的提示词模板 |
 | `.jgagent` | Agent 配置 | 模型、温度、系统提示 |
 | `juglans.toml` | 项目配置 | API 密钥、服务器设置 |

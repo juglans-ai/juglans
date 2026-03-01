@@ -4,7 +4,7 @@
 
 ## 文件列表
 
-### simple-chat.jgflow
+### simple-chat.jg
 最基础的聊天工作流，演示：
 - 基本节点和边的定义
 - Agent 调用
@@ -12,10 +12,10 @@
 
 **运行方法：**
 ```bash
-juglans simple-chat.jgflow --input '{"message": "Hello, how are you?"}'
+juglans simple-chat.jg --input '{"message": "Hello, how are you?"}'
 ```
 
-### router.jgflow
+### router.jg
 智能路由工作流，演示：
 - 条件分支 (`if` 语句)
 - 多个 Agent 协作
@@ -24,16 +24,16 @@ juglans simple-chat.jgflow --input '{"message": "Hello, how are you?"}'
 **运行方法：**
 ```bash
 # 技术查询
-juglans router.jgflow --input '{"query": "How to implement binary search in Rust?"}'
+juglans router.jg --input '{"query": "How to implement binary search in Rust?"}'
 
 # 数据分析查询
-juglans router.jgflow --input '{"query": "Analyze this sales trend: up 20% YoY"}'
+juglans router.jg --input '{"query": "Analyze this sales trend: up 20% YoY"}'
 
 # 通用查询
-juglans router.jgflow --input '{"query": "Tell me a joke"}'
+juglans router.jg --input '{"query": "Tell me a joke"}'
 ```
 
-### batch-process.jgflow
+### batch-process.jg
 批量处理工作流，演示：
 - `foreach` 循环
 - 上下文变量管理 (`set_context`)
@@ -42,7 +42,7 @@ juglans router.jgflow --input '{"query": "Tell me a joke"}'
 
 **运行方法：**
 ```bash
-juglans batch-process.jgflow --input '{
+juglans batch-process.jg --input '{
   "items": [
     {"id": 1, "name": "Product A", "value": 1000},
     {"id": 2, "name": "Product B", "value": 1500},
@@ -81,11 +81,11 @@ juglans batch-process.jgflow --input '{
 
 ```bash
 # 详细输出模式
-juglans workflow.jgflow -v
+juglans workflow.jg -v
 
 # 仅验证语法
-juglans workflow.jgflow --dry-run
+juglans workflow.jg --dry-run
 
 # JSON 格式输出
-juglans workflow.jgflow --output-format json
+juglans workflow.jg --output-format json
 ```

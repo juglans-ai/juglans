@@ -19,7 +19,7 @@
 
 ## 工作流文件
 
-### rag-pipeline.jgflow
+### rag-pipeline.jg
 
 ```yaml
 name: "RAG Pipeline"
@@ -88,7 +88,7 @@ exit: [respond]
 
 ## Prompt 模板
 
-### prompts/rag-prompt.jgprompt
+### src/prompts/rag-prompt.jgprompt
 
 ```yaml
 name: "rag-prompt"
@@ -112,7 +112,7 @@ template: |
 
 ## Agent 定义
 
-### agents/rag-responder.jgagent
+### src/agents/rag-responder.jgagent
 
 ```yaml
 name: "rag-responder"
@@ -135,7 +135,7 @@ system_prompt: |
 
 ## 高级版本
 
-### rag-with-rerank.jgflow
+### rag-with-rerank.jg
 
 带重排序的 RAG：
 
@@ -186,7 +186,7 @@ exit: [respond]
 [embed_query] -> [search] -> [rerank] -> [select_top] -> [build_context] -> [generate] -> [respond]
 ```
 
-### agents/reranker.jgagent
+### src/agents/reranker.jgagent
 
 ```yaml
 name: "reranker"
@@ -213,7 +213,7 @@ system_prompt: |
   Sort by relevance_score descending.
 ```
 
-### rag-with-hyde.jgflow
+### rag-with-hyde.jg
 
 使用 HyDE（假设文档嵌入）：
 
@@ -254,7 +254,7 @@ exit: [respond]
 [generate_hypothetical] -> [embed_hyde] -> [search] -> [build_context] -> [generate] -> [respond]
 ```
 
-### agents/hyde-generator.jgagent
+### src/agents/hyde-generator.jgagent
 
 ```yaml
 name: "hyde-generator"
@@ -273,7 +273,7 @@ system_prompt: |
 
 ## 多源 RAG
 
-### multi-source-rag.jgflow
+### multi-source-rag.jg
 
 ```yaml
 name: "Multi-source RAG"
@@ -350,18 +350,18 @@ exit: [respond]
 
 ```bash
 # 基本 RAG
-juglans rag-pipeline.jgflow --input '{
+juglans rag-pipeline.jg --input '{
   "query": "How do I reset my password?",
   "collection": "help_docs"
 }'
 
 # 带重排序
-juglans rag-with-rerank.jgflow --input '{
+juglans rag-with-rerank.jg --input '{
   "query": "What are the pricing plans?"
 }'
 
 # 多源 RAG
-juglans multi-source-rag.jgflow --input '{
+juglans multi-source-rag.jg --input '{
   "query": "How to configure API authentication?"
 }'
 ```
@@ -370,10 +370,10 @@ juglans multi-source-rag.jgflow --input '{
 
 ```
 rag-pipeline/
-├── rag-pipeline.jgflow
-├── rag-with-rerank.jgflow
-├── rag-with-hyde.jgflow
-├── multi-source-rag.jgflow
+├── rag-pipeline.jg
+├── rag-with-rerank.jg
+├── rag-with-hyde.jg
+├── multi-source-rag.jg
 ├── agents/
 │   ├── rag-responder.jgagent
 │   ├── reranker.jgagent

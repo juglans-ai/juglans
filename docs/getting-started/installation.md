@@ -115,7 +115,7 @@ docker pull juglans/juglans:latest
 docker run -it --rm \
   -v $(pwd):/workspace \
   juglans/juglans:latest \
-  /workspace/workflow.jgflow
+  /workspace/workflow.jg
 ```
 
 ### 构建自定义镜像
@@ -172,13 +172,13 @@ const rendered = render_prompt(promptSource, { name: "Alice" });
 
 ### 语法高亮
 
-为 `.jgflow`, `.jgprompt`, `.jgagent` 文件添加语法高亮：
+为 `.jg`, `.jgprompt`, `.jgagent` 文件添加语法高亮：
 
 ```json
 // settings.json
 {
   "files.associations": {
-    "*.jgflow": "yaml",
+    "*.jg": "yaml",
     "*.jgprompt": "yaml",
     "*.jgagent": "yaml"
   }

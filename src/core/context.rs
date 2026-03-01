@@ -2,16 +2,40 @@
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
+
+use crate::core::graph::WorkflowGraph;
+
+/// Type alias for pending tool start info: (tool_name, params, start_time)
+type PendingToolStarts = Arc<Mutex<HashMap<String, (String, HashMap<String, String>, Instant)>>>;
 
 /// Client tool 执行结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResultPayload {
     pub tool_call_id: String,
     pub content: String,
+}
+
+/// Tool 执行 trace 条目
+#[derive(Debug, Clone, Serialize)]
+pub struct ToolTraceEntry {
+    pub node_id: String,
+    pub tool: String,
+    pub params: HashMap<String, String>,
+    pub result: Option<Value>,
+    pub duration: Duration,
+    pub status: TraceStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub enum TraceStatus {
+    Success,
+    Error(String),
 }
 
 /// 工作流执行过程中的实时事件
@@ -27,6 +51,8 @@ pub enum WorkflowEvent {
         tools: Vec<Value>,
         result_tx: oneshot::Sender<Vec<ToolResultPayload>>,
     },
+    /// 【新增】内部 tool 执行事件（tool_start / tool_complete）
+    ToolEvent(Value),
 }
 
 /// A thread-safe, shared state for a single workflow execution.
@@ -40,6 +66,20 @@ pub struct WorkflowContext {
     execution_stack: Arc<Mutex<Vec<String>>>,
     /// 【新增】最大嵌套深度
     max_depth: usize,
+    /// 【新增】当前执行的 workflow（供 on_tool=[node] handler 使用）
+    current_workflow: Arc<RwLock<Option<Arc<WorkflowGraph>>>>,
+    /// 【新增】是否向前端推送 tool 执行事件（默认 false）
+    stream_tool_events: Arc<AtomicBool>,
+    /// Tool 执行 trace（记录所有 tool 调用的结果，供 assert 查询）
+    tool_trace: Arc<Mutex<Vec<ToolTraceEntry>>>,
+    /// Pending tool starts（tool_start 时记录时间，tool_complete 时计算 duration）
+    pending_tool_starts: PendingToolStarts,
+}
+
+impl Default for WorkflowContext {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl WorkflowContext {
@@ -49,12 +89,16 @@ impl WorkflowContext {
             data: Arc::new(RwLock::new(json!({}))),
             event_sender: None,
             execution_stack: Arc::new(Mutex::new(Vec::new())),
-            max_depth: 10, // 默认最大深度 10 层
+            max_depth: 10,
+            current_workflow: Arc::new(RwLock::new(None)),
+            stream_tool_events: Arc::new(AtomicBool::new(false)),
+            tool_trace: Arc::new(Mutex::new(Vec::new())),
+            pending_tool_starts: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
     /// 设置最大嵌套深度
-    pub fn set_max_depth(&mut self, max_depth: usize) {
+    pub fn _set_max_depth(&mut self, max_depth: usize) {
         self.max_depth = max_depth;
     }
 
@@ -65,6 +109,10 @@ impl WorkflowContext {
             event_sender: Some(sender),
             execution_stack: Arc::new(Mutex::new(Vec::new())),
             max_depth: 10,
+            current_workflow: Arc::new(RwLock::new(None)),
+            stream_tool_events: Arc::new(AtomicBool::new(false)),
+            tool_trace: Arc::new(Mutex::new(Vec::new())),
+            pending_tool_starts: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -114,7 +162,7 @@ impl WorkflowContext {
     }
 
     /// 【新增】获取当前执行栈（用于调试）
-    pub fn get_execution_stack(&self) -> Result<Vec<String>> {
+    pub fn _get_execution_stack(&self) -> Result<Vec<String>> {
         let stack = self
             .execution_stack
             .lock()
@@ -123,7 +171,7 @@ impl WorkflowContext {
     }
 
     /// 【新增】获取当前嵌套深度
-    pub fn get_execution_depth(&self) -> Result<usize> {
+    pub fn _get_execution_depth(&self) -> Result<usize> {
         let stack = self
             .execution_stack
             .lock()
@@ -192,6 +240,136 @@ impl WorkflowContext {
         });
 
         Some(tx)
+    }
+
+    /// 设置当前执行的 workflow（供 on_tool=[node] handler 读取）
+    pub fn set_current_workflow(&self, workflow: Arc<WorkflowGraph>) {
+        if let Ok(mut guard) = self.current_workflow.write() {
+            *guard = Some(workflow);
+        }
+    }
+
+    /// 获取当前执行的 workflow
+    pub fn get_current_workflow(&self) -> Option<Arc<WorkflowGraph>> {
+        self.current_workflow.read().ok()?.clone()
+    }
+
+    /// 设置是否推送 tool 执行事件
+    pub fn set_stream_tool_events(&self, enabled: bool) {
+        self.stream_tool_events.store(enabled, Ordering::Relaxed);
+    }
+
+    /// 发送 tool_start 事件（同时记录到 trace）
+    pub fn emit_tool_start(&self, node_id: &str, tool: &str, params: &HashMap<String, String>) {
+        // 记录开始时间到 pending（用 node_id 作为 key）
+        if let Ok(mut pending) = self.pending_tool_starts.lock() {
+            pending.insert(
+                node_id.to_string(),
+                (tool.to_string(), params.clone(), Instant::now()),
+            );
+        }
+
+        if !self.stream_tool_events.load(Ordering::Relaxed) {
+            return;
+        }
+        self.emit(WorkflowEvent::ToolEvent(json!({
+            "type": "tool_start",
+            "node_id": node_id,
+            "tool": tool,
+            "params": params,
+        })));
+    }
+
+    /// 发送 tool_complete 事件（同时写入 trace）
+    pub fn emit_tool_complete(&self, node_id: &str, tool: &str, result: &Result<Option<Value>>) {
+        // 从 pending 中取出开始时间，计算 duration，写入 trace
+        let start_info = self
+            .pending_tool_starts
+            .lock()
+            .ok()
+            .and_then(|mut p| p.remove(node_id));
+
+        let (params, duration) = match start_info {
+            Some((_, params, started)) => (params, started.elapsed()),
+            None => (HashMap::new(), Duration::ZERO),
+        };
+
+        let (trace_result, trace_status) = match result {
+            Ok(val) => (val.clone(), TraceStatus::Success),
+            Err(e) => (None, TraceStatus::Error(e.to_string())),
+        };
+
+        let entry = ToolTraceEntry {
+            node_id: node_id.to_string(),
+            tool: tool.to_string(),
+            params,
+            result: trace_result,
+            duration,
+            status: trace_status,
+        };
+
+        if let Ok(mut trace) = self.tool_trace.lock() {
+            trace.push(entry);
+        }
+
+        // Stream event to frontend if enabled
+        if !self.stream_tool_events.load(Ordering::Relaxed) {
+            return;
+        }
+        match result {
+            Ok(Some(val)) => self.emit(WorkflowEvent::ToolEvent(json!({
+                "type": "tool_complete",
+                "node_id": node_id,
+                "tool": tool,
+                "status": "success",
+                "result": val,
+            }))),
+            Ok(None) => self.emit(WorkflowEvent::ToolEvent(json!({
+                "type": "tool_complete",
+                "node_id": node_id,
+                "tool": tool,
+                "status": "success",
+                "result": null,
+            }))),
+            Err(e) => self.emit(WorkflowEvent::ToolEvent(json!({
+                "type": "tool_complete",
+                "node_id": node_id,
+                "tool": tool,
+                "status": "error",
+                "error": e.to_string(),
+            }))),
+        }
+    }
+
+    /// 获取所有 trace 条目
+    pub fn trace_entries(&self) -> Vec<ToolTraceEntry> {
+        self.tool_trace
+            .lock()
+            .map(|t| t.clone())
+            .unwrap_or_default()
+    }
+
+    /// 查询指定 tool 的调用记录
+    pub fn trace_tool_called(&self, tool_name: &str) -> Vec<ToolTraceEntry> {
+        self.trace_entries()
+            .into_iter()
+            .filter(|e| e.tool == tool_name)
+            .collect()
+    }
+
+    /// 计算 trace 总耗时
+    pub fn trace_total_duration(&self) -> Duration {
+        self.trace_entries().iter().map(|e| e.duration).sum()
+    }
+
+    /// 清空 trace（测试隔离用）
+    pub fn _clear_trace(&self) {
+        if let Ok(mut trace) = self.tool_trace.lock() {
+            trace.clear();
+        }
+        if let Ok(mut pending) = self.pending_tool_starts.lock() {
+            pending.clear();
+        }
     }
 
     /// Sets a value in the context using a dot-notation path.

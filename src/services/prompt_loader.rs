@@ -13,6 +13,12 @@ pub struct PromptRegistry {
     templates: HashMap<String, String>,
 }
 
+impl Default for PromptRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PromptRegistry {
     pub fn new() -> Self {
         Self {

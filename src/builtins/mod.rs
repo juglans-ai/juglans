@@ -52,8 +52,8 @@ pub struct BuiltinRegistry {
     /// Back-reference to WorkflowExecutor for nested execution and MCP dispatch.
     /// Set post-construction via `set_executor()`. See struct-level docs for rationale.
     executor: RwLock<Option<std::sync::Weak<crate::core::executor::WorkflowExecutor>>>,
-    prompt_registry: Arc<PromptRegistry>,
-    agent_registry: Arc<AgentRegistry>,
+    _prompt_registry: Arc<PromptRegistry>,
+    _agent_registry: Arc<AgentRegistry>,
 }
 
 impl BuiltinRegistry {
@@ -77,6 +77,11 @@ impl BuiltinRegistry {
         reg!(system::Reply::new(runtime.clone()));
         reg!(system::SetContext);
         reg!(system::FeishuWebhook);
+        reg!(system::Return);
+
+        // HTTP backend
+        reg!(http::Serve);
+        reg!(http::HttpResponse);
 
         // Devtools (Claude Code 风格)
         reg!(devtools::ReadFile);
@@ -91,11 +96,15 @@ impl BuiltinRegistry {
         reg!(ai::MemorySearch::new(runtime.clone()));
         reg!(ai::History::new(runtime.clone()));
 
+        // Testing tools
+        reg!(testing::Assert);
+        reg!(testing::Config);
+
         let registry_arc = Arc::new(Self {
             tools: RwLock::new(tool_map),
             executor: RwLock::new(None),
-            prompt_registry: prompts.clone(),
-            agent_registry: agents.clone(),
+            _prompt_registry: prompts.clone(),
+            _agent_registry: agents.clone(),
         });
 
         let mut chat_tool = ai::Chat::new(agents, prompts, runtime);
@@ -181,14 +190,12 @@ impl BuiltinRegistry {
         let workflow_graph = GraphParser::parse(&workflow_content)?;
 
         // 3. 加载 workflow 依赖的 prompts 和 agents
-        let workflow_base_dir = abs_workflow_path
+        let _workflow_base_dir = abs_workflow_path
             .parent()
             .unwrap_or(std::path::Path::new("."));
 
         // 解析并加载资源
         if !workflow_graph.prompt_patterns.is_empty() || !workflow_graph.agent_patterns.is_empty() {
-            use crate::services::agent_loader::AgentRegistry;
-            use crate::services::prompt_loader::PromptRegistry;
 
             // TODO: 这里简化处理，实际应该有更好的资源隔离策略
             // 可以考虑创建临时 registry 或合并到当前 registry
@@ -232,5 +239,7 @@ impl BuiltinRegistry {
 
 pub mod ai;
 pub mod devtools;
+pub mod http;
 pub mod network;
 pub mod system;
+pub mod testing;

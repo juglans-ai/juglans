@@ -35,10 +35,10 @@ name = "My Workspace"
 members = ["user_123", "user_789"]
 
 # 资源路径（支持 glob 模式）
-agents = ["ops/agents/**/*.jgagent"]
-workflows = ["ops/workflows/**/*.jgflow"]
-prompts = ["ops/prompts/**/*.jgprompt"]
-tools = ["ops/tools/**/*.json"]
+agents = ["src/agents/**/*.jgagent", "src/pure-agents/**/*.jgagent"]
+workflows = ["src/**/*.jg", "src/workflows/**/*.jgflow"]
+prompts = ["src/prompts/**/*.jgprompt"]
+tools = ["src/tools/**/*.json"]
 
 # 排除规则
 exclude = ["**/*.backup", "**/.draft", "**/test_*"]
@@ -119,10 +119,10 @@ name = "My Team Workspace"
 members = ["user_123", "user_789", "user_456"]
 
 # 资源路径配置（支持 glob 模式）
-agents = ["ops/agents/**/*.jgagent"]
-workflows = ["ops/workflows/**/*.jgflow"]
-prompts = ["ops/prompts/**/*.jgprompt"]
-tools = ["ops/tools/**/*.json"]
+agents = ["src/agents/**/*.jgagent", "src/pure-agents/**/*.jgagent"]
+workflows = ["src/**/*.jg", "src/workflows/**/*.jgflow"]
+prompts = ["src/prompts/**/*.jgprompt"]
+tools = ["src/tools/**/*.json"]
 
 # 排除规则
 exclude = [
@@ -139,9 +139,9 @@ exclude = [
 
 **常用模式：**
 
-- `**/*.jgflow` - 递归匹配所有 .jgflow 文件
-- `workflows/*.jgflow` - 只匹配 workflows 目录下的文件（不递归）
-- `{ops,dev}/**/*.jgagent` - 匹配 ops 和 dev 目录下的所有 agent
+- `**/*.jg` - 递归匹配所有 .jg 文件
+- `src/*.jg` - 只匹配 src 目录下的 .jg 文件（不递归）
+- `src/**/*.jgagent` - 递归匹配 src 下所有 agent
 
 **使用场景：**
 
@@ -163,7 +163,7 @@ exclude = [
   "**/.draft",          # 草稿文件
   "**/test_*",          # 测试文件
   "**/private_*",       # 私有文件
-  "ops/experimental/**" # 实验性目录
+  "src/experimental/**" # 实验性目录
 ]
 ```
 

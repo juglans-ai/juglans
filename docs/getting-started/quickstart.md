@@ -33,10 +33,14 @@ cd my-ai-project
 ```
 my-ai-project/
 ├── juglans.toml        # 配置文件
-├── prompts/            # Prompt 模板
-├── agents/             # Agent 配置
-└── workflows/          # 工作流定义
+└── src/                # 所有源文件
+    ├── prompts/        # Prompt 模板
+    ├── agents/         # Agent 配置（入口 agent，有 workflow 字段）
+    ├── pure-agents/    # 纯 Agent（无 workflow，被工作流调用）
+    ├── workflows/      # .jgflow 元数据清单
+    └── tools/          # 工具定义
 ```
+.jg 源文件直接放在 `src/` 根目录。
 
 ## 3. 配置 API
 
@@ -53,7 +57,7 @@ base_url = "http://localhost:3000"  # 或你的 Jug0 服务地址
 
 ## 4. 创建 Agent
 
-创建 `agents/assistant.jgagent`：
+创建 `src/agents/assistant.jgagent`：
 
 ```yaml
 slug: "assistant"
@@ -67,7 +71,7 @@ system_prompt: |
 
 ## 5. 创建 Prompt 模板
 
-创建 `prompts/analyze.jgprompt`：
+创建 `src/prompts/analyze.jgprompt`：
 
 ```yaml
 ---
@@ -92,16 +96,12 @@ Feel free to use informal language.
 
 ## 6. 创建工作流
 
-创建 `workflows/main.jgflow`：
+创建 `src/main.jg`：
 
 ```yaml
-name: "Analysis Workflow"
-version: "0.1.0"
-description: "A simple analysis workflow"
-
 # 导入资源
-prompts: ["../prompts/*.jgprompt"]
-agents: ["../agents/*.jgagent"]
+prompts: ["./prompts/*.jgprompt"]
+agents: ["./agents/*.jgagent"]
 
 # 入口和出口节点
 entry: [init]
@@ -131,7 +131,7 @@ exit: [complete]
 
 ```bash
 # 运行工作流
-juglans workflows/main.jgflow --input '{
+juglans src/main.jg --input '{
   "topic": "AI workflow orchestration",
   "style": "professional"
 }'
@@ -151,7 +151,7 @@ juglans workflows/main.jgflow --input '{
 直接与 Agent 对话：
 
 ```bash
-juglans agents/assistant.jgagent
+juglans src/agents/assistant.jgagent
 ```
 
 进入交互模式：
@@ -172,7 +172,7 @@ Goodbye!
 ## 下一步
 
 - [核心概念](../guide/concepts.md) - 深入理解 Agent、Prompt、Workflow
-- [工作流语法](../guide/workflow-syntax.md) - 完整的 .jgflow 语法
+- [工作流语法](../guide/workflow-syntax.md) - 完整的 .jg 语法
 - [内置工具](../reference/builtins.md) - chat、p、notify 等工具详解
 - [条件与分支](../guide/conditionals.md) - 实现复杂逻辑
 
@@ -182,7 +182,7 @@ Goodbye!
 
 使用 `--verbose` 参数查看详细日志：
 ```bash
-juglans workflows/main.jgflow --verbose
+juglans src/main.jg --verbose
 ```
 
 ### Q: 如何使用本地模型？

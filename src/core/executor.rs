@@ -33,6 +33,18 @@ lazy_static! {
         Regex::new(r"(?s)^([a-zA-Z0-9_.]+)\((.*)\)(\.[a-zA-Z0-9_]+)?$").unwrap();
 }
 
+/// Context for evaluating outgoing edges from a completed node
+struct EdgeEvalContext<'a> {
+    executor: &'a Arc<WorkflowExecutor>,
+    node_idx: NodeIndex,
+    node_succeeded: bool,
+    switch_result: &'a Option<String>,
+    workflow: &'a Arc<WorkflowGraph>,
+    context: &'a WorkflowContext,
+    in_degrees: &'a Arc<Mutex<HashMap<NodeIndex, usize>>>,
+    ready_queue: &'a Arc<Mutex<VecDeque<NodeIndex>>>,
+}
+
 pub struct WorkflowExecutor {
     builtin_registry: Arc<BuiltinRegistry>,
     mcp_client: McpClient,
@@ -156,12 +168,27 @@ impl WorkflowExecutor {
         }
 
         info!(
-            "🔌 Connecting to {} MCP servers...",
+            "🔌 Connecting to {} MCP servers concurrently...",
             config.mcp_servers.len()
         );
 
-        for server_conf in &config.mcp_servers {
-            match self.mcp_client.fetch_tools(server_conf).await {
+        // Fetch tool schemas from all MCP servers concurrently
+        let fetch_futures: Vec<_> = config
+            .mcp_servers
+            .iter()
+            .map(|server_conf| {
+                let client = self.mcp_client.clone();
+                let server_conf = server_conf.clone();
+                async move {
+                    let result = client.fetch_tools(&server_conf).await;
+                    (server_conf, result)
+                }
+            })
+            .collect();
+        let results = futures::future::join_all(fetch_futures).await;
+
+        for (server_conf, result) in results {
+            match result {
                 Ok(tools) => {
                     info!(
                         "  ✅ Connected to [{}], found {} tools.",
@@ -246,7 +273,7 @@ impl WorkflowExecutor {
             .as_ref()
             .ok_or_else(|| anyhow!("Python runtime not initialized"))?;
 
-        let mut rt = runtime
+        let rt = runtime
             .lock()
             .map_err(|e| anyhow!("Failed to lock Python runtime: {}", e))?;
 
@@ -267,41 +294,54 @@ impl WorkflowExecutor {
 
         if let Some(caps) = FUNC_CALL_RE.captures(clean_param) {
             let tool_name = &caps[1];
-            let args_str = &caps[2];
-            let field_access = caps.get(3).map(|m| m.as_str().trim_start_matches('.'));
 
-            let raw_args = GraphParser::parse_arguments_str(args_str);
-            let mut resolved_args = HashMap::new();
+            // Only dispatch as tool call if it's a registered tool
+            // (not an expression function like len(), str(), filter(), etc.)
+            let is_registered_tool = self.builtin_registry.get(tool_name).is_some()
+                || self.mcp_tools_map.contains_key(tool_name)
+                || self.is_python_call(tool_name);
 
-            for (k, v) in raw_args {
-                let resolved_val = Box::pin(self.process_parameter(&v, context)).await?;
-                let val_str = match resolved_val {
-                    Value::String(s) => s,
-                    Value::Null => "".to_string(),
-                    other => other.to_string(),
-                };
-                resolved_args.insert(k, val_str);
-            }
+            if is_registered_tool {
+                let args_str = &caps[2];
+                let field_access = caps.get(3).map(|m| m.as_str().trim_start_matches('.'));
 
-            let result_val = self
-                .execute_tool_internal(tool_name, &resolved_args, context)
-                .await?;
+                let raw_args = GraphParser::parse_arguments_str(args_str);
+                let mut resolved_args = HashMap::new();
 
-            if let Some(field) = field_access {
-                if let Some(obj) = result_val.as_ref().and_then(|v| v.as_object()) {
-                    let field_val = obj.get(field).cloned().unwrap_or(Value::Null);
-                    return Ok(field_val);
+                for (k, v) in raw_args {
+                    let resolved_val = Box::pin(self.process_parameter(&v, context)).await?;
+                    let val_str = match resolved_val {
+                        Value::String(s) => s,
+                        Value::Null => "".to_string(),
+                        other => other.to_string(),
+                    };
+                    resolved_args.insert(k, val_str);
                 }
+
+                let result_val = self
+                    .execute_tool_internal(tool_name, &resolved_args, context)
+                    .await?;
+
+                if let Some(field) = field_access {
+                    if let Some(obj) = result_val.as_ref().and_then(|v| v.as_object()) {
+                        let field_val = obj.get(field).cloned().unwrap_or(Value::Null);
+                        return Ok(field_val);
+                    }
+                }
+                return Ok(result_val.unwrap_or(Value::Null));
             }
-            return Ok(result_val.unwrap_or(Value::Null));
+            // else: fall through to expression evaluator below
         }
 
         // 引号包裹 → 字符串字面量，直接返回，不经过表达式求值器
         // 防止 "display_only" 被当作变量解析为 Null，"trade-extractor" 被当作 trade - extractor = 0
         if clean_param.starts_with('"') && clean_param.ends_with('"') {
-            return Ok(Value::String(
-                clean_param[1..clean_param.len() - 1].to_string(),
-            ));
+            let inner = &clean_param[1..clean_param.len() - 1];
+            // 内部无引号 → 纯字符串字面量，直接返回
+            // 内部有引号 → "str" + expr + "str" 拼接表达式，交给求值器
+            if !inner.contains('"') {
+                return Ok(Value::String(inner.to_string()));
+            }
         }
 
         // 使用表达式求值器解析和求值（替代 Rhai）
@@ -309,11 +349,7 @@ impl WorkflowExecutor {
         let context_ref = context;
         let show_variables = self.debug_config.show_variables;
         let resolver = |path: &str| -> Option<Value> {
-            let clean = if path.starts_with("ctx.") {
-                &path[4..]
-            } else {
-                path
-            };
+            let clean = path.strip_prefix("ctx.").unwrap_or(path);
             let resolved = context_ref.resolve_path(clean).ok().flatten();
             if show_variables {
                 info!("🔍 [Debug] Resolve: ${} → {:?}", path, resolved);
@@ -418,41 +454,155 @@ impl WorkflowExecutor {
                 Ok(Some(val.clone()))
             }
             NodeType::Task(action) => {
+                // 检查是否是函数节点调用
+                if workflow.functions.contains_key(&action.name) {
+                    // Resolve all function args concurrently
+                    let param_futures: Vec<_> = action
+                        .params
+                        .iter()
+                        .map(|(key, val_template)| {
+                            let key = key.clone();
+                            let val_template = val_template.clone();
+                            let executor = self.clone();
+                            let ctx = context.clone();
+                            async move {
+                                let val = executor.process_parameter(&val_template, &ctx).await?;
+                                Ok::<(String, Value), anyhow::Error>((key, val))
+                            }
+                        })
+                        .collect();
+                    let resolved = futures::future::join_all(param_futures).await;
+                    let mut args = HashMap::new();
+                    for result in resolved {
+                        let (key, val) = result?;
+                        args.insert(key, val);
+                    }
+                    // emit tool_start（将 Value args 转为 String 用于展示）
+                    let display_params: HashMap<String, String> = args
+                        .iter()
+                        .map(|(k, v)| {
+                            (
+                                k.clone(),
+                                match v {
+                                    Value::String(s) => s.clone(),
+                                    other => other.to_string(),
+                                },
+                            )
+                        })
+                        .collect();
+                    context.emit_tool_start(&node.id, &action.name, &display_params);
+                    let result = self
+                        .execute_function(action.name.clone(), args, workflow.clone(), context)
+                        .await;
+                    context.emit_tool_complete(&node.id, &action.name, &result);
+                    return result;
+                }
+
+                // Resolve all task params concurrently
+                let param_futures: Vec<_> = action
+                    .params
+                    .iter()
+                    .map(|(key, val_template)| {
+                        let key = key.clone();
+                        let val_template = val_template.clone();
+                        let executor = self.clone();
+                        let ctx = context.clone();
+                        async move {
+                            let processed_val =
+                                executor.process_parameter(&val_template, &ctx).await?;
+                            let val_str = match processed_val {
+                                Value::String(s) => s,
+                                other => other.to_string(),
+                            };
+                            Ok::<(String, String), anyhow::Error>((key, val_str))
+                        }
+                    })
+                    .collect();
+                let resolved = futures::future::join_all(param_futures).await;
                 let mut rendered_params = HashMap::new();
-                for (key, val_template) in &action.params {
-                    let processed_val = self.process_parameter(val_template, context).await?;
-                    let val_str = match processed_val {
-                        Value::String(s) => s,
-                        other => other.to_string(),
-                    };
-                    rendered_params.insert(key.clone(), val_str);
+                for result in resolved {
+                    let (key, val_str) = result?;
+                    rendered_params.insert(key, val_str);
                 }
                 debug!("  Arguments: {:?}", rendered_params);
-                self.execute_tool_internal(&action.name, &rendered_params, context)
-                    .await
+                context.emit_tool_start(&node.id, &action.name, &rendered_params);
+                let result = self
+                    .execute_tool_internal(&action.name, &rendered_params, context)
+                    .await;
+                context.emit_tool_complete(&node.id, &action.name, &result);
+                result
             }
-            NodeType::Foreach { item, list, body } => {
-                let clean_path = if list.starts_with("ctx.") {
-                    &list[4..]
-                } else {
-                    list
-                };
-                debug!("│   Foreach: {} in {} ({})", item, list, clean_path);
+            NodeType::Foreach {
+                item,
+                list,
+                body,
+                parallel,
+            } => {
+                let clean_path = list.strip_prefix("ctx.").unwrap_or(list);
+                debug!(
+                    "│   Foreach{}: {} in {} ({})",
+                    if *parallel { " parallel" } else { "" },
+                    item,
+                    list,
+                    clean_path
+                );
                 let list_val = context
                     .resolve_path(clean_path)?
                     .ok_or_else(|| anyhow!("Foreach list variable '{}' not found", clean_path))?;
                 let array = list_val
                     .as_array()
                     .ok_or_else(|| anyhow!("Variable '{}' is not an array.", list))?;
-                for (i, val) in array.iter().enumerate() {
-                    debug!("│   ├─ Iteration {}/{}", i + 1, array.len());
-                    context.set(item.clone(), val.clone())?;
-                    let body_arc = Arc::new(*body.clone());
-                    if let Err(e) = self.clone().execute_graph(body_arc, context).await {
-                        return Err(anyhow!("Error inside foreach body at index {}: {}", i, e));
+
+                if *parallel {
+                    // Parallel foreach: spawn all iterations concurrently
+                    info!("│   Foreach parallel: {} iterations", array.len());
+                    let mut tasks = vec![];
+                    for (i, val) in array.iter().enumerate() {
+                        let ctx_clone = context.clone();
+                        ctx_clone.set(item.clone(), val.clone())?;
+                        ctx_clone.set("_index".to_string(), serde_json::json!(i))?;
+                        let body_arc = Arc::new(*body.clone());
+                        let executor = self.clone();
+                        tasks.push(tokio::spawn(async move {
+                            executor.execute_graph(body_arc, &ctx_clone).await?;
+                            // Extract output from this iteration's context
+                            let output = ctx_clone
+                                .resolve_path("output")?
+                                .unwrap_or(serde_json::Value::Null);
+                            Ok::<serde_json::Value, anyhow::Error>(output)
+                        }));
                     }
+                    let results = futures::future::join_all(tasks).await;
+                    let mut outputs = vec![];
+                    for (i, result) in results.into_iter().enumerate() {
+                        match result {
+                            Ok(Ok(output)) => outputs.push(output),
+                            Ok(Err(e)) => {
+                                return Err(anyhow!("foreach parallel error at index {}: {}", i, e))
+                            }
+                            Err(e) => {
+                                return Err(anyhow!(
+                                    "foreach parallel task panic at index {}: {}",
+                                    i,
+                                    e
+                                ))
+                            }
+                        }
+                    }
+                    context.set("output".to_string(), serde_json::json!(outputs))?;
+                    Ok(None)
+                } else {
+                    // Sequential foreach: original behavior
+                    for (i, val) in array.iter().enumerate() {
+                        debug!("│   ├─ Iteration {}/{}", i + 1, array.len());
+                        context.set(item.clone(), val.clone())?;
+                        let body_arc = Arc::new(*body.clone());
+                        if let Err(e) = self.clone().execute_graph(body_arc, context).await {
+                            return Err(anyhow!("Error inside foreach body at index {}: {}", i, e));
+                        }
+                    }
+                    Ok(None)
                 }
-                Ok(None)
             }
             NodeType::Loop { condition, body } => {
                 info!(
@@ -479,7 +629,7 @@ impl WorkflowExecutor {
                 }
                 Ok(None)
             }
-            NodeType::ExternalCall {
+            NodeType::_ExternalCall {
                 call_path,
                 args,
                 kwargs,
@@ -489,25 +639,46 @@ impl WorkflowExecutor {
                     call_path, args, kwargs
                 );
 
-                // Resolve args and kwargs through the expression evaluator
-                let mut resolved_kwargs: HashMap<String, String> = HashMap::new();
+                // Resolve all kwargs and args concurrently
+                use std::future::Future;
+                use std::pin::Pin;
+                type ParamFut =
+                    Pin<Box<dyn Future<Output = anyhow::Result<(String, String)>> + Send>>;
+                let mut param_futures: Vec<ParamFut> = Vec::new();
                 for (k, v) in kwargs {
-                    let resolved = self.process_parameter(v, context).await?;
-                    let val_str = match resolved {
-                        Value::String(s) => s,
-                        other => other.to_string(),
-                    };
-                    resolved_kwargs.insert(k.clone(), val_str);
+                    let key = k.clone();
+                    let val_template = v.clone();
+                    let executor = self.clone();
+                    let ctx = context.clone();
+                    param_futures.push(Box::pin(async move {
+                        let resolved = executor.process_parameter(&val_template, &ctx).await?;
+                        let val_str = match resolved {
+                            Value::String(s) => s,
+                            other => other.to_string(),
+                        };
+                        Ok((key, val_str))
+                    }));
                 }
-
-                // Add positional args as numbered kwargs for Python runtime
+                // Add positional args as numbered kwargs
                 for (i, arg) in args.iter().enumerate() {
-                    let resolved = self.process_parameter(arg, context).await?;
-                    let val_str = match resolved {
-                        Value::String(s) => s,
-                        other => other.to_string(),
-                    };
-                    resolved_kwargs.insert(format!("__arg{}", i), val_str);
+                    let key = format!("__arg{}", i);
+                    let val_template = arg.clone();
+                    let executor = self.clone();
+                    let ctx = context.clone();
+                    param_futures.push(Box::pin(async move {
+                        let resolved = executor.process_parameter(&val_template, &ctx).await?;
+                        let val_str = match resolved {
+                            Value::String(s) => s,
+                            other => other.to_string(),
+                        };
+                        Ok((key, val_str))
+                    }));
+                }
+                let resolved = futures::future::join_all(param_futures).await;
+                let mut resolved_kwargs: HashMap<String, String> = HashMap::new();
+                for result in resolved {
+                    let (key, val_str) = result?;
+                    resolved_kwargs.insert(key, val_str);
                 }
 
                 self.execute_python_call(call_path, &resolved_kwargs)
@@ -515,7 +686,7 @@ impl WorkflowExecutor {
         }
     }
 
-    pub async fn run(
+    pub async fn _run(
         self: Arc<Self>,
         workflow: Arc<WorkflowGraph>,
         config: &JuglansConfig,
@@ -568,7 +739,7 @@ impl WorkflowExecutor {
     ) {
         let unreachable_nodes = Arc::new(Mutex::new(HashSet::new()));
         let completed = completed_nodes.lock().unwrap().clone();
-        let mut degrees = in_degrees.lock().unwrap();
+        let degrees = in_degrees.lock().unwrap();
 
         // 找出所有不可达的节点
         let unreachable: Vec<NodeIndex> = degrees
@@ -684,6 +855,7 @@ impl WorkflowExecutor {
                 context
                     .set(format!("{}.output", node_id), output.clone())
                     .unwrap();
+                context.set("output".to_string(), output.clone()).unwrap();
             }
             Ok(None) => {
                 debug!("  [Output] No primary output for [{}].", node_id);
@@ -691,6 +863,7 @@ impl WorkflowExecutor {
                 context
                     .set(format!("{}.output", node_id), Value::Null)
                     .unwrap();
+                context.set("output".to_string(), Value::Null).unwrap();
             }
             Err(e) => {
                 warn!("  [Output] Error for [{}]: {}", node_id, e);
@@ -723,11 +896,7 @@ impl WorkflowExecutor {
             context.resolve_path("output").ok().flatten()
         } else {
             let clean_subject = switch_route.subject.trim_start_matches('$');
-            let clean_subject = if clean_subject.starts_with("ctx.") {
-                &clean_subject[4..]
-            } else {
-                clean_subject
-            };
+            let clean_subject = clean_subject.strip_prefix("ctx.").unwrap_or(clean_subject);
             context.resolve_path(clean_subject).ok().flatten()
         };
 
@@ -768,16 +937,17 @@ impl WorkflowExecutor {
     }
 
     /// Evaluate outgoing edges from a completed node and enqueue ready successors
-    async fn evaluate_outgoing_edges(
-        executor: &Arc<Self>,
-        node_idx: NodeIndex,
-        node_succeeded: bool,
-        switch_result: &Option<String>,
-        workflow: &Arc<WorkflowGraph>,
-        context: &WorkflowContext,
-        in_degrees: &Arc<Mutex<HashMap<NodeIndex, usize>>>,
-        ready_queue: &Arc<Mutex<VecDeque<NodeIndex>>>,
-    ) {
+    async fn evaluate_outgoing_edges(edge_ctx: EdgeEvalContext<'_>) {
+        let EdgeEvalContext {
+            executor,
+            node_idx,
+            node_succeeded,
+            switch_result,
+            workflow,
+            context,
+            in_degrees,
+            ready_queue,
+        } = edge_ctx;
         let node_id = &workflow.graph[node_idx].id;
         let mut switch_matched = false;
 
@@ -877,12 +1047,70 @@ impl WorkflowExecutor {
         }
     }
 
+    /// 执行函数节点：绑定参数到 context，执行子图，返回 output
+    pub fn execute_function<'a>(
+        self: Arc<Self>,
+        func_name: String,
+        args: HashMap<String, Value>,
+        workflow: Arc<WorkflowGraph>,
+        context: &'a WorkflowContext,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Value>>> + Send + 'a>> {
+        Box::pin(async move {
+            let func_def = workflow
+                .functions
+                .get(&func_name)
+                .ok_or_else(|| anyhow!("Function '{}' not found", func_name))?;
+
+            info!(
+                "│ ⚡ Function [{}]({})",
+                func_name,
+                func_def
+                    .params
+                    .iter()
+                    .filter_map(|p| args.get(p).map(|v| format!("{}={}", p, v)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+
+            // 绑定参数到 context
+            for param_name in &func_def.params {
+                if let Some(val) = args.get(param_name) {
+                    context.set(param_name.clone(), val.clone())?;
+                }
+            }
+
+            // 执行函数体子图
+            let body_arc = Arc::new(*func_def.body.clone());
+            self.clone().execute_graph(body_arc, context).await?;
+
+            // 返回子图 output
+            Ok(context.resolve_path("output")?.or(Some(Value::Null)))
+        })
+    }
+
+    /// 通过节点名查找并执行单个节点（供 on_tool handler 使用）
+    pub async fn run_single_node_by_name(
+        self: Arc<Self>,
+        name: &str,
+        workflow: &Arc<WorkflowGraph>,
+        context: &WorkflowContext,
+    ) -> Result<Option<Value>> {
+        let node_idx = *workflow
+            .node_map
+            .get(name)
+            .ok_or_else(|| anyhow!("Node '{}' not found in workflow", name))?;
+        self.run_single_node(node_idx, workflow, context).await
+    }
+
     pub fn execute_graph<'a>(
         self: Arc<Self>,
         workflow: Arc<WorkflowGraph>,
         context: &'a WorkflowContext,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
+            // 注入当前 workflow 到 context（供 on_tool=[node] handler 使用）
+            context.set_current_workflow(workflow.clone());
+
             let total_nodes = workflow.graph.node_count();
             if total_nodes == 0 {
                 return Ok(());
@@ -978,16 +1206,16 @@ impl WorkflowExecutor {
                             Self::resolve_switch_subject(&node.id, &workflow_clone, &context_clone);
 
                         // Evaluate outgoing edges and enqueue ready successors
-                        Self::evaluate_outgoing_edges(
-                            &self_clone,
+                        Self::evaluate_outgoing_edges(EdgeEvalContext {
+                            executor: &self_clone,
                             node_idx,
                             node_succeeded,
-                            &switch_result,
-                            &workflow_clone,
-                            &context_clone,
-                            &in_degrees_clone,
-                            &ready_queue_clone,
-                        )
+                            switch_result: &switch_result,
+                            workflow: &workflow_clone,
+                            context: &context_clone,
+                            in_degrees: &in_degrees_clone,
+                            ready_queue: &ready_queue_clone,
+                        })
                         .await;
                     }));
                 }

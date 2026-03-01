@@ -15,9 +15,9 @@ examples/
 │   ├── analyst.jgagent
 │   └── README.md
 └── workflows/        # 工作流示例
-    ├── simple-chat.jgflow
-    ├── router.jgflow
-    ├── batch-process.jgflow
+    ├── simple-chat.jg
+    ├── router.jg
+    ├── batch-process.jg
     └── README.md
 ```
 
@@ -38,7 +38,7 @@ juglans assistant.jgagent --message "Explain recursion"
 ### 3. 运行工作流
 ```bash
 cd examples/workflows
-juglans simple-chat.jgflow --input '{"message": "Hello!"}'
+juglans simple-chat.jg --input '{"message": "Hello!"}'
 ```
 
 ## 📚 学习路径
@@ -54,18 +54,18 @@ juglans simple-chat.jgflow --input '{"message": "Hello!"}'
    - 模型选择
    - 系统提示
 
-3. **简单工作流** (`workflows/simple-chat.jgflow`)
+3. **简单工作流** (`workflows/simple-chat.jg`)
    - 节点定义
    - 线性流程
    - Agent 调用
 
 ### 中级 - 控制流
-4. **条件分支** (`workflows/router.jgflow`)
+4. **条件分支** (`workflows/router.jg`)
    - `if` 语句
    - 多路分支
    - JSON 输出解析
 
-5. **循环处理** (`workflows/batch-process.jgflow`)
+5. **循环处理** (`workflows/batch-process.jg`)
    - `foreach` 循环
    - 上下文变量
    - 结果聚合
@@ -83,7 +83,7 @@ juglans simple-chat.jgflow --input '{"message": "Hello!"}'
 juglans check examples/
 
 # 查看工作流详细执行
-juglans workflows/router.jgflow -v --input '{"query": "test"}'
+juglans workflows/router.jg -v --input '{"query": "test"}'
 
 # 查看 Agent 配置
 juglans agents/analyst.jgagent --info

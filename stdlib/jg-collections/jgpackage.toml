@@ -1,0 +1,8 @@
+[package]
+name = "jg-collections"
+version = "0.1.0"
+slug = "collections"
+description = "Collection utilities for Juglans workflows"
+author = "juglans"
+license = "MIT"
+entry = "lib.jg"

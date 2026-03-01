@@ -263,7 +263,8 @@ pub async fn run_agent_for_message(
 
     // 提前解析 workflow（在 Arc 包装前），以便调用 init_python_runtime / load_tools
     let parsed_workflow = if let Some(wf_ref) = &agent_meta.workflow {
-        let is_file_path = wf_ref.ends_with(".jgflow")
+        let is_file_path = wf_ref.ends_with(".jg")
+            || wf_ref.ends_with(".jgflow")
             || wf_ref.starts_with("./")
             || wf_ref.starts_with("../")
             || Path::new(wf_ref).is_absolute();
@@ -279,13 +280,23 @@ pub async fn run_agent_for_message(
                     anyhow!("Workflow File Error: {} (tried {:?})", e, full_wf_path)
                 })?)
             } else {
-                let pattern = project_root
+                // Try .jg first, fall back to .jgflow
+                let jg_pattern = project_root
+                    .join(format!("**/{}.jg", wf_ref))
+                    .to_string_lossy()
+                    .to_string();
+                let jgflow_pattern = project_root
                     .join(format!("**/{}.jgflow", wf_ref))
                     .to_string_lossy()
                     .to_string();
-                glob::glob(&pattern)
+                glob::glob(&jg_pattern)
                     .ok()
                     .and_then(|mut paths| paths.find_map(|p| p.ok()))
+                    .or_else(|| {
+                        glob::glob(&jgflow_pattern)
+                            .ok()
+                            .and_then(|mut paths| paths.find_map(|p| p.ok()))
+                    })
                     .map(|path| fs::read_to_string(&path))
                     .transpose()
                     .map_err(|e| anyhow!("Workflow File Error: {}", e))?
@@ -435,8 +446,8 @@ pub async fn run_agent_for_message(
                     let _ = result_tx.send(vec![]);
                 }
             }
-            WorkflowEvent::Meta(_) => {
-                // Bot 模式忽略 meta 事件
+            WorkflowEvent::Meta(_) | WorkflowEvent::ToolEvent(_) => {
+                // Bot 模式忽略 meta / tool_event 事件
             }
         }
     }

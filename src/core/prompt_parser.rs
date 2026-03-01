@@ -47,8 +47,10 @@ impl PromptParser {
             .map_err(|e| anyhow!("Prompt Syntax Error:\n{}", e))?;
 
         let root = pairs.next().ok_or_else(|| anyhow!("Empty prompt file"))?;
-        let mut resource = PromptResource::default();
-        resource.inputs = json!({});
+        let mut resource = PromptResource {
+            inputs: json!({}),
+            ..Default::default()
+        };
 
         for pair in root.into_inner() {
             match pair.as_rule() {

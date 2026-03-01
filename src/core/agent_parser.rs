@@ -34,9 +34,11 @@ impl AgentParser {
         let mut pairs = AgentGrammar::parse(Rule::agent_def, content)
             .map_err(|e| anyhow!("Agent Syntax Error:\n{}", e))?;
 
-        let mut agent = AgentResource::default();
-        agent.model = "gpt-4o".to_string();
-        agent.temperature = Some(0.7);
+        let mut agent = AgentResource {
+            model: "gpt-4o".to_string(),
+            temperature: Some(0.7),
+            ..Default::default()
+        };
 
         for pair in pairs.next().unwrap().into_inner() {
             match pair.as_rule() {
@@ -97,7 +99,7 @@ impl AgentParser {
                             // Split into lines, skip the first (empty after "|")
                             let lines: Vec<&str> = body.lines().collect();
                             let content_lines: Vec<&str> =
-                                if lines.first().map_or(false, |l| l.is_empty()) {
+                                if lines.first().is_some_and(|l| l.is_empty()) {
                                     lines[1..].to_vec()
                                 } else {
                                     lines

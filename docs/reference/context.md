@@ -20,7 +20,7 @@
 
 ```bash
 # CLI
-juglans workflow.jgflow --input '{"query": "hello", "count": 5}'
+juglans workflow.jg --input '{"query": "hello", "count": 5}'
 
 # API
 POST /api/workflows/my-flow/execute
@@ -198,7 +198,7 @@ $output                     →  $output                 # 不变
 
 ```yaml
 flows: {
-  auth: "./workflows/auth.jgflow"
+  auth: "./auth.jg"
 }
 
 # 通过命名空间路径访问子工作流节点输出

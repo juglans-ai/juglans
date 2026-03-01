@@ -3,7 +3,9 @@ name: Deploy Docs
 on:
   push:
     branches: [main]
-    paths: [docs/**]
+    paths:
+      - 'docs/**'
+      - '.gitbook.yaml'
   workflow_dispatch:
 
 permissions:
@@ -27,7 +29,9 @@ jobs:
           chmod +x mdbook
           mv mdbook /usr/local/bin/
       - name: Build
-        run: mdbook build docs
+        run: |
+          mdbook build docs
+          echo "book.juglans.dev" > target/book/CNAME
       - uses: actions/upload-pages-artifact@v3
         with:
           path: target/book

@@ -9,7 +9,7 @@ Juglans 是一个 AI 工作流编排框架，通过三种核心资源类型来�
 ```
 ┌─────────────────────────────────────────────────────┐
 │                    Workflow                          │
-│                   (.jgflow)                          │
+│                   (.jg)                          │
 │                                                      │
 │   ┌─────────┐    ┌─────────┐    ┌─────────┐        │
 │   │  Node   │───▶│  Node   │───▶│  Node   │        │
@@ -39,7 +39,7 @@ Juglans 是一个 AI 工作流编排框架，通过三种核心资源类型来�
 ### 示例
 
 ```yaml
-# agents/analyst.jgagent
+# src/agents/analyst.jgagent
 slug: "analyst"
 model: "gpt-4o"
 temperature: 0.5
@@ -74,7 +74,7 @@ system_prompt: |
 ### 示例
 
 ```yaml
-# prompts/report.jgprompt
+# src/prompts/report.jgprompt
 ---
 slug: "report"
 inputs:
@@ -115,7 +115,7 @@ Include key findings and recommendations.
 ### 示例
 
 ```yaml
-# workflows/pipeline.jgflow
+# src/pipeline.jg
 name: "Data Pipeline"
 
 entry: [start]
@@ -132,13 +132,13 @@ exit: [end]
 
 ## 工作流组合
 
-当单个工作流变得复杂时，可以通过 `flows:` 将多个 `.jgflow` 文件组合为一张统一的执行图：
+当单个工作流变得复杂时，可以通过 `flows:` 将多个 `.jg` 文件组合为一张统一的执行图：
 
 ```yaml
-# main.jgflow
+# main.jg
 flows: {
-  auth: "./workflows/auth.jgflow"
-  trading: "./workflows/trading.jgflow"
+  auth: "./auth.jg"
+  trading: "./trading.jg"
 }
 
 [start] -> [route]
@@ -150,7 +150,7 @@ flows: {
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  main.jgflow (父工作流)                                     │
+│  main.jg (父工作流)                                     │
 │                                                              │
 │   [start] ──→ [route] ──→ [auth.start] ──→ ... ──→ [done]  │
 │                   │                                    ↑     │
@@ -260,17 +260,20 @@ $reply.tokens         # 回复 token 数
 
 ```
 my-project/
-├── juglans.toml          # 配置
-├── prompts/              # Prompt 模板
-│   ├── system/           # 系统 Prompt
-│   ├── tasks/            # 任务 Prompt
-│   └── common/           # 通用 Prompt
-├── agents/               # Agent 配置
-│   ├── core/             # 核心 Agent
-│   └── specialized/      # 专业 Agent
-└── workflows/            # 工作流
-    ├── main.jgflow       # 主工作流
-    └── sub/              # 子工作流
+├── juglans.toml              # 配置
+└── src/
+    ├── main.jg               # 主工作流（.jg 源文件直接在 src/）
+    ├── sub-flow.jg           # 子工作流
+    ├── workflows/            # .jgflow 元数据
+    │   └── main.jgflow
+    ├── agents/               # 入口 Agent（有 workflow）
+    │   └── my-agent.jgagent
+    ├── pure-agents/          # 纯 Agent（无 workflow）
+    │   └── assistant.jgagent
+    ├── prompts/              # Prompt 模板
+    │   └── system.jgprompt
+    └── tools/                # 工具定义
+        └── my-tools.json
 ```
 
 ### 资源引用
@@ -278,15 +281,15 @@ my-project/
 **相对路径导入：**
 
 ```yaml
-prompts: ["./prompts/**/*.jgprompt"]
-agents: ["./agents/**/*.jgagent"]
+prompts: ["src/prompts/**/*.jgprompt"]
+agents: ["src/agents/**/*.jgagent", "src/pure-agents/**/*.jgagent"]
 ```
 
 **通过 Slug 引用：**
 
 ```yaml
-[node]: chat(agent="my-agent")
-[node]: p(slug="my-prompt")
+[node]: chat(agent="my-agent")     # 通过 slug 引用
+[node]: p(slug="my-prompt")       # 通过 slug 引用
 ```
 
 ---
@@ -331,13 +334,13 @@ agents/writer.jgagent        # 写作
 
 ```bash
 # 测试 Prompt
-juglans prompts/my-prompt.jgprompt --input '{...}'
+juglans src/prompts/my-prompt.jgprompt --input '{...}'
 
 # 测试 Agent
-juglans agents/my-agent.jgagent --message "test"
+juglans src/agents/my-agent.jgagent --message "test"
 
 # 测试 Workflow
-juglans workflows/my-flow.jgflow --input '{...}'
+juglans src/main.jg --input '{...}'
 ```
 
 ---

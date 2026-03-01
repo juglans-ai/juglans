@@ -4,7 +4,7 @@
 
 ## 工作流文件
 
-### intent-router.jgflow
+### intent-router.jg
 
 ```yaml
 name: "Intent Router"
@@ -76,7 +76,7 @@ exit: [respond]
 
 ## Agent 定义
 
-### agents/classifier.jgagent
+### src/agents/classifier.jgagent
 
 ```yaml
 name: "classifier"
@@ -104,7 +104,7 @@ system_prompt: |
   - general: Anything else
 ```
 
-### agents/qa-expert.jgagent
+### src/agents/qa-expert.jgagent
 
 ```yaml
 name: "qa-expert"
@@ -120,7 +120,7 @@ system_prompt: |
   Provide sources or reasoning when appropriate.
 ```
 
-### agents/task-executor.jgagent
+### src/agents/task-executor.jgagent
 
 ```yaml
 name: "task-executor"
@@ -146,7 +146,7 @@ system_prompt: |
   }
 ```
 
-### agents/support.jgagent
+### src/agents/support.jgagent
 
 ```yaml
 name: "support"
@@ -166,7 +166,7 @@ system_prompt: |
 
 ## Prompt 模板
 
-### prompts/greeting-response.jgprompt
+### src/prompts/greeting-response.jgprompt
 
 ```yaml
 name: "greeting-response"
@@ -186,29 +186,29 @@ template: |
 
 ```bash
 # 问题
-juglans intent-router.jgflow --input '{"message": "What is the capital of France?"}'
+juglans intent-router.jg --input '{"message": "What is the capital of France?"}'
 # Intent: question -> qa-expert
 # > Paris is the capital of France...
 
 # 任务
-juglans intent-router.jgflow --input '{"message": "Create a summary of this article..."}'
+juglans intent-router.jg --input '{"message": "Create a summary of this article..."}'
 # Intent: task -> task-executor
 # > {"status": "completed", "result": "..."}
 
 # 问候
-juglans intent-router.jgflow --input '{"message": "Hi, I am Bob"}'
+juglans intent-router.jg --input '{"message": "Hi, I am Bob"}'
 # Intent: greeting -> greeting template
 # > Hello Bob! 👋 I am your AI assistant...
 
 # 反馈
-juglans intent-router.jgflow --input '{"message": "The app keeps crashing when I try to save"}'
+juglans intent-router.jg --input '{"message": "The app keeps crashing when I try to save"}'
 # Intent: feedback -> support
 # > I am sorry to hear about the crashes...
 ```
 
 ## 高级：多级路由
 
-### advanced-router.jgflow
+### advanced-router.jg
 
 ```yaml
 name: "Advanced Multi-level Router"
@@ -282,8 +282,8 @@ exit: [respond]
 
 ```
 intent-router/
-├── intent-router.jgflow
-├── advanced-router.jgflow
+├── intent-router.jg
+├── advanced-router.jg
 ├── agents/
 │   ├── classifier.jgagent
 │   ├── qa-expert.jgagent

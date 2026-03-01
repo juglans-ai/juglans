@@ -5,17 +5,16 @@
 mod protocol;
 mod worker;
 
-pub use protocol::{PythonError, PythonRequest, PythonResponse};
-pub use worker::{PythonWorker, PythonWorkerPool};
+pub use worker::PythonWorkerPool;
 
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
-use tracing::{debug, info};
+use tracing::debug;
 
 /// Global Python runtime instance
-static PYTHON_RUNTIME: OnceLock<Arc<PythonRuntime>> = OnceLock::new();
+static _PYTHON_RUNTIME: OnceLock<Arc<PythonRuntime>> = OnceLock::new();
 
 /// Python runtime for executing external Python calls
 pub struct PythonRuntime {
@@ -39,17 +38,17 @@ impl PythonRuntime {
     }
 
     /// Initialize the global Python runtime
-    pub fn init_global(max_workers: usize) -> Result<Arc<PythonRuntime>> {
+    pub fn _init_global(max_workers: usize) -> Result<Arc<PythonRuntime>> {
         let runtime = Arc::new(Self::new(max_workers)?);
-        PYTHON_RUNTIME
+        _PYTHON_RUNTIME
             .set(Arc::clone(&runtime))
             .map_err(|_| anyhow!("Python runtime already initialized"))?;
         Ok(runtime)
     }
 
     /// Get the global Python runtime
-    pub fn global() -> Option<Arc<PythonRuntime>> {
-        PYTHON_RUNTIME.get().cloned()
+    pub fn _global() -> Option<Arc<PythonRuntime>> {
+        _PYTHON_RUNTIME.get().cloned()
     }
 
     /// Set the imported modules for this runtime
@@ -76,7 +75,7 @@ impl PythonRuntime {
     }
 
     /// Check if a module is imported
-    pub fn is_module_imported(&self, module: &str) -> bool {
+    pub fn _is_module_imported(&self, module: &str) -> bool {
         // Check if the module or any parent module is imported
         // e.g., if "sklearn.ensemble" is imported, "sklearn" is also available
         for imported in &self.imported_modules {
@@ -157,20 +156,20 @@ impl PythonRuntime {
         // Find the longest matching import
         let mut best_match: Option<&str> = None;
         for imported in &self.imported_modules {
-            if call_path.starts_with(imported) {
-                if best_match.is_none() || imported.len() > best_match.unwrap().len() {
-                    best_match = Some(imported);
-                }
+            if call_path.starts_with(imported)
+                && (best_match.is_none() || imported.len() > best_match.unwrap().len())
+            {
+                best_match = Some(imported);
             }
         }
 
         if let Some(module) = best_match {
             // Extract method name after the module
             let remainder = &call_path[module.len()..];
-            if remainder.starts_with('.') {
-                let method = &remainder[1..]; // Skip the dot
-                                              // Handle nested calls like "sklearn.ensemble.RandomForestClassifier"
-                                              // target = "sklearn.ensemble", method = "RandomForestClassifier"
+            if let Some(method) = remainder.strip_prefix('.') {
+                // Skip the dot
+                // Handle nested calls like "sklearn.ensemble.RandomForestClassifier"
+                // target = "sklearn.ensemble", method = "RandomForestClassifier"
                 if let Some(last_dot) = method.rfind('.') {
                     let full_target = format!("{}.{}", module, &method[..last_dot]);
                     let final_method = &method[last_dot + 1..];
@@ -191,7 +190,7 @@ impl PythonRuntime {
     }
 
     /// Call a method on a Python object reference
-    pub fn call_method(
+    pub fn _call_method(
         &self,
         ref_id: &str,
         method: &str,
@@ -230,11 +229,11 @@ impl PythonRuntime {
 }
 
 /// Check if a value is a Python object reference
-pub fn is_python_ref(value: &Value) -> bool {
+pub fn _is_python_ref(value: &Value) -> bool {
     value.get("__python_ref__").is_some()
 }
 
 /// Extract Python reference ID from a value
-pub fn get_python_ref(value: &Value) -> Option<&str> {
+pub fn _get_python_ref(value: &Value) -> Option<&str> {
     value.get("__python_ref__").and_then(|v| v.as_str())
 }

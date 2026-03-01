@@ -184,7 +184,7 @@ pub async fn start(
     // 提前提取，避免借用冲突
     let webhook_url = bot_config.webhook_url.clone();
     let has_app_credentials = bot_config.app_id.is_some() && bot_config.app_secret.is_some();
-    drop(bot_config);
+    let _ = bot_config;
 
     if let Some(url) = webhook_url {
         start_webhook_mode(config, project_root, agent_slug, url).await
@@ -209,7 +209,7 @@ async fn start_webhook_mode(
     info!(
         "   Webhook: {}...{}",
         &webhook_url[..40.min(webhook_url.len())],
-        if webhook_url.len() > 40 { "" } else { "" }
+        ""
     );
     info!("   Type messages below. Replies will be sent to Feishu group.");
     println!();
@@ -356,7 +356,7 @@ pub async fn send_webhook(webhook_url: &str, text: &str) -> Result<()> {
 }
 
 /// 通过 Webhook 发送富文本消息（Markdown 风格的 post 消息）
-pub async fn send_webhook_rich(
+pub async fn _send_webhook_rich(
     webhook_url: &str,
     title: &str,
     content_lines: Vec<Vec<Value>>,

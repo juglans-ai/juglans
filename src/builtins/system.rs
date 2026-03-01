@@ -251,4 +251,29 @@ impl Tool for FeishuWebhook {
     }
 }
 
+/// return(value=expr) — 将表达式求值结果作为 $output 返回
+/// 用于函数定义中返回计算结果：`[add(a, b)]: return(value=$ctx.a + $ctx.b)`
+pub struct Return;
+#[async_trait]
+impl Tool for Return {
+    fn name(&self) -> &str {
+        "return"
+    }
+    async fn execute(
+        &self,
+        params: &HashMap<String, String>,
+        _context: &WorkflowContext,
+    ) -> Result<Option<Value>> {
+        if let Some(value_str) = params.get("value") {
+            let value = serde_json::from_str(value_str).unwrap_or(json!(value_str));
+            Ok(Some(value))
+        } else if let Some((_key, value_str)) = params.iter().next() {
+            let value = serde_json::from_str(value_str).unwrap_or(json!(value_str));
+            Ok(Some(value))
+        } else {
+            Ok(Some(Value::Null))
+        }
+    }
+}
+
 // Shell 已被 devtools::Bash 替代（注册为 "bash" + "sh" 别名）

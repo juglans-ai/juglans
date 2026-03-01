@@ -3,6 +3,6 @@
 
 pub mod input;
 pub mod render;
+pub mod tui;
 
 pub use input::MultilineInput;
-pub use render::render_markdown;

@@ -377,7 +377,7 @@ exit: [result, error]
 ### 详细日志模式
 
 ```bash
-juglans workflows/my-flow.jgflow --verbose
+juglans src/my-flow.jg --verbose
 ```
 
 ### 错误断点

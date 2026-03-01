@@ -4,9 +4,11 @@
 mod adapters;
 mod builtins;
 mod core;
+mod registry;
 mod runtime;
 mod services;
 mod templates;
+mod testing;
 mod ui;
 
 use anyhow::{anyhow, Context, Result};
@@ -28,7 +30,7 @@ use core::prompt_parser::PromptParser;
 use core::renderer::JwlRenderer;
 use core::resolver;
 use core::skill_parser;
-use core::validator::WorkflowValidator;
+use core::validator::{ProjectContext, WorkflowValidator};
 use services::agent_loader::AgentRegistry;
 use services::config::JuglansConfig;
 use services::github;
@@ -42,7 +44,7 @@ use ui::{render::render_markdown, render::show_shortcuts, render::show_welcome, 
 #[derive(Parser)]
 #[command(name = "juglans", author = "Juglans Team", version = env!("CARGO_PKG_VERSION"))]
 struct Cli {
-    /// Target file path to process (.jgflow, .jgprompt, .jgagent)
+    /// Target file path to process (.jg, .jgprompt, .jgagent)
     file: Option<PathBuf>,
 
     #[command(subcommand)]
@@ -103,7 +105,7 @@ enum Commands {
         #[arg(long)]
         endpoint: Option<String>,
     },
-    /// Validate syntax of .jgflow, .jgagent, .jgprompt files (like cargo check)
+    /// Validate syntax of .jg/.jgflow, .jgagent, .jgprompt files (like cargo check)
     Check {
         /// Path to check (file or directory, defaults to current directory)
         path: Option<PathBuf>,
@@ -170,6 +172,72 @@ enum Commands {
     Skills {
         #[command(subcommand)]
         action: SkillsAction,
+    },
+    /// Pack a package directory into a .tar.gz archive
+    Pack {
+        /// Path to the package directory (default: current directory)
+        path: Option<PathBuf>,
+        /// Output directory for the archive (default: same as package directory)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Publish a package to the registry
+    Publish {
+        /// Path to the package directory (default: current directory)
+        path: Option<PathBuf>,
+    },
+    /// Add a package dependency from the registry
+    Add {
+        /// Package name or name@version (e.g., "sqlite-tools" or "sqlite-tools@^1.2.0")
+        package: String,
+    },
+    /// Remove a package dependency
+    Remove {
+        /// Package name to remove
+        package: String,
+    },
+    /// Launch interactive chat UI
+    Chat {
+        /// Agent file to load (.jgagent)
+        #[arg(short, long)]
+        agent: Option<PathBuf>,
+    },
+    /// Deploy project to Docker container
+    Deploy {
+        /// Custom image tag (default: juglans-{project}:latest)
+        #[arg(long)]
+        tag: Option<String>,
+        /// Host port to bind (default: 8080)
+        #[arg(short, long)]
+        port: Option<u16>,
+        /// Only build the image, don't start a container
+        #[arg(long)]
+        build_only: bool,
+        /// Push image to registry after build
+        #[arg(long)]
+        push: bool,
+        /// Stop and remove the running container
+        #[arg(long)]
+        stop: bool,
+        /// Show container status
+        #[arg(long)]
+        status: bool,
+        /// Environment variables (can be repeated: -e KEY=VAL)
+        #[arg(long = "env", short = 'e')]
+        env_vars: Vec<String>,
+        /// Project path (default: current directory)
+        path: Option<PathBuf>,
+    },
+    /// Run tests — discovers and executes _test_ blocks in .jg files
+    Test {
+        /// Path to test file or directory (default: ./tests/)
+        path: Option<PathBuf>,
+        /// Filter tests by name substring
+        #[arg(long)]
+        filter: Option<String>,
+        /// Output format: text, json, junit
+        #[arg(long, default_value = "text")]
+        format: String,
     },
 }
 
@@ -392,13 +460,13 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
     env::set_current_dir(&project_root_path)?;
 
     let file_parent_context = absolute_target_path.parent().unwrap_or(Path::new("."));
-    let relative_base_offset =
+    let mut relative_base_offset =
         pathdiff::diff_paths(file_parent_context, &project_root_path).unwrap_or(PathBuf::from("."));
 
     let source_raw_text = fs::read_to_string(&absolute_target_path)?;
 
     match file_ext_name {
-        "jgflow" => {
+        "jg" | "jgflow" => {
             info!("🚀 Starting Workflow Graph Logic: {:?}", source_file_path);
             let local_config = JuglansConfig::load()?;
 
@@ -409,10 +477,104 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
                 .as_ref()
                 .map(|b| project_root_path.join(b));
 
-            let mut workflow_definition_obj = GraphParser::parse(&source_raw_text)?;
+            let mut workflow_definition_obj = if file_ext_name == "jgflow" {
+                GraphParser::parse_manifest(&source_raw_text)?
+            } else {
+                GraphParser::parse(&source_raw_text)?
+            };
+
+            // .jg 文件：metadata keys 仅作注释，warn 用户
+            if file_ext_name == "jg" {
+                let has_meta = !workflow_definition_obj.slug.is_empty()
+                    || !workflow_definition_obj.name.is_empty()
+                    || !workflow_definition_obj.version.is_empty()
+                    || !workflow_definition_obj.author.is_empty()
+                    || !workflow_definition_obj.description.is_empty();
+                if has_meta {
+                    warn!("Metadata in .jg files has no effect (use a .jgflow manifest instead)");
+                }
+                workflow_definition_obj.slug = String::new();
+                workflow_definition_obj.name = String::new();
+                workflow_definition_obj.version = String::new();
+                workflow_definition_obj.author = String::new();
+                workflow_definition_obj.description = String::new();
+            }
+
+            // .jgflow 文件：纯清单，不允许节点/边定义
+            if file_ext_name == "jgflow" {
+                if workflow_definition_obj.graph.node_count() > 0 {
+                    anyhow::bail!(".jgflow is a manifest file — node definitions [name] and edges are not allowed.\nPut logic in a .jg file and reference it with: source: \"./your_file.jg\"");
+                }
+                if workflow_definition_obj.source.is_empty() {
+                    anyhow::bail!(".jgflow manifest requires a 'source' field pointing to a .jg file.\nExample: source: \"./main.jg\"");
+                }
+            }
+
+            // .jgflow 文件：读取 source 指向的 .jg 文件，合并逻辑
+            if file_ext_name == "jgflow" && !workflow_definition_obj.source.is_empty() {
+                let source_path = file_parent_context.join(&workflow_definition_obj.source);
+                let source_content = fs::read_to_string(&source_path).with_context(|| {
+                    format!("Failed to read source: {}", workflow_definition_obj.source)
+                })?;
+                let source_wf = GraphParser::parse(&source_content)?;
+
+                // 保存清单的 metadata
+                let manifest = workflow_definition_obj.clone();
+
+                // 用源文件的逻辑替换（graph, nodes, edges, functions 等）
+                workflow_definition_obj = source_wf;
+
+                // 清单 metadata 覆盖（非空字段）
+                if !manifest.slug.is_empty() {
+                    workflow_definition_obj.slug = manifest.slug;
+                }
+                if !manifest.name.is_empty() {
+                    workflow_definition_obj.name = manifest.name;
+                }
+                if !manifest.version.is_empty() {
+                    workflow_definition_obj.version = manifest.version;
+                }
+                if !manifest.author.is_empty() {
+                    workflow_definition_obj.author = manifest.author;
+                }
+                if !manifest.description.is_empty() {
+                    workflow_definition_obj.description = manifest.description;
+                }
+                if !manifest.libs.is_empty() {
+                    workflow_definition_obj.libs = manifest.libs;
+                    workflow_definition_obj.lib_imports = manifest.lib_imports;
+                    workflow_definition_obj.lib_auto_namespaces = manifest.lib_auto_namespaces;
+                }
+                if !manifest.entry_node.is_empty() {
+                    workflow_definition_obj.entry_node = manifest.entry_node;
+                }
+                if !manifest.prompt_patterns.is_empty() {
+                    workflow_definition_obj.prompt_patterns = manifest.prompt_patterns;
+                }
+                if !manifest.agent_patterns.is_empty() {
+                    workflow_definition_obj.agent_patterns = manifest.agent_patterns;
+                }
+                if !manifest.tool_patterns.is_empty() {
+                    workflow_definition_obj.tool_patterns = manifest.tool_patterns;
+                }
+
+                // base_dir 切换到 source 文件所在目录
+                let source_parent = source_path.parent().unwrap_or(Path::new("."));
+                relative_base_offset = pathdiff::diff_paths(source_parent, &project_root_path)
+                    .unwrap_or(PathBuf::from("."));
+            }
+
+            // 解析 lib imports（提取函数定义到命名空间）
+            let mut import_stack = vec![absolute_target_path.clone()];
+            resolver::resolve_lib_imports(
+                &mut workflow_definition_obj,
+                &relative_base_offset,
+                &mut import_stack,
+                at_base.as_deref(),
+            )?;
 
             // 解析 flow imports 并合并子图（编译时图合并）
-            let mut import_stack = vec![absolute_target_path.clone()];
+            import_stack = vec![absolute_target_path.clone()];
             resolver::resolve_flow_imports(
                 &mut workflow_definition_obj,
                 &relative_base_offset,
@@ -504,10 +666,19 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
                 let mut workflow_parsed_data = GraphParser::parse(&wf_source_data_str)?;
                 let wf_context_base_dir = wf_physical_path.parent().unwrap_or(Path::new("."));
 
-                // 解析 flow imports 并合并子图（编译时图合并）
+                // 解析 lib imports（提取函数定义到命名空间）
                 let wf_canonical = fs::canonicalize(&wf_physical_path)
                     .unwrap_or_else(|_| wf_physical_path.clone());
-                let mut import_stack = vec![wf_canonical];
+                let mut import_stack = vec![wf_canonical.clone()];
+                resolver::resolve_lib_imports(
+                    &mut workflow_parsed_data,
+                    wf_context_base_dir,
+                    &mut import_stack,
+                    at_base.as_deref(),
+                )?;
+
+                // 解析 flow imports 并合并子图（编译时图合并）
+                import_stack = vec![wf_canonical];
                 resolver::resolve_flow_imports(
                     &mut workflow_parsed_data,
                     wf_context_base_dir,
@@ -684,12 +855,41 @@ fn handle_init(new_project_name: &str) -> Result<()> {
 }
 
 async fn handle_install() -> Result<()> {
-    let runtime_config = JuglansConfig::load()?;
-    let schema_client = McpClient::new();
-    for server_item in runtime_config.mcp_servers {
-        info!("🔄 Schemas for [{}]...", server_item.name);
-        let _ = schema_client.fetch_tools(&server_item).await;
+    let project_dir = env::current_dir()?;
+
+    // 1. Install package dependencies from jgpackage.toml
+    let manifest_path = project_dir.join("jgpackage.toml");
+    if manifest_path.exists() {
+        let config = JuglansConfig::load()?;
+        let registry_url = config
+            .registry
+            .as_ref()
+            .map(|r| r.url.as_str())
+            .unwrap_or("https://jgr.juglans.ai");
+
+        let installer = registry::installer::PackageInstaller::with_defaults(registry_url)?;
+        let installed = installer.install_all(&project_dir).await?;
+
+        if installed.is_empty() {
+            println!("No package dependencies to install.");
+        } else {
+            for pkg in &installed {
+                println!("  Installed {}@{}", pkg.name, pkg.version);
+            }
+            println!("Installed {} package(s).", installed.len());
+        }
     }
+
+    // 2. Fetch MCP tool schemas (existing behavior)
+    let runtime_config = JuglansConfig::load()?;
+    if !runtime_config.mcp_servers.is_empty() {
+        let schema_client = McpClient::new();
+        for server_item in runtime_config.mcp_servers {
+            info!("Fetching schemas for [{}]...", server_item.name);
+            let _ = schema_client.fetch_tools(&server_item).await;
+        }
+    }
+
     Ok(())
 }
 
@@ -926,6 +1126,7 @@ fn handle_check(path: Option<&Path>, show_all: bool, output_format: &str) -> Res
         vec![check_path.to_string_lossy().to_string()]
     } else {
         vec![
+            check_path.join("**/*.jg").to_string_lossy().to_string(),
             check_path.join("**/*.jgflow").to_string_lossy().to_string(),
             check_path
                 .join("**/*.jgagent")
@@ -963,10 +1164,42 @@ fn handle_check(path: Option<&Path>, show_all: bool, output_format: &str) -> Res
     }
 
     if all_paths.is_empty() {
-        println!("    \x1b[33mNo .jgflow, .jgagent, or .jgprompt files found\x1b[0m");
+        println!("    \x1b[33mNo .jg/.jgflow, .jgagent, or .jgprompt files found\x1b[0m");
         return Ok(());
     }
 
+    // --- Pass 1: Build ProjectContext (collect all agent/prompt slugs & flow paths) ---
+    let mut project_ctx = ProjectContext {
+        base_dir: check_path.clone(),
+        ..Default::default()
+    };
+    for entry in &all_paths {
+        if let Ok(content) = fs::read_to_string(entry) {
+            let ext = entry.extension().and_then(|s| s.to_str()).unwrap_or("");
+            match ext {
+                "jgagent" => {
+                    if let Ok(agent) = AgentParser::parse(&content) {
+                        project_ctx.agent_slugs.insert(agent.slug);
+                    }
+                }
+                "jgprompt" => {
+                    if let Ok(prompt) = PromptParser::parse(&content) {
+                        project_ctx.prompt_slugs.insert(prompt.slug);
+                    }
+                }
+                "jg" | "jgflow" => {
+                    if let Ok(canonical) = entry.canonicalize() {
+                        project_ctx.flow_paths.insert(canonical);
+                    } else {
+                        project_ctx.flow_paths.insert(entry.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // --- Pass 2: Validate all files ---
     for entry in all_paths {
         total_files += 1;
         let file_name = entry
@@ -994,11 +1227,49 @@ fn handle_check(path: Option<&Path>, show_all: bool, output_format: &str) -> Res
 
         match fs::read_to_string(&entry) {
             Ok(content) => match ext {
-                "jgflow" => {
+                "jg" | "jgflow" => {
                     workflow_count += 1;
-                    match GraphParser::parse(&content) {
+                    let parse_result = if ext == "jgflow" {
+                        GraphParser::parse_manifest(&content)
+                    } else {
+                        GraphParser::parse(&content)
+                    };
+                    match parse_result {
                         Ok(graph) => {
-                            let validation = WorkflowValidator::validate(&graph);
+                            // .jgflow 清单校验：不允许节点定义，必须有 source
+                            if ext == "jgflow" {
+                                if graph.graph.node_count() > 0 {
+                                    error_count += 1;
+                                    println!("    \x1b[1;31merror\x1b[0m[manifest]: {} — .jgflow must not contain node definitions", relative_path);
+                                    continue;
+                                }
+                                if graph.source.is_empty() {
+                                    error_count += 1;
+                                    println!("    \x1b[1;31merror\x1b[0m[manifest]: {} — missing 'source' field", relative_path);
+                                    continue;
+                                }
+                                let source_path =
+                                    entry.parent().unwrap_or(Path::new(".")).join(&graph.source);
+                                if !source_path.exists() {
+                                    error_count += 1;
+                                    println!("    \x1b[1;31merror\x1b[0m[manifest]: {} — source file not found: {}", relative_path, graph.source);
+                                    continue;
+                                }
+                                // 清单校验通过 — 跳过 workflow 逻辑校验（source .jg 会单独校验）
+                                valid_count += 1;
+                                if show_all {
+                                    println!(
+                                        "    \x1b[32mok\x1b[0m[manifest]: {} → {}",
+                                        relative_path, graph.source
+                                    );
+                                }
+                                continue;
+                            }
+
+                            project_ctx.file_dir =
+                                entry.parent().unwrap_or(Path::new(".")).to_path_buf();
+                            let validation =
+                                WorkflowValidator::validate_with_project(&graph, &project_ctx);
                             let slug = if graph.slug.is_empty() {
                                 file_name.to_string()
                             } else {
@@ -1309,10 +1580,10 @@ async fn handle_apply(
     files_to_apply.sort_by_key(|path| {
         let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
         match ext {
-            "jgflow" => 0,   // Workflows first (no dependencies)
-            "jgprompt" => 1, // Prompts second (agents reference them)
-            "jgagent" => 2,  // Agents last (depend on workflows and prompts)
-            "json" => 3,     // Tool definitions last (local only)
+            "jg" | "jgflow" => 0, // Workflows first (no dependencies)
+            "jgprompt" => 1,      // Prompts second (agents reference them)
+            "jgagent" => 2,       // Agents last (depend on workflows and prompts)
+            "json" => 3,          // Tool definitions last (local only)
             _ => 4,
         }
     });
@@ -1322,7 +1593,7 @@ async fn handle_apply(
     for file in &files_to_apply {
         if let Some(ext) = file.extension().and_then(|s| s.to_str()) {
             match ext {
-                "jgflow" => stats.workflows += 1,
+                "jg" | "jgflow" => stats.workflows += 1,
                 "jgagent" => stats.agents += 1,
                 "jgprompt" => stats.prompts += 1,
                 "json" => stats.tools += 1,
@@ -1414,7 +1685,7 @@ fn should_exclude(path: &Path, exclude_patterns: &[String]) -> bool {
     for pattern in exclude_patterns {
         if glob::Pattern::new(pattern)
             .ok()
-            .map_or(false, |p| p.matches(path_str))
+            .is_some_and(|p| p.matches(path_str))
         {
             return true;
         }
@@ -1490,8 +1761,28 @@ async fn apply_single_file(
                 filename, msg
             )))
         }
+        "jg" => {
+            Ok(ApplyResult::Skipped(format!(
+                "workflow: {} - .jg files cannot be applied directly. Use a .jgflow manifest with: source: \"./{}\"",
+                filename, filename
+            )))
+        }
         "jgflow" => {
-            let mut workflow = GraphParser::parse(&raw_file_data)?;
+            let mut workflow = GraphParser::parse_manifest(&raw_file_data)?;
+
+            // .jgflow 是纯清单，不允许节点定义
+            if workflow.graph.node_count() > 0 {
+                anyhow::bail!("{}: .jgflow is a manifest file — node definitions are not allowed", filename);
+            }
+
+            // 读取 source 指向的 .jg 文件内容
+            let definition = if !workflow.source.is_empty() {
+                let source_path = file.parent().unwrap_or(Path::new(".")).join(&workflow.source);
+                fs::read_to_string(&source_path)
+                    .with_context(|| format!("Failed to read source: {}", workflow.source))?
+            } else {
+                raw_file_data.clone()
+            };
 
             if workflow.slug.is_empty() {
                 workflow.slug = file
@@ -1521,7 +1812,7 @@ async fn apply_single_file(
                 });
 
             let msg = jug0_client
-                .apply_workflow(&workflow, &raw_file_data, &endpoint_url, force)
+                .apply_workflow(&workflow, &definition, &endpoint_url, force)
                 .await?;
             Ok(ApplyResult::Success(format!(
                 "workflow: {} - {}",
@@ -1705,6 +1996,252 @@ async fn handle_skills(action: &SkillsAction) -> Result<()> {
     Ok(())
 }
 
+// ── Registry: pack & publish ─────────────────────────────────────────
+
+fn handle_pack(path: Option<&Path>, output: Option<&Path>) -> Result<()> {
+    let dir = path
+        .map(PathBuf::from)
+        .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    let manifest_path = dir.join("jgpackage.toml");
+    if !manifest_path.exists() {
+        return Err(anyhow!("jgpackage.toml not found in {}", dir.display()));
+    }
+
+    let manifest = registry::package::PackageManifest::load(&manifest_path)?;
+    println!(
+        "Packing {} v{} ...",
+        manifest.package.name, manifest.package.version
+    );
+
+    let archive = registry::package::pack(&dir, output)?;
+    println!("  Created {}", archive.display());
+    Ok(())
+}
+
+async fn handle_publish(path: Option<&Path>) -> Result<()> {
+    let dir = path
+        .map(PathBuf::from)
+        .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    let manifest_path = dir.join("jgpackage.toml");
+    if !manifest_path.exists() {
+        return Err(anyhow!("jgpackage.toml not found in {}", dir.display()));
+    }
+
+    let manifest = registry::package::PackageManifest::load(&manifest_path)?;
+    println!(
+        "Publishing {} v{} ...",
+        manifest.package.name, manifest.package.version
+    );
+
+    // Pack first
+    let archive = registry::package::pack(&dir, None)?;
+
+    // Load config for registry URL and auth
+    let config = JuglansConfig::load()?;
+    let registry_url = config
+        .registry
+        .as_ref()
+        .map(|r| r.url.as_str())
+        .unwrap_or("https://jgr.juglans.ai");
+
+    let api_key = config
+        .account
+        .api_key
+        .as_deref()
+        .ok_or_else(|| anyhow!("account.api_key is required for publishing"))?;
+
+    let url = format!(
+        "{}/api/v1/packages/{}/{}",
+        registry_url.trim_end_matches('/'),
+        manifest.package.name,
+        manifest.package.version
+    );
+
+    let file_bytes = fs::read(&archive)?;
+    let part = reqwest::multipart::Part::bytes(file_bytes)
+        .file_name(archive.file_name().unwrap().to_string_lossy().to_string())
+        .mime_str("application/gzip")?;
+
+    let metadata = serde_json::json!({
+        "name": manifest.package.name,
+        "version": manifest.package.version,
+        "slug": manifest.slug(),
+        "description": manifest.package.description,
+        "author": manifest.package.author,
+        "license": manifest.package.license,
+        "entry": manifest.package.entry,
+        "dependencies": manifest.dependencies,
+    });
+
+    let meta_part =
+        reqwest::multipart::Part::text(metadata.to_string()).mime_str("application/json")?;
+
+    let form = reqwest::multipart::Form::new()
+        .part("metadata", meta_part)
+        .part("package", part);
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .put(&url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .multipart(form)
+        .send()
+        .await?;
+
+    if resp.status().is_success() {
+        println!(
+            "  Published {}-{} to {}",
+            manifest.package.name, manifest.package.version, registry_url
+        );
+    } else {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(anyhow!("Publish failed ({}): {}", status, body));
+    }
+
+    // Clean up local archive
+    let _ = fs::remove_file(&archive);
+
+    Ok(())
+}
+
+async fn handle_add(package: &str) -> Result<()> {
+    let config = JuglansConfig::load()?;
+    let registry_url = config
+        .registry
+        .as_ref()
+        .map(|r| r.url.as_str())
+        .unwrap_or("https://jgr.juglans.ai");
+
+    let installer = registry::installer::PackageInstaller::with_defaults(registry_url)?;
+
+    let project_dir = env::current_dir()?;
+    let installed = installer.install_from_import(package, &project_dir).await?;
+
+    // Update jgpackage.toml [dependencies] if it exists
+    let manifest_path = project_dir.join("jgpackage.toml");
+    if manifest_path.exists() {
+        let content = fs::read_to_string(&manifest_path)?;
+        let mut doc: toml::Table = toml::from_str(&content)?;
+
+        let deps = doc
+            .entry("dependencies")
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+        if let toml::Value::Table(deps_table) = deps {
+            // Store as ^version constraint
+            let constraint = format!("^{}", installed.version);
+            deps_table.insert(installed.name.clone(), toml::Value::String(constraint));
+        }
+
+        fs::write(&manifest_path, toml::to_string_pretty(&doc)?)?;
+    }
+
+    println!(
+        "Added {}@{} → jg_modules/{}",
+        installed.name, installed.version, installed.name
+    );
+    Ok(())
+}
+
+fn handle_remove(package: &str) -> Result<()> {
+    let project_dir = env::current_dir()?;
+
+    // Remove from jgpackage.toml
+    let manifest_path = project_dir.join("jgpackage.toml");
+    if manifest_path.exists() {
+        let content = fs::read_to_string(&manifest_path)?;
+        let mut doc: toml::Table = toml::from_str(&content)?;
+
+        if let Some(toml::Value::Table(deps)) = doc.get_mut("dependencies") {
+            deps.remove(package);
+        }
+
+        fs::write(&manifest_path, toml::to_string_pretty(&doc)?)?;
+    }
+
+    // Remove symlink
+    let config = JuglansConfig::load().ok();
+    let registry_url = config
+        .as_ref()
+        .and_then(|c| c.registry.as_ref())
+        .map(|r| r.url.as_str())
+        .unwrap_or("https://jgr.juglans.ai");
+
+    let installer = registry::installer::PackageInstaller::with_defaults(registry_url)?;
+    installer.unlink(package, &project_dir)?;
+
+    // Remove from lock file
+    let mut lock = registry::lock::LockFile::load(&project_dir).unwrap_or_default();
+    lock.remove(package);
+    let _ = lock.save(&project_dir);
+
+    println!("Removed {}", package);
+    Ok(())
+}
+
+async fn handle_tui(_agent: Option<&Path>) -> Result<()> {
+    let app = ui::tui::app::App::new();
+    ui::tui::run(app).await
+}
+
+async fn handle_test(path: Option<&Path>, filter: Option<&str>, format: &str) -> Result<()> {
+    use testing::{reporter, TestRunner};
+
+    let search_path = path.unwrap_or_else(|| Path::new("./tests"));
+
+    // Discover test files
+    let test_files = TestRunner::discover_test_files(search_path)?;
+
+    if test_files.is_empty() {
+        println!("\n  No test files found in {}\n", search_path.display());
+        println!("  Test files are .jg files containing [_test_*] function blocks.");
+        println!("  Default search path: ./tests/\n");
+        return Ok(());
+    }
+
+    // Create runtime dependencies
+    let config = JuglansConfig::load()?;
+    let runtime: Arc<dyn JuglansRuntime> = Arc::new(Jug0Client::new(&config));
+    let prompt_registry = Arc::new(PromptRegistry::new());
+    let agent_registry = Arc::new(AgentRegistry::new());
+
+    let runner = TestRunner::new(runtime, prompt_registry, agent_registry);
+
+    // Run all test files
+    let mut all_results = Vec::new();
+    for file in &test_files {
+        match runner.run_file(file).await {
+            Ok(mut file_result) => {
+                // Apply filter if specified
+                if let Some(filter_str) = filter {
+                    file_result.results.retain(|r| r.name.contains(filter_str));
+                }
+                all_results.push(file_result);
+            }
+            Err(e) => {
+                eprintln!("  Error running {}: {}", file.display(), e);
+            }
+        }
+    }
+
+    // Output results
+    match format {
+        "json" => reporter::print_json(&all_results),
+        "junit" => reporter::print_junit(&all_results),
+        _ => reporter::print_text(&all_results),
+    }
+
+    // Exit with code 1 if any failures
+    let total_failed: usize = all_results.iter().map(|f| f.failed_count()).sum();
+    if total_failed > 0 {
+        std::process::exit(1);
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
@@ -1787,6 +2324,49 @@ async fn main() -> Result<()> {
             }
             Commands::Skills { action } => {
                 handle_skills(action).await?;
+            }
+            Commands::Pack { path, output } => {
+                handle_pack(path.as_deref(), output.as_deref())?;
+            }
+            Commands::Publish { path } => {
+                handle_publish(path.as_deref()).await?;
+            }
+            Commands::Add { package } => {
+                handle_add(package).await?;
+            }
+            Commands::Remove { package } => {
+                handle_remove(package)?;
+            }
+            Commands::Chat { agent } => {
+                handle_tui(agent.as_deref()).await?;
+            }
+            Commands::Deploy {
+                tag,
+                port,
+                build_only,
+                push,
+                stop,
+                status,
+                env_vars,
+                path,
+            } => {
+                services::deploy::handle_deploy(services::deploy::DeployConfig {
+                    tag: tag.clone(),
+                    port: *port,
+                    build_only: *build_only,
+                    push: *push,
+                    stop: *stop,
+                    status: *status,
+                    env_vars: env_vars.clone(),
+                    path: path.clone(),
+                })?;
+            }
+            Commands::Test {
+                path,
+                filter,
+                format,
+            } => {
+                handle_test(path.as_deref(), filter.as_deref(), format).await?;
             }
         }
     } else if let Some(ref file_path) = application_cli.file {

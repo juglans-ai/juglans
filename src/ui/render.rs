@@ -21,7 +21,7 @@ pub fn render_markdown(content: &str) {
 }
 
 /// 显示状态栏
-pub fn show_status(chat_id: Option<&str>, status: &str, depth: usize) {
+pub fn _show_status(chat_id: Option<&str>, status: &str, depth: usize) {
     println!();
 
     // Chat ID

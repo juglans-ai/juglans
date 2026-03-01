@@ -68,7 +68,7 @@ juglans apply prompts/my-prompt.jgprompt
 juglans apply agents/my-agent.jgagent
 
 # 推送 Workflow
-juglans apply workflows/my-flow.jgflow
+juglans apply workflows/my-flow.jg
 
 # 强制覆盖
 juglans apply prompts/my-prompt.jgprompt --force
@@ -313,10 +313,10 @@ base_url = "http://localhost:3000"
 
 ```bash
 # 使用本地文件，不连接 Jug0
-juglans workflows/test.jgflow --offline
+juglans src/test.jg --offline
 
 # 详细日志
-juglans workflows/test.jgflow --verbose
+juglans src/test.jg --verbose
 ```
 
 ## 生产部署

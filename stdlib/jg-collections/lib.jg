@@ -1,0 +1,24 @@
+slug: "collections"
+
+# ---- 查找 / 筛选 ----
+[where(list, key, value)]: return(value=filter($ctx.list, x => get(x, $ctx.key) == $ctx.value))
+[pluck(list, key)]: return(value=map($ctx.list, x => get(x, $ctx.key)))
+
+# ---- 聚合 ----
+[frequencies(list)]: return(value=count_by($ctx.list, x => x))
+[mean(list)]: return(value=sum($ctx.list) / len($ctx.list))
+[product(list)]: return(value=reduce($ctx.list, (acc, x) => acc * x, 1))
+
+# ---- 变换 ----
+[compact(list)]: return(value=filter($ctx.list, x => x))
+[without(list, exclude)]: return(value=filter($ctx.list, x => not has($ctx.exclude, x)))
+[take(list, n)]: return(value=slice($ctx.list, 0, $ctx.n))
+[drop(list, n)]: return(value=slice($ctx.list, $ctx.n))
+
+# ---- Dict 工具 ----
+[invert(dict)]: return(value=from_entries(map(items($ctx.dict), pair => [last(pair), first(pair)])))
+[defaults(dict, fallbacks)]: return(value=merge($ctx.fallbacks, $ctx.dict))
+
+# ---- 组合 ----
+[unzip(pairs)]: return(value=[map($ctx.pairs, p => first(p)), map($ctx.pairs, p => last(p))])
+[interleave(a, b)]: return(value=flat_map(zip($ctx.a, $ctx.b), pair => pair))

@@ -171,10 +171,10 @@ Workflow 内联 JSON > Workflow 引用 > Agent 默认
 示例：
 
 ```yaml
-# agents/my-agent.jgagent
+# src/agents/my-agent.jgagent
 tools: "default-tools"
 
-# workflow.jgflow
+# workflow.jg
 [step1]: chat(agent="my-agent", message="...")
 # 使用 "default-tools"
 
@@ -232,7 +232,7 @@ data-tools: [calculate, fetch_url]  # fetch_url 覆盖 web-tools 的版本
 }
 ```
 
-**workflow.jgflow:**
+**workflow.jg:**
 
 ```yaml
 tools: ["./tools/*.json"]
@@ -361,7 +361,7 @@ Tool resource 'nonexistent' not found
 启用调试日志：
 
 ```bash
-DEBUG=true juglans workflow.jgflow
+DEBUG=true juglans workflow.jg
 ```
 
 输出：

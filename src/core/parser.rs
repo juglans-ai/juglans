@@ -1,5 +1,7 @@
 // src/core/parser.rs
-use crate::core::graph::{Action, Edge, Node, NodeType, SwitchCase, SwitchRoute, WorkflowGraph};
+use crate::core::graph::{
+    Action, Edge, FunctionDef, Node, NodeType, SwitchCase, SwitchRoute, WorkflowGraph,
+};
 use anyhow::{anyhow, Result};
 use pest::iterators::Pair;
 use pest::Parser;
@@ -112,6 +114,53 @@ impl GraphParser {
         Ok(workflow_instance)
     }
 
+    /// 解析 .jgflow 清单文件 — 只提取 metadata，不要求节点或 entry
+    pub fn parse_manifest(content: &str) -> Result<WorkflowGraph> {
+        let mut pairs = JwlGrammar::parse(Rule::workflow, content)
+            .map_err(|e| anyhow!("Manifest Syntax Error:\n{}", e))?;
+
+        let workflow_pair = pairs
+            .next()
+            .ok_or_else(|| anyhow!("Manifest Error: The input is empty."))?;
+
+        let mut workflow_instance = WorkflowGraph::default();
+
+        if workflow_pair.as_rule() == Rule::workflow {
+            Self::parse_block(workflow_pair, &mut workflow_instance)?;
+        }
+
+        // 清单不需要 entry 节点
+        Ok(workflow_instance)
+    }
+
+    /// 解析库文件 — 允许只包含 function 定义，无需 entry 节点或常规节点
+    pub fn parse_lib(content: &str) -> Result<WorkflowGraph> {
+        let mut pairs = JwlGrammar::parse(Rule::workflow, content)
+            .map_err(|e| anyhow!("JWL Compilation Syntax Error:\n{}", e))?;
+
+        let workflow_pair = pairs
+            .next()
+            .ok_or_else(|| anyhow!("Compilation Error: The input workflow source is empty."))?;
+
+        let mut workflow_instance = WorkflowGraph::default();
+
+        if workflow_pair.as_rule() == Rule::workflow {
+            Self::parse_block(workflow_pair, &mut workflow_instance)?;
+        }
+
+        // 库文件只需包含 function 定义，不强制要求 entry 节点
+        if workflow_instance.entry_node.is_empty()
+            && workflow_instance.graph.node_indices().next().is_none()
+            && workflow_instance.functions.is_empty()
+        {
+            return Err(anyhow!(
+                "Library Error: Library file must define at least one function node."
+            ));
+        }
+
+        Ok(workflow_instance)
+    }
+
     fn parse_block(pair: Pair<Rule>, workflow: &mut WorkflowGraph) -> Result<()> {
         for inner in pair.into_inner() {
             match inner.as_rule() {
@@ -145,6 +194,7 @@ impl GraphParser {
             "slug" => workflow.slug = Self::parse_text_value_raw(val_node),
             "name" => workflow.name = Self::parse_text_value_raw(val_node),
             "version" => workflow.version = Self::parse_text_value_raw(val_node),
+            "source" => workflow.source = Self::parse_text_value_raw(val_node),
             "author" => workflow.author = Self::parse_text_value_raw(val_node),
             "description" => workflow.description = Self::parse_text_value_raw(val_node),
             "flows" => {
@@ -160,12 +210,42 @@ impl GraphParser {
                     }
                 }
             }
-            "entry" | "exit" | "libs" | "prompts" | "agents" | "tools" | "python" => {
+            "libs" => {
+                if val_node.as_rule() == Rule::meta_val_map {
+                    // 对象形式: libs: { db: "./libs/sqlite.jg" }
+                    // 显式命名空间 → lib_imports
+                    for pair in val_node.into_inner() {
+                        if pair.as_rule() == Rule::meta_map_pair {
+                            let mut it = pair.into_inner();
+                            let namespace = it.next().unwrap().as_str().to_string();
+                            let path = it.next().unwrap().as_str().trim_matches('"').to_string();
+                            workflow.lib_imports.insert(namespace, path);
+                        }
+                    }
+                } else {
+                    // 列表形式: libs: ["./libs/sqlite.jg"]
+                    // 自动命名空间（stem），resolver 可能用 slug 覆盖
+                    let string_vec = Self::parse_string_list_helper(val_node)?;
+                    for path in &string_vec {
+                        let stem = std::path::Path::new(path)
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or(path)
+                            .to_string();
+                        workflow.lib_imports.insert(stem.clone(), path.clone());
+                        workflow.lib_auto_namespaces.insert(stem);
+                    }
+                    // 保留旧字段向后兼容（extend 以支持多个 libs: 声明合并）
+                    workflow.libs.extend(string_vec);
+                }
+            }
+            "entry" | "exit" | "prompts" | "agents" | "tools" | "python" => {
                 let string_vec = Self::parse_string_list_helper(val_node)?;
                 match key_str {
-                    "entry" => workflow.entry_node = string_vec.get(0).cloned().unwrap_or_default(),
+                    "entry" => {
+                        workflow.entry_node = string_vec.first().cloned().unwrap_or_default()
+                    }
                     "exit" => workflow.exit_nodes = string_vec,
-                    "libs" => workflow.libs = string_vec,
                     "prompts" => workflow.prompt_patterns = string_vec,
                     "agents" => workflow.agent_patterns = string_vec,
                     "tools" => workflow.tool_patterns = string_vec,
@@ -203,52 +283,83 @@ impl GraphParser {
         Ok(results_list)
     }
 
+    /// 解析 task_def 内部结构为 Action
+    fn parse_task_action(task_pair: Pair<Rule>, context_id: &str) -> Result<Action> {
+        let mut task_inner = task_pair.into_inner();
+        let tool_name = task_inner
+            .next()
+            .ok_or_else(|| anyhow!("Task Error in [{}]: Missing tool name.", context_id))?
+            .as_str()
+            .to_string();
+
+        let mut param_map = HashMap::new();
+        for p_pair in task_inner {
+            let mut p_it = p_pair.into_inner();
+            let pk = p_it.next().unwrap().as_str().to_string();
+            let pv = p_it.next().unwrap().as_str().trim().to_string();
+            if param_map.contains_key(&pk) {
+                return Err(anyhow!(
+                    "Duplicate parameter '{}' in node [{}]",
+                    pk,
+                    context_id
+                ));
+            }
+            param_map.insert(pk, pv);
+        }
+        Ok(Action {
+            name: tool_name,
+            params: param_map,
+        })
+    }
+
     fn parse_node(pair: Pair<Rule>, workflow: &mut WorkflowGraph) -> Result<()> {
         let mut inner_parts = pair.into_inner();
+
+        // 第一个元素：identifier（节点名）
         let id_node = inner_parts
             .next()
             .ok_or_else(|| anyhow!("Node Syntax Error: Node is missing an ID."))?;
-        let id_inner = id_node
-            .into_inner()
-            .next()
-            .ok_or_else(|| anyhow!("Node ID Error: Invalid ID format."))?;
-        let node_id_str = id_inner.as_str().to_string();
+        let node_id_str = id_node.as_str().to_string();
 
-        let content_node = inner_parts.next().ok_or_else(|| {
+        // 第二个元素：func_params 或 content
+        let next = inner_parts.next().ok_or_else(|| {
             anyhow!(
                 "Node Content Error: Node '{}' has no executable body.",
                 node_id_str
             )
         })?;
 
-        let node_type_res = match content_node.as_rule() {
-            Rule::task_def => {
-                let mut task_inner = content_node.into_inner();
-                let tool_name = task_inner
-                    .next()
-                    .ok_or_else(|| anyhow!("Task Error in [{}]: Missing tool name.", node_id_str))?
-                    .as_str()
-                    .to_string();
+        // 检查是否有函数参数
+        let (func_params, content_node) = if next.as_rule() == Rule::func_params {
+            let params: Vec<String> = next
+                .into_inner()
+                .filter(|p| p.as_rule() == Rule::identifier)
+                .map(|p| p.as_str().to_string())
+                .collect();
+            let content = inner_parts.next().ok_or_else(|| {
+                anyhow!(
+                    "Node Content Error: Function '{}' has no body.",
+                    node_id_str
+                )
+            })?;
+            (Some(params), content)
+        } else {
+            (None, next)
+        };
 
-                let mut param_map = HashMap::new();
-                for p_pair in task_inner {
-                    let mut p_it = p_pair.into_inner();
-                    let pk = p_it.next().unwrap().as_str().to_string();
-                    let pv = p_it.next().unwrap().as_str().trim().to_string();
-                    if param_map.contains_key(&pk) {
-                        return Err(anyhow!(
-                            "Duplicate parameter '{}' in node [{}]",
-                            pk,
-                            node_id_str
-                        ));
-                    }
-                    param_map.insert(pk, pv);
-                }
-                NodeType::Task(Action {
-                    name: tool_name,
-                    params: param_map,
-                })
-            }
+        // 如果有函数参数 → 存为 FunctionDef，不加入主 DAG
+        if let Some(params) = func_params {
+            return Self::parse_function_def(node_id_str, params, content_node, workflow);
+        }
+
+        // [name]: { func_body } without params — also treat as function def (for _test_ blocks etc.)
+        if content_node.as_rule() == Rule::func_body {
+            return Self::parse_function_def(node_id_str, Vec::new(), content_node, workflow);
+        }
+
+        // 常规节点（现有逻辑）
+        let node_type_res = match content_node.as_rule() {
+            Rule::task_def => NodeType::Task(Self::parse_task_action(content_node, &node_id_str)?),
             Rule::while_def => {
                 let mut w_it = content_node.into_inner();
                 let cond_text = w_it.next().unwrap().as_str().trim().to_string();
@@ -263,12 +374,14 @@ impl GraphParser {
             }
             Rule::foreach_def => {
                 let mut f_it = content_node.into_inner();
-                let item_v = f_it
-                    .next()
-                    .unwrap()
-                    .as_str()
-                    .trim_start_matches('$')
-                    .to_string();
+                // Check for optional "parallel" mode
+                let mut parallel = false;
+                let mut next = f_it.next().unwrap();
+                if next.as_rule() == Rule::foreach_mode {
+                    parallel = true;
+                    next = f_it.next().unwrap();
+                }
+                let item_v = next.as_str().trim_start_matches('$').to_string();
                 let list_v = f_it
                     .next()
                     .unwrap()
@@ -283,6 +396,7 @@ impl GraphParser {
                     item: item_v,
                     list: list_v,
                     body: Box::new(inner_graph),
+                    parallel,
                 }
             }
             Rule::json_object
@@ -312,6 +426,79 @@ impl GraphParser {
         let node_idx = workflow.graph.add_node(final_node);
         workflow.node_map.insert(node_id_str, node_idx);
 
+        Ok(())
+    }
+
+    /// 解析函数节点定义，存入 workflow.functions
+    fn parse_function_def(
+        name: String,
+        params: Vec<String>,
+        content: Pair<Rule>,
+        workflow: &mut WorkflowGraph,
+    ) -> Result<()> {
+        let mut body = WorkflowGraph::default();
+
+        match content.as_rule() {
+            Rule::func_body => {
+                // 多步函数：展开为 _0, _1, ... 串联子图
+                let mut step_index = 0;
+                let mut last_idx: Option<petgraph::graph::NodeIndex> = None;
+
+                for step in content.into_inner() {
+                    if step.as_rule() == Rule::func_step {
+                        let task_pair = step.into_inner().next().unwrap();
+                        let step_id = format!("__{}", step_index);
+                        let action = Self::parse_task_action(
+                            task_pair,
+                            &format!("{}.__{}", name, step_index),
+                        )?;
+
+                        let node = Node {
+                            id: step_id.clone(),
+                            node_type: NodeType::Task(action),
+                        };
+                        let idx = body.graph.add_node(node);
+                        body.node_map.insert(step_id.clone(), idx);
+
+                        if let Some(prev_idx) = last_idx {
+                            body.graph.add_edge(prev_idx, idx, Edge::default());
+                        } else {
+                            body.entry_node = step_id.clone();
+                        }
+
+                        last_idx = Some(idx);
+                        step_index += 1;
+                    }
+                }
+            }
+            Rule::task_def => {
+                // 单步函数：包装为单节点子图
+                let step_id = "__0".to_string();
+                let action = Self::parse_task_action(content, &name)?;
+
+                let node = Node {
+                    id: step_id.clone(),
+                    node_type: NodeType::Task(action),
+                };
+                let idx = body.graph.add_node(node);
+                body.node_map.insert(step_id.clone(), idx);
+                body.entry_node = step_id;
+            }
+            _ => {
+                return Err(anyhow!(
+                    "Function '{}' body must be a task call or a {{ ... }} block",
+                    name
+                ));
+            }
+        }
+
+        workflow.functions.insert(
+            name,
+            FunctionDef {
+                params,
+                body: Box::new(body),
+            },
+        );
         Ok(())
     }
 
@@ -638,6 +825,82 @@ entry: [start]
             "Multiline params should parse: {:?}",
             result.err()
         );
+    }
+
+    #[test]
+    fn test_single_step_function() {
+        let content = r#"
+name: "Test"
+entry: [step1]
+[greet(name)]: bash(command="echo Hello, " + $name)
+[step1]: greet(name="world")
+"#;
+        let graph = GraphParser::parse(content).unwrap();
+        assert!(graph.functions.contains_key("greet"));
+        let func = graph.functions.get("greet").unwrap();
+        assert_eq!(func.params, vec!["name"]);
+        assert_eq!(func.body.node_map.len(), 1);
+    }
+
+    #[test]
+    fn test_multi_step_function() {
+        let content = r#"
+name: "Test"
+entry: [step1]
+[build(dir)]: {
+  bash(command="cd " + $dir + " && make")
+  bash(command="cd " + $dir + " && make test")
+}
+[step1]: build(dir="/app")
+"#;
+        let graph = GraphParser::parse(content).unwrap();
+        assert!(graph.functions.contains_key("build"));
+        let func = graph.functions.get("build").unwrap();
+        assert_eq!(func.params, vec!["dir"]);
+        assert_eq!(func.body.node_map.len(), 2);
+        // Verify sequential edge exists
+        assert_eq!(func.body.graph.edge_count(), 1);
+    }
+
+    #[test]
+    fn test_multi_step_function_with_semicolons() {
+        let content = r#"
+name: "Test"
+entry: [step1]
+[build(a, b)]: { bash(command=$a); bash(command=$b) }
+[step1]: build(a="foo", b="bar")
+"#;
+        let graph = GraphParser::parse(content).unwrap();
+        let func = graph.functions.get("build").unwrap();
+        assert_eq!(func.params, vec!["a", "b"]);
+        assert_eq!(func.body.node_map.len(), 2);
+    }
+
+    #[test]
+    fn test_function_not_in_main_graph() {
+        let content = r#"
+name: "Test"
+entry: [step1]
+[greet(name)]: bash(command="echo " + $name)
+[step1]: greet(name="world")
+"#;
+        let graph = GraphParser::parse(content).unwrap();
+        // Function node should NOT be in main graph
+        assert!(!graph.node_map.contains_key("greet"));
+        // But the caller should be
+        assert!(graph.node_map.contains_key("step1"));
+    }
+
+    #[test]
+    fn test_no_params_backward_compat() {
+        let content = r#"
+name: "Test"
+entry: [start]
+[start]: bash(command="echo hello")
+"#;
+        let graph = GraphParser::parse(content).unwrap();
+        assert!(graph.node_map.contains_key("start"));
+        assert!(graph.functions.is_empty());
     }
 
     #[test]

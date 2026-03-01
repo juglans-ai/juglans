@@ -15,7 +15,7 @@ Juglans 支持两种方式配置工具：
 
 ### 工作流文件
 
-#### tool-router.jgflow
+#### tool-router.jg
 
 ```yaml
 name: "AI Router with Tooling"
@@ -101,7 +101,7 @@ exit: [final_notify]
 
 ## Agent 定义
 
-### agents/classifier.jgagent
+### src/agents/classifier.jgagent
 
 ```yaml
 slug: "classifier"
@@ -121,7 +121,7 @@ system_prompt: |
   {"complexity": "simple" | "complex", "reason": "brief explanation"}
 ```
 
-### agents/tool-agent.jgagent（带默认工具）
+### src/agents/tool-agent.jgagent（带默认工具）
 
 ```yaml
 slug: "tool-agent"
@@ -156,7 +156,7 @@ tools: [
 ]
 ```
 
-### agents/assistant.jgagent
+### src/agents/assistant.jgagent
 
 ```yaml
 slug: "assistant"
@@ -171,7 +171,7 @@ system_prompt: |
 
 ## Prompt 模板
 
-### prompts/router.jgprompt
+### src/prompts/router.jgprompt
 
 ```yaml
 slug: "router"
@@ -183,7 +183,7 @@ template: |
   Classify the complexity of this question.
 ```
 
-### prompts/solver.jgprompt
+### src/prompts/solver.jgprompt
 
 ```yaml
 slug: "solver"
@@ -201,7 +201,7 @@ template: |
 ### 简单问题
 
 ```bash
-juglans tool-router.jgflow --input '{"message": "你是谁？"}'
+juglans tool-router.jg --input '{"message": "你是谁？"}'
 ```
 
 输出：
@@ -215,7 +215,7 @@ juglans tool-router.jgflow --input '{"message": "你是谁？"}'
 ### 复杂问题（需要工具）
 
 ```bash
-juglans tool-router.jgflow --input '{"message": "帮我查一下 juglans.ai 的最新更新"}'
+juglans tool-router.jg --input '{"message": "帮我查一下 juglans.ai 的最新更新"}'
 ```
 
 输出：
@@ -313,7 +313,7 @@ juglans tool-router.jgflow --input '{"message": "帮我查一下 juglans.ai 的�
 
 ```
 tool-calling/
-├── tool-router.jgflow
+├── tool-router.jg
 ├── agents/
 │   ├── classifier.jgagent
 │   ├── tool-agent.jgagent
@@ -328,7 +328,7 @@ tool-calling/
 启用详细日志查看工具调用过程：
 
 ```bash
-DEBUG=true juglans tool-router.jgflow --input '{"message": "问题"}'
+DEBUG=true juglans tool-router.jg --input '{"message": "问题"}'
 ```
 
 输出会包含：

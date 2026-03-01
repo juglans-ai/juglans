@@ -296,7 +296,7 @@ Juglans 提供多个内置工具，用于工作流中的各种操作。
 
 ## 开发者工具
 
-Claude Code 风格的代码操作工具集，注册为 `"devtools"` slug。可在 .jgflow 中直接调用，也可通过 .jgagent 的 `tools: ["devtools"]` 被 LLM 自动使用。
+Claude Code 风格的代码操作工具集，注册为 `"devtools"` slug。可在 .jg 中直接调用，也可通过 .jgagent 的 `tools: ["devtools"]` 被 LLM 自动使用。
 
 ```yaml
 # Agent 中启用
@@ -562,7 +562,84 @@ tools: ["devtools", "web-tools"]
 
 ---
 
-## 网络工具
+## HTTP Backend Tools
+
+### serve()
+
+Marks a workflow node as the HTTP entry point. When `juglans web` starts, it scans all `.jg` files and registers the workflow containing a `serve()` node as the catch-all HTTP handler.
+
+At runtime, `serve()` is a pass-through that reads pre-injected request data and computes `$input.route` for switch routing.
+
+**Injected Variables** (set by web server before execution):
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| `$input.method` | string | HTTP method (`GET`, `POST`, etc.) |
+| `$input.path` | string | Request path |
+| `$input.query` | object | Query parameters |
+| `$input.body` | any | Request body (JSON or string) |
+| `$input.headers` | object | HTTP headers |
+| `$input.route` | string | Auto-computed `"METHOD /path"` |
+
+**Example:**
+
+```yaml
+slug: "my-api"
+name: "HTTP API"
+entry: [request]
+
+[request]: serve()
+
+[hello]: response(status=200, body={"message": "Hello!"})
+[not_found]: response(status=404, body={"error": "Not found"})
+
+[request] -> switch $input.route {
+  "GET /api/hello": [hello]
+  default: [not_found]
+}
+```
+
+**Output:**
+
+Returns a request summary: `{method, path, route, query, has_body}`.
+
+See [Web Server Guide](../integrations/web-server.md) for full documentation.
+
+---
+
+### response()
+
+Sets the HTTP response for a `serve()` workflow. Writes to `$response.*` which the web server reads after execution.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `status` | int | No | HTTP status code (default: 200) |
+| `body` | any | No | Response body (JSON) |
+| `headers` | object | No | Custom response headers |
+
+**Example:**
+
+```yaml
+# Simple response
+[ok]: response(status=200, body={"message": "Success"})
+
+# Echo request data
+[echo]: response(status=200, body={"query": $input.query, "path": $input.path})
+
+# Error response
+[error]: response(status=500, body={"error": "Internal error"})
+
+# Custom headers
+[cors]: response(status=200, body=$output, headers={"X-Custom": "value"})
+```
+
+**Default behavior:** If `response()` is never called, the web server returns status `200` with `$output` as body.
+
+---
+
+## Network Tools
 
 ### fetch()
 

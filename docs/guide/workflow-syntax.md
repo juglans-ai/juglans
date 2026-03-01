@@ -1,6 +1,6 @@
-# 工作流语法 (.jgflow)
+# 工作流语法 (.jg)
 
-`.jgflow` 文件定义了工作流的结构和执行逻辑。
+`.jg` 文件定义了工作流的结构和执行逻辑。
 
 ## 文件结构
 
@@ -45,7 +45,7 @@ exit: [end_node]
 使用 glob 模式导入本地文件：
 
 ```yaml
-# 相对路径（相对于 .jgflow 文件所在目录）
+# 相对路径（相对于 .jg 文件所在目录）
 prompts: ["./prompts/*.jgprompt"]
 agents: ["./agents/*.jgagent"]
 
@@ -63,18 +63,18 @@ prompts: ["/absolute/path/to/prompts/*.jgprompt"]
 ```
 
 **路径解析规则：**
-- 相对路径：相对于 `.jgflow` 文件所在目录
+- 相对路径：相对于 `.jg` 文件所在目录
 - 绝对路径：以 `/` 开头的路径
 - Glob 通配符：`*` 匹配文件名，`**` 匹配子目录
 
 ### 工作流导入
 
-使用 `flows:` 将其他 `.jgflow` 文件的节点合并到当前工作流中，实现跨文件分支：
+使用 `flows:` 将其他 `.jg` 文件的节点合并到当前工作流中，实现跨文件分支：
 
 ```yaml
 flows: {
-  auth: "./workflows/auth.jgflow"
-  trading: "./workflows/trading.jgflow"
+  auth: "./auth.jg"
+  trading: "./trading.jg"
 }
 
 # 引用子工作流节点
@@ -298,9 +298,80 @@ exit: [success, failure]
 [router] -> [default_path]          # 默认
 ```
 
-## 循环结构
+## Function Definitions
 
-### While 循环
+Define reusable, parameterized node blocks with `[name(params)]: { ... }`.
+
+Functions are **not** added to the main DAG — they exist as callable templates. When a node calls a function by name, the executor binds arguments to the function's parameter variables and executes its body sub-graph.
+
+### Single-Step Function
+
+```yaml
+# Define
+[greet(name)]: bash(command="echo Hello, " + $name)
+
+# Call
+[step1]: greet(name="world")
+```
+
+### Multi-Step Function (Block Body)
+
+Use `{ ... }` to define a function with multiple sequential steps:
+
+```yaml
+# Define: steps run in sequence (__0 -> __1)
+[build(dir)]: {
+  bash(command="cd " + $dir + " && make")
+  bash(command="cd " + $dir + " && make test")
+}
+
+# Call
+[step1]: build(dir="/app")
+```
+
+Steps can be separated by newlines or semicolons:
+
+```yaml
+[pipeline(a, b)]: { bash(command=$a); bash(command=$b) }
+```
+
+### Multiple Parameters
+
+```yaml
+[deploy(env, version)]: {
+  bash(command="docker build -t app:" + $version + " .")
+  bash(command="docker push app:" + $version)
+  bash(command="kubectl set image deployment/app app=app:" + $version + " --namespace=" + $env)
+}
+
+[staging]: deploy(env="staging", version="1.2.0")
+[production]: deploy(env="production", version="1.2.0")
+
+[staging] -> [production]
+```
+
+### How It Works
+
+1. **Parser**: `[name(params)]` detected → stored in `workflow.functions`, not in main graph
+2. **Executor**: When a node calls `greet(name="world")`, it checks the function registry first
+3. **Parameter binding**: Arguments are set as context variables (`$name`, `$dir`, etc.)
+4. **Body execution**: The internal sub-graph runs sequentially
+5. **Return**: Function returns `$output` from its last step
+
+### Function vs Regular Node
+
+| | Regular Node | Function Definition |
+|---|---|---|
+| Syntax | `[id]: tool(...)` | `[id(params)]: tool(...)` or `[id(params)]: { ... }` |
+| In main DAG | Yes | No (stored separately) |
+| Callable | No | Yes, by name |
+| Parameters | — | Bound to `$param` variables |
+
+---
+
+## Loop Constructs
+
+### While Loop
 
 ```yaml
 [loop]: while($ctx.count < 10) {

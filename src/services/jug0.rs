@@ -4,11 +4,10 @@ use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures::stream::StreamExt;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
-use tokio::sync::mpsc::UnboundedSender;
 use uuid::Uuid;
 
 use crate::core::agent_parser::AgentResource;
@@ -24,7 +23,10 @@ pub enum ChatOutput {
     /// 最终回复文本
     Final { text: String, chat_id: String },
     /// AI 发起的工具调用请求
-    ToolCalls { calls: Vec<Value>, chat_id: String },
+    ToolCalls {
+        _calls: Vec<Value>,
+        _chat_id: String,
+    },
 }
 
 // Response types for get_prompt_id / get_workflow_id
@@ -58,7 +60,8 @@ pub struct UserInfo {
 /// Handle lookup response from jug0 (GET /api/handles/:handle)
 #[derive(Debug, Clone, Deserialize)]
 pub struct HandleLookup {
-    pub handle: String,
+    #[serde(rename = "handle")]
+    pub _handle: String,
     pub target_type: String,
     pub target_id: Uuid,
 }
@@ -66,22 +69,28 @@ pub struct HandleLookup {
 /// Remote agent detail from jug0 (GET /api/agents/:id_or_slug)
 #[derive(Debug, Clone, Deserialize)]
 pub struct RemoteAgentDetail {
-    pub id: Uuid,
+    #[serde(rename = "id")]
+    pub _id: Uuid,
     pub slug: String,
     pub name: Option<String>,
-    pub description: Option<String>,
+    #[serde(rename = "description")]
+    pub _description: Option<String>,
     pub default_model: Option<String>,
     pub temperature: Option<f64>,
-    pub username: Option<String>,
-    pub avatar: Option<String>,
+    #[serde(rename = "username")]
+    pub _username: Option<String>,
+    #[serde(rename = "avatar")]
+    pub _avatar: Option<String>,
     pub system_prompt: Option<RemotePromptDetail>,
 }
 
 /// Remote prompt detail (embedded in agent response)
 #[derive(Debug, Clone, Deserialize)]
 pub struct RemotePromptDetail {
-    pub id: Uuid,
-    pub slug: String,
+    #[serde(rename = "id")]
+    pub _id: Uuid,
+    #[serde(rename = "slug")]
+    pub _slug: String,
     pub content: String,
 }
 
@@ -428,9 +437,10 @@ impl Jug0Client {
         };
 
         // Resolve workflow_id if workflow reference is provided
-        // Supports both file path format ("../workflows/trading.jgflow") and slug format ("trading")
+        // Supports both file path format ("../workflows/trading.jg") and slug format ("trading")
         let workflow_id = if let Some(workflow_ref) = &agent.workflow {
-            let slug = if workflow_ref.ends_with(".jgflow")
+            let slug = if workflow_ref.ends_with(".jg")
+                || workflow_ref.ends_with(".jgflow")
                 || workflow_ref.contains('/')
                 || workflow_ref.contains('\\')
             {
@@ -574,7 +584,7 @@ impl Jug0Client {
                     .get("definition")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                (definition.to_string(), "jgflow")
+                (definition.to_string(), "jg")
             }
             _ => unreachable!(),
         };
@@ -985,33 +995,46 @@ impl JuglansRuntime for Jug0Client {
                             .to_string();
                         let mut results = Vec::new();
 
+                        // Execute all tool calls concurrently
+                        let mut tool_tasks = Vec::new();
                         for tool in &tools {
                             let name = tool["name"]
                                 .as_str()
                                 .or_else(|| tool.pointer("/function/name").and_then(|v| v.as_str()))
-                                .unwrap_or("unknown");
+                                .unwrap_or("unknown")
+                                .to_string();
                             let args = tool["arguments"]
                                 .as_str()
                                 .or_else(|| {
                                     tool.pointer("/function/arguments").and_then(|v| v.as_str())
                                 })
-                                .unwrap_or("{}");
+                                .unwrap_or("{}")
+                                .to_string();
                             let tool_call_id = tool["id"].as_str().unwrap_or("").to_string();
+                            let handler_clone = handler.clone();
 
-                            info!("🔧 [Tool Handler] Executing: {}({:.80})", name, args);
-                            let content = match handler.handle_tool_call(name, args).await {
-                                Ok(r) => r,
-                                Err(e) => {
-                                    error!("🔧 [Tool Handler] {} failed: {}", name, e);
-                                    format!("Error: {}", e)
-                                }
-                            };
-                            info!(
-                                "🔧 [Tool Handler] {} → {:.80}",
-                                name,
-                                content.replace('\n', " ")
-                            );
-                            results.push(json!({"tool_call_id": tool_call_id, "content": content}));
+                            tool_tasks.push(tokio::spawn(async move {
+                                info!("🔧 [Tool Handler] Executing: {}({:.80})", name, args);
+                                let content =
+                                    match handler_clone.handle_tool_call(&name, &args).await {
+                                        Ok(r) => r,
+                                        Err(e) => {
+                                            error!("🔧 [Tool Handler] {} failed: {}", name, e);
+                                            format!("Error: {}", e)
+                                        }
+                                    };
+                                info!(
+                                    "🔧 [Tool Handler] {} → {:.80}",
+                                    name,
+                                    content.replace('\n', " ")
+                                );
+                                json!({"tool_call_id": tool_call_id, "content": content})
+                            }));
+                        }
+                        for task in tool_tasks {
+                            if let Ok(result) = task.await {
+                                results.push(result);
+                            }
                         }
 
                         // POST /api/chat/tool-result → jug0 channel 接收 → SSE 流恢复
@@ -1080,8 +1103,8 @@ impl JuglansRuntime for Jug0Client {
 
         if !tool_calls.is_empty() {
             Ok(ChatOutput::ToolCalls {
-                calls: tool_calls,
-                chat_id: final_id,
+                _calls: tool_calls,
+                _chat_id: final_id,
             })
         } else {
             Ok(ChatOutput::Final {

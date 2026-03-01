@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
-use tracing::{debug, info};
+use tracing::debug;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct AccountConfig {
@@ -174,6 +174,22 @@ fn default_feishu_base_url() -> String {
     "https://open.feishu.cn".to_string()
 }
 
+// Package Registry 配置
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct RegistryConfig {
+    /// Registry URL for client commands (default: https://jgr.juglans.ai)
+    #[serde(default = "default_registry_url")]
+    pub url: String,
+    /// Server port when running `juglans registry` (optional, CLI arg takes precedence)
+    pub port: Option<u16>,
+    /// Server data directory (optional, CLI arg takes precedence)
+    pub data_dir: Option<String>,
+}
+
+fn default_registry_url() -> String {
+    "https://jgr.juglans.ai".to_string()
+}
+
 fn default_server_host() -> String {
     "127.0.0.1".to_string()
 }
@@ -213,6 +229,9 @@ pub struct JuglansConfig {
     // 路径别名配置
     #[serde(default)]
     pub paths: PathsConfig,
+
+    // Package Registry 配置
+    pub registry: Option<RegistryConfig>,
 }
 
 fn default_jug0_config() -> Jug0Config {
@@ -263,6 +282,7 @@ impl JuglansConfig {
                 limits: RuntimeLimits::default(),
                 bot: None,
                 paths: PathsConfig::default(),
+                registry: None,
             });
         }
 

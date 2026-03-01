@@ -42,12 +42,12 @@ impl ToolRegistry {
     }
 
     /// Check if a tool resource exists
-    pub fn contains(&self, slug: &str) -> bool {
+    pub fn _contains(&self, slug: &str) -> bool {
         self.tools.contains_key(slug)
     }
 
     /// Get all registered tool slugs
-    pub fn list_slugs(&self) -> Vec<String> {
+    pub fn _list_slugs(&self) -> Vec<String> {
         self.tools.keys().cloned().collect()
     }
 
@@ -115,7 +115,7 @@ impl ToolRegistry {
     }
 
     /// Clear all registered tools
-    pub fn clear(&mut self) {
+    pub fn _clear(&mut self) {
         self.tools.clear();
     }
 }
@@ -147,7 +147,7 @@ mod tests {
 
         registry.register(tool.clone());
 
-        assert!(registry.contains("web-tools"));
+        assert!(registry._contains("web-tools"));
         assert_eq!(registry.get("web-tools").unwrap().slug, "web-tools");
         assert_eq!(registry.count(), 1);
     }

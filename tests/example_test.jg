@@ -1,0 +1,18 @@
+[_test_config]: config(budget=1.0)
+
+[_test_setup]: set_context(greeting="Hello, test_user!")
+
+[_test_ctx_contains]: {
+  set_context(msg="Hello, world!")
+  assert(ctx_contains="Hello", ctx_path="msg")
+}
+
+[_test_ctx_not_found]: {
+  set_context(msg="Hello, world!")
+  assert(ctx_contains="NOTFOUND", ctx_path="msg")
+}
+
+[_test_tool_trace]: {
+  set_context(status="ok")
+  assert(tool_called="set_context")
+}

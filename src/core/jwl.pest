@@ -13,8 +13,8 @@ null = { "null" }
 number = @{ "-"? ~ ("0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*) ~ ("." ~ ASCII_DIGIT*)? }
 // 带引号的字符串定义，支持转义
 string = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
-// 标准标识符定义：字母开头，后跟字母数字或下划线
-identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+// 标准标识符定义：字母或下划线开头，后跟字母数字或下划线
+identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 
 // 支持命名空间的复合标识符 (例如：System.log, McpServer.tool)
 scoped_identifier = @{ identifier ~ ("." ~ identifier)* }
@@ -39,7 +39,7 @@ value = _{ json_object | json_array | string | number | boolean | null }
 // - flows: 子工作流导入映射（用于跨工作流图合并）
 // - prompts/agents/tools: 本地资源导入
 // - python: Python 模块导入（支持系统模块、.py 文件、glob 模式）
-meta_key = { "slug" | "name" | "version" | "author" | "description" | "entry" | "exit" | "libs" | "flows" | "prompts" | "agents" | "tools" | "python" }
+meta_key = { "slug" | "name" | "version" | "source" | "author" | "description" | "entry" | "exit" | "libs" | "flows" | "prompts" | "agents" | "tools" | "python" }
 meta_list_item = { string | identifier }
 meta_val_list = { "[" ~ (meta_list_item ~ ("," ~ meta_list_item)*)? ~ ","? ~ "]" }
 // 【新增】对象映射值，用于 flows: { alias: "path" } 格式
@@ -82,15 +82,23 @@ task_def = { scoped_identifier ~ "(" ~ (param_pair ~ ("," ~ param_pair)*)? ~ ")"
 condition_expr = @{ (!")" ~ ANY)* }
 while_def = { "while" ~ "(" ~ condition_expr ~ ")" ~ block_body }
 
-// 集合遍历语法：foreach($item in $list)
-foreach_def = { "foreach" ~ "(" ~ variable_ref ~ "in" ~ variable_ref ~ ")" ~ block_body }
+// 集合遍历语法：foreach($item in $list) 或 foreach parallel($item in $list)
+foreach_mode = { "parallel" }
+foreach_def = { "foreach" ~ foreach_mode? ~ "(" ~ variable_ref ~ "in" ~ variable_ref ~ ")" ~ block_body }
 
 // 逻辑块定义，允许在其中定义局部的节点和连接
 block_body = { "{" ~ (node_def | edge_def)* ~ "}" }
 
+// 【新增】函数节点参数列表：[name(a, b)]: ...
+func_params = { "(" ~ (identifier ~ ("," ~ identifier)*)? ~ ")" }
+// 【新增】函数体：{ step1; step2 } 或 { step1 \n step2 }，至少一个步骤
+func_step = { task_def }
+func_body = { "{" ~ func_step ~ (";"? ~ func_step)* ~ ";"? ~ "}" }
+
 // 节点内容：支持循环、遍历、任务调用或纯 JSON/字符串
 node_content = _{ while_def | foreach_def | task_def | json_object | string }
-node_def = { node_id ~ ":" ~ node_content }
+// 节点定义：支持可选的函数参数 [name(params)] 和函数体 { ... }
+node_def = { "[" ~ identifier ~ func_params? ~ "]" ~ ":" ~ (func_body | node_content) }
 
 // --- 边定义 (Edges / Connections) ---
 // 条件分支语法：[A] if ctx.var == 1 -> [B]

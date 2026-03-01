@@ -1,0 +1,8 @@
+libs: { col: "../lib.jg" }
+
+[step1]: col.compact(list=[1, null, 2, "", 3, false])
+[step2]: col.mean(list=[10, 20, 30])
+[step3]: col.pluck(list=[{"name": "Alice", "age": 30}, {"name": "Bob", "age": 25}], key="name")
+[step4]: col.take(list=[1, 2, 3, 4, 5], n=3)
+
+[step1] -> [step2] -> [step3] -> [step4]

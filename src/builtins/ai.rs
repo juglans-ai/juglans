@@ -7,9 +7,10 @@ use regex::Regex;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::core::context::WorkflowContext;
+use crate::core::graph::WorkflowGraph;
 use crate::core::prompt_parser::PromptParser;
 use crate::services::agent_loader::AgentRegistry;
 use crate::services::interface::{ChatRequest, ChatToolHandler, JuglansRuntime};
@@ -134,7 +135,7 @@ impl Chat {
     }
 
     /// 尝试在 BuiltinRegistry 中执行 tool，返回 None 表示未找到
-    async fn try_execute_builtin(
+    async fn _try_execute_builtin(
         &self,
         tool_name: &str,
         args_str: &str,
@@ -144,10 +145,7 @@ impl Chat {
         let registry_strong = weak_registry.upgrade()?;
         let tool_instance = registry_strong.get(tool_name)?;
 
-        let args_map: HashMap<String, String> = match serde_json::from_str(args_str) {
-            Ok(map) => map,
-            Err(_) => HashMap::new(),
-        };
+        let args_map: HashMap<String, String> = serde_json::from_str(args_str).unwrap_or_default();
 
         info!("  🔧 [Builtin Tool] Executing: {} ...", tool_name);
 
@@ -176,7 +174,7 @@ impl Chat {
     }
 
     /// 尝试通过 Executor → MCP 执行 tool，返回 None 表示未找到
-    async fn try_execute_mcp(&self, tool_name: &str, args_str: &str) -> Option<String> {
+    async fn _try_execute_mcp(&self, tool_name: &str, args_str: &str) -> Option<String> {
         let weak_registry = self.builtin_registry.as_ref()?;
         let registry_strong = weak_registry.upgrade()?;
         let executor = registry_strong.get_executor()?;
@@ -191,16 +189,16 @@ impl Chat {
     }
 
     /// 兼容旧调用：依次尝试 builtin → MCP，都失败则返回错误信息
-    async fn execute_local_tool(
+    async fn _execute_local_tool(
         &self,
         tool_name: &str,
         args_str: &str,
         ctx: &WorkflowContext,
     ) -> String {
-        if let Some(result) = self.try_execute_builtin(tool_name, args_str, ctx).await {
+        if let Some(result) = self._try_execute_builtin(tool_name, args_str, ctx).await {
             return result;
         }
-        if let Some(result) = self.try_execute_mcp(tool_name, args_str).await {
+        if let Some(result) = self._try_execute_mcp(tool_name, args_str).await {
             return result;
         }
         format!(
@@ -215,11 +213,40 @@ impl Chat {
 struct WorkflowToolHandler {
     builtin_registry: Option<Weak<super::BuiltinRegistry>>,
     context: WorkflowContext,
+    stream_tool_events: bool,
 }
 
 #[async_trait]
 impl ChatToolHandler for WorkflowToolHandler {
     async fn handle_tool_call(&self, tool_name: &str, arguments_json: &str) -> Result<String> {
+        // 【新增】emit tool_start
+        if self.stream_tool_events {
+            let params: HashMap<String, String> =
+                serde_json::from_str(arguments_json).unwrap_or_default();
+            self.context.emit_tool_start("chat", tool_name, &params);
+        }
+
+        let result = self.dispatch_tool_call(tool_name, arguments_json).await;
+
+        // 【新增】emit tool_complete
+        if self.stream_tool_events {
+            match &result {
+                Ok(s) => self
+                    .context
+                    .emit_tool_complete("chat", tool_name, &Ok(Some(json!(s)))),
+                Err(e) => {
+                    self.context
+                        .emit_tool_complete("chat", tool_name, &Err(anyhow!("{}", e)))
+                }
+            }
+        }
+
+        result
+    }
+}
+
+impl WorkflowToolHandler {
+    async fn dispatch_tool_call(&self, tool_name: &str, arguments_json: &str) -> Result<String> {
         // 1. 尝试 builtin tool
         if let Some(weak) = &self.builtin_registry {
             if let Some(registry) = weak.upgrade() {
@@ -297,11 +324,40 @@ struct OnToolCallHandler {
     context: WorkflowContext,
     workflow_path: String,
     base_dir: std::path::PathBuf,
+    stream_tool_events: bool,
 }
 
 #[async_trait]
 impl ChatToolHandler for OnToolCallHandler {
     async fn handle_tool_call(&self, tool_name: &str, arguments_json: &str) -> Result<String> {
+        // 【新增】emit tool_start
+        if self.stream_tool_events {
+            let params: HashMap<String, String> =
+                serde_json::from_str(arguments_json).unwrap_or_default();
+            self.context.emit_tool_start("chat", tool_name, &params);
+        }
+
+        let result = self.dispatch_tool_call(tool_name, arguments_json).await;
+
+        // 【新增】emit tool_complete
+        if self.stream_tool_events {
+            match &result {
+                Ok(s) => self
+                    .context
+                    .emit_tool_complete("chat", tool_name, &Ok(Some(json!(s)))),
+                Err(e) => {
+                    self.context
+                        .emit_tool_complete("chat", tool_name, &Err(anyhow!("{}", e)))
+                }
+            }
+        }
+
+        result
+    }
+}
+
+impl OnToolCallHandler {
+    async fn dispatch_tool_call(&self, tool_name: &str, arguments_json: &str) -> Result<String> {
         // 1. 尝试 builtin tool
         if let Some(weak) = &self.builtin_registry {
             if let Some(registry) = weak.upgrade() {
@@ -374,10 +430,147 @@ impl ChatToolHandler for OnToolCallHandler {
     }
 }
 
+/// Tool call handler that routes unresolved tool calls to a node in the same workflow.
+/// Used with on_tool=[node_name] parameter in chat().
+struct OnToolNodeHandler {
+    builtin_registry: Option<Weak<super::BuiltinRegistry>>,
+    context: WorkflowContext,
+    node_name: String,
+    workflow: Arc<WorkflowGraph>,
+    stream_tool_events: bool,
+}
+
+#[async_trait]
+impl ChatToolHandler for OnToolNodeHandler {
+    async fn handle_tool_call(&self, tool_name: &str, arguments_json: &str) -> Result<String> {
+        // 【新增】emit tool_start
+        if self.stream_tool_events {
+            let params: HashMap<String, String> =
+                serde_json::from_str(arguments_json).unwrap_or_default();
+            self.context.emit_tool_start("chat", tool_name, &params);
+        }
+
+        let result = self.dispatch_tool_call(tool_name, arguments_json).await;
+
+        // 【新增】emit tool_complete
+        if self.stream_tool_events {
+            match &result {
+                Ok(s) => self
+                    .context
+                    .emit_tool_complete("chat", tool_name, &Ok(Some(json!(s)))),
+                Err(e) => {
+                    self.context
+                        .emit_tool_complete("chat", tool_name, &Err(anyhow!("{}", e)))
+                }
+            }
+        }
+
+        result
+    }
+}
+
+impl OnToolNodeHandler {
+    async fn dispatch_tool_call(&self, tool_name: &str, arguments_json: &str) -> Result<String> {
+        // 1. 尝试 builtin tool
+        if let Some(weak) = &self.builtin_registry {
+            if let Some(registry) = weak.upgrade() {
+                if let Some(tool) = registry.get(tool_name) {
+                    let args_map: HashMap<String, String> =
+                        serde_json::from_str(arguments_json).unwrap_or_default();
+                    info!("  🔧 [Builtin Tool] Executing: {} ...", tool_name);
+                    match tool.execute(&args_map, &self.context).await {
+                        Ok(Some(val)) => {
+                            let s = match val {
+                                Value::String(s) => s,
+                                other => other.to_string(),
+                            };
+                            return Ok(s);
+                        }
+                        Ok(None) => return Ok("Tool executed successfully.".to_string()),
+                        Err(e) => return Ok(format!("Error during tool execution: {}", e)),
+                    }
+                }
+            }
+        }
+
+        // 2. 尝试 MCP tool
+        if let Some(weak) = &self.builtin_registry {
+            if let Some(registry) = weak.upgrade() {
+                if let Some(executor) = registry.get_executor() {
+                    if let Some(result) = executor.execute_mcp_tool(tool_name, arguments_json).await
+                    {
+                        return Ok(result);
+                    }
+                }
+            }
+        }
+
+        // 3. 路由到节点（on_tool=[node]）
+        info!(
+            "  🌉 [On Tool Node] Routing {} to node [{}]",
+            tool_name, self.node_name
+        );
+
+        let args_value: Value = serde_json::from_str(arguments_json).unwrap_or(json!({}));
+        self.context.set(
+            "input.tool_call".to_string(),
+            json!({
+                "name": tool_name,
+                "arguments": args_value
+            }),
+        )?;
+
+        // 获取 executor
+        let executor = self
+            .builtin_registry
+            .as_ref()
+            .and_then(|w| w.upgrade())
+            .and_then(|r| r.get_executor())
+            .ok_or_else(|| anyhow!("Executor not available for on_tool handler"))?;
+
+        // 检查目标是否是函数节点
+        if self.workflow.functions.contains_key(&self.node_name) {
+            let mut args = HashMap::new();
+            args.insert("name".to_string(), json!(tool_name));
+            args.insert("arguments".to_string(), args_value);
+            let result = executor
+                .execute_function(
+                    self.node_name.clone(),
+                    args,
+                    self.workflow.clone(),
+                    &self.context,
+                )
+                .await?;
+            return Ok(match result {
+                Some(Value::String(s)) => s,
+                Some(v) => v.to_string(),
+                None => "OK".to_string(),
+            });
+        }
+
+        // 目标是普通节点
+        let result = executor
+            .clone()
+            .run_single_node_by_name(&self.node_name, &self.workflow, &self.context)
+            .await?;
+        Ok(match result {
+            Some(Value::String(s)) => s,
+            Some(v) => v.to_string(),
+            None => "OK".to_string(),
+        })
+    }
+}
+
 // ==================== ExecuteWorkflow Tool ====================
 
 pub struct ExecuteWorkflow {
     builtin_registry: Option<Weak<super::BuiltinRegistry>>,
+}
+
+impl Default for ExecuteWorkflow {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ExecuteWorkflow {
@@ -481,7 +674,7 @@ impl Tool for Chat {
 
         let tools_json_str = params
             .get("tools")
-            .or_else(|| client_tools_from_ctx.as_ref())
+            .or(client_tools_from_ctx.as_ref())
             .or_else(|| {
                 // 如果 chat 没有指定 tools，尝试从 agent 获取默认 tools
                 self.agent_registry
@@ -491,9 +684,8 @@ impl Tool for Chat {
 
         let custom_tools_json_schema = if let Some(schema_raw) = tools_json_str {
             // 解析 tools：支持内联 JSON、单个引用(@slug)、多个引用([slugs])
-            let parsed: Vec<Value> = if schema_raw.starts_with('@') {
+            let parsed: Vec<Value> = if let Some(slug) = schema_raw.strip_prefix('@') {
                 // 单个引用：@web-tools
-                let slug = &schema_raw[1..];
                 debug!("Resolving tool reference: {}", slug);
 
                 // 从 BuiltinRegistry 获取 ToolRegistry
@@ -572,8 +764,19 @@ impl Tool for Chat {
             };
 
             if !parsed.is_empty() {
-                info!("🛠️ Attaching {} custom tools to the request.", parsed.len());
-                debug!("🛠️ Tools: {:?}", parsed);
+                let tool_names: Vec<&str> = parsed
+                    .iter()
+                    .filter_map(|t| {
+                        t.get("function")
+                            .and_then(|f| f.get("name"))
+                            .and_then(|n| n.as_str())
+                    })
+                    .collect();
+                info!(
+                    "🛠️ Attaching {} custom tools to the request: {:?}",
+                    parsed.len(),
+                    tool_names
+                );
                 Some(parsed)
             } else {
                 None
@@ -586,13 +789,13 @@ impl Tool for Chat {
 
         let history_param = params.get("history").map(|s| s.as_str());
 
-        let mut chat_messages_buffer = vec![json!({
+        let chat_messages_buffer = vec![json!({
             "type": "text",
             "role": "user",
             "content": user_message_body
         })];
 
-        let mut active_session_id = if let Some(explicit_id) = params.get("chat_id") {
+        let active_session_id = if let Some(explicit_id) = params.get("chat_id") {
             if explicit_id.starts_with("[Missing:") || explicit_id.trim().is_empty() {
                 debug!("Explicit chat_id parameter invalid or empty, treating as None.");
                 None
@@ -723,7 +926,7 @@ impl Tool for Chat {
                 }
             }
 
-            let mut resolved_sys_prompt = String::new();
+            let resolved_sys_prompt;
             if let Some(override_val) = system_prompt_manual_override {
                 resolved_sys_prompt = override_val;
             } else if let Some(slug_ref) = &local_res.system_prompt_slug {
@@ -780,28 +983,54 @@ impl Tool for Chat {
         let meta_sender = context.get_meta_sender_adapter();
         let effective_meta_sender = if should_stream { meta_sender } else { None };
 
+        // 读取 stream_tool_events 参数
+        let stream_tool_events = params
+            .get("stream_tool_events")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+
         // 创建工具执行回调 — tool_call 在 SSE 流内处理，无需 tool loop
-        // 如果指定了 on_tool_call，未解析的 tool call 会路由到指定 workflow
-        let handler: Arc<dyn ChatToolHandler> =
-            if let Some(on_tool_call_path) = params.get("on_tool_call") {
-                let base_dir =
-                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                info!(
-                    "│   on_tool_call: {} (unresolved tools → workflow)",
-                    on_tool_call_path
-                );
-                Arc::new(OnToolCallHandler {
-                    builtin_registry: self.builtin_registry.clone(),
-                    context: context.clone(),
-                    workflow_path: on_tool_call_path.clone(),
-                    base_dir,
-                })
-            } else {
-                Arc::new(WorkflowToolHandler {
-                    builtin_registry: self.builtin_registry.clone(),
-                    context: context.clone(),
-                })
-            };
+        // on_tool=[node]    → 路由到当前 workflow 中的节点
+        // on_tool_call=path → 路由到外部 workflow 文件
+        let handler: Arc<dyn ChatToolHandler> = if let Some(on_tool_ref) = params.get("on_tool") {
+            // on_tool=[node_name] — 提取节点名（去掉方括号）
+            let node_name = on_tool_ref
+                .trim()
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .to_string();
+            let workflow = context.get_current_workflow().ok_or_else(|| {
+                anyhow!("on_tool=[{}]: No current workflow in context", node_name)
+            })?;
+            info!("│   on_tool: [{}] (unresolved tools → node)", node_name);
+            Arc::new(OnToolNodeHandler {
+                builtin_registry: self.builtin_registry.clone(),
+                context: context.clone(),
+                node_name,
+                workflow,
+                stream_tool_events,
+            })
+        } else if let Some(on_tool_call_path) = params.get("on_tool_call") {
+            let base_dir =
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            info!(
+                "│   on_tool_call: {} (unresolved tools → workflow)",
+                on_tool_call_path
+            );
+            Arc::new(OnToolCallHandler {
+                builtin_registry: self.builtin_registry.clone(),
+                context: context.clone(),
+                workflow_path: on_tool_call_path.clone(),
+                base_dir,
+                stream_tool_events,
+            })
+        } else {
+            Arc::new(WorkflowToolHandler {
+                builtin_registry: self.builtin_registry.clone(),
+                context: context.clone(),
+                stream_tool_events,
+            })
+        };
 
         let api_result = self
             .runtime

@@ -19,7 +19,13 @@ pub mod templates;
 pub mod ui;
 
 #[cfg(not(target_arch = "wasm32"))]
+pub mod registry;
+
+#[cfg(not(target_arch = "wasm32"))]
 pub mod runtime;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod testing;
 
 // ============================================================================
 // 公共导出 (Public Exports)
@@ -54,7 +60,7 @@ pub use services::config::JuglansConfig;
 pub use services::mcp::McpClient;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use runtime::{PythonRuntime, PythonWorkerPool};
+pub use runtime::python::{PythonRuntime, PythonWorkerPool};
 
 // ============================================================================
 // WASM 专用接口 (仅在 wasm32 目标时编译)

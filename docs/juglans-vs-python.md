@@ -50,7 +50,7 @@ except Exception as e:
 | LLM 调用 | openai SDK / langchain | `chat()` builtin |
 | Prompt 模板 | Jinja2 / langchain prompt | `.jgprompt` 原生文件类型 |
 | Agent 定义 | CrewAI / AutoGen / 自写框架 | `.jgagent` 原生文件类型 |
-| 工作流编排 | Airflow / Prefect / 自写 DAG | `.jgflow` DAG 原生语法 |
+| 工作流编排 | Airflow / Prefect / 自写 DAG | `.jg` DAG 原生语法 |
 | 工具调用 | Function calling + 手动路由 | ToolRegistry 自动解析 |
 | MCP 协议 | mcp-python SDK | 原生支持 |
 | Bot 适配 | python-telegram-bot + 自写 | `juglans bot telegram` 一条命令 |
@@ -107,7 +107,7 @@ Juglans 需要 **3 个文件 + 0 行代码**。
 ### 2. 文件即一切（Files as Source of Truth）
 
 ```
-.jgflow   → 工作流定义（DAG）
+.jg   → 工作流定义（DAG）
 .jgprompt → Prompt 模板
 .jgagent  → Agent 配置
 ```

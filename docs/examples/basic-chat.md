@@ -4,7 +4,7 @@
 
 ## 工作流文件
 
-### chat.jgflow
+### chat.jg
 
 ```yaml
 name: "Basic Chat"
@@ -23,7 +23,7 @@ exit: [respond]
 [chat] -> [respond]
 ```
 
-### agents/assistant.jgagent
+### src/agents/assistant.jgagent
 
 ```yaml
 name: "assistant"
@@ -41,18 +41,18 @@ system_prompt: |
 
 ```bash
 # 基本运行
-juglans chat.jgflow --input '{"message": "Hello!"}'
+juglans chat.jg --input '{"message": "Hello!"}'
 
 # 输出
 # > Hello! How can I help you today?
 
 # 更复杂的问题
-juglans chat.jgflow --input '{"message": "Explain quantum computing in simple terms"}'
+juglans chat.jg --input '{"message": "Explain quantum computing in simple terms"}'
 ```
 
 ## 变体：带系统提示
 
-### chat-with-persona.jgflow
+### chat-with-persona.jg
 
 ```yaml
 name: "Chat with Persona"
@@ -72,7 +72,7 @@ exit: [respond]
 ```
 
 ```bash
-juglans chat-with-persona.jgflow --input '{
+juglans chat-with-persona.jg --input '{
   "message": "Tell me a joke",
   "persona": "You are a pirate. Always speak like a pirate."
 }'
@@ -83,7 +83,7 @@ juglans chat-with-persona.jgflow --input '{
 
 ## 变体：带格式化输出
 
-### chat-json.jgflow
+### chat-json.jg
 
 ```yaml
 name: "Chat with JSON Output"
@@ -104,7 +104,7 @@ exit: [result]
 [analyze] -> [result]
 ```
 
-### agents/analyzer.jgagent
+### src/agents/analyzer.jgagent
 
 ```yaml
 name: "analyzer"
@@ -118,7 +118,7 @@ system_prompt: |
 ```
 
 ```bash
-juglans chat-json.jgflow --input '{
+juglans chat-json.jg --input '{
   "text": "I love this product! The quality is amazing and shipping was fast."
 }'
 
@@ -132,7 +132,7 @@ juglans chat-json.jgflow --input '{
 
 ## 变体：多轮对话
 
-### multi-turn.jgflow
+### multi-turn.jg
 
 ```yaml
 name: "Multi-turn Chat"
@@ -167,13 +167,13 @@ exit: [save_and_respond]
 
 ```bash
 # 第一轮
-juglans multi-turn.jgflow --input '{
+juglans multi-turn.jg --input '{
   "message": "My name is Alice",
   "history": []
 }'
 
 # 第二轮（带历史）
-juglans multi-turn.jgflow --input '{
+juglans multi-turn.jg --input '{
   "message": "What is my name?",
   "history": [
     {"role": "user", "content": "My name is Alice"},
@@ -188,10 +188,10 @@ juglans multi-turn.jgflow --input '{
 
 ```
 basic-chat/
-├── chat.jgflow
-├── chat-with-persona.jgflow
-├── chat-json.jgflow
-├── multi-turn.jgflow
+├── chat.jg
+├── chat-with-persona.jg
+├── chat-json.jg
+├── multi-turn.jg
 └── agents/
     ├── assistant.jgagent
     └── analyzer.jgagent

@@ -192,7 +192,7 @@ impl Drop for PythonWorker {
 pub struct PythonWorkerPool {
     workers: Vec<Arc<Mutex<PythonWorker>>>,
     next_worker: AtomicU64,
-    max_workers: usize,
+    _max_workers: usize,
 }
 
 impl PythonWorkerPool {
@@ -207,7 +207,7 @@ impl PythonWorkerPool {
         Ok(Self {
             workers,
             next_worker: AtomicU64::new(0),
-            max_workers,
+            _max_workers: max_workers,
         })
     }
 
@@ -242,7 +242,7 @@ impl PythonWorkerPool {
     }
 
     /// Get the number of active workers
-    pub fn worker_count(&self) -> usize {
+    pub fn _worker_count(&self) -> usize {
         self.workers.len()
     }
 }

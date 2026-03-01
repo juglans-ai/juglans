@@ -336,10 +336,10 @@ Output:
 
 ```bash
 # 使用默认值渲染
-juglans prompts/my-prompt.jgprompt
+juglans src/prompts/my-prompt.jgprompt
 
 # 传入自定义输入
-juglans prompts/my-prompt.jgprompt --input '{
+juglans src/prompts/my-prompt.jgprompt --input '{
   "name": "Test User",
   "score": 95
 }'
@@ -349,5 +349,5 @@ juglans prompts/my-prompt.jgprompt --input '{
 
 ```bash
 # 只输出渲染后的文本，不执行
-juglans prompts/my-prompt.jgprompt --dry-run
+juglans src/prompts/my-prompt.jgprompt --dry-run
 ```

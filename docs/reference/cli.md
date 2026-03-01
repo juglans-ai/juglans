@@ -29,7 +29,7 @@ juglans <COMMAND> [OPTIONS]
 ### 执行工作流
 
 ```bash
-juglans path/to/workflow.jgflow [OPTIONS]
+juglans path/to/workflow.jg [OPTIONS]
 ```
 
 **选项：**
@@ -47,22 +47,22 @@ juglans path/to/workflow.jgflow [OPTIONS]
 
 ```bash
 # 基本执行
-juglans workflows/main.jgflow
+juglans src/main.jg
 
 # 传入输入
-juglans workflows/main.jgflow --input '{"query": "Hello"}'
+juglans src/main.jg --input '{"query": "Hello"}'
 
 # 从文件读取输入
-juglans workflows/main.jgflow --input-file input.json
+juglans src/main.jg --input-file input.json
 
 # 详细模式
-juglans workflows/main.jgflow -v
+juglans src/main.jg -v
 
 # 仅验证
-juglans workflows/main.jgflow --dry-run
+juglans src/main.jg --dry-run
 
 # JSON 格式输出（便于程序化处理）
-juglans workflows/main.jgflow --output-format json
+juglans src/main.jg --output-format json
 ```
 
 **JSON 输出格式：**
@@ -103,13 +103,13 @@ juglans path/to/agent.jgagent [OPTIONS]
 
 ```bash
 # 交互对话
-juglans agents/assistant.jgagent
+juglans src/agents/assistant.jgagent
 
 # 发送单条消息
-juglans agents/assistant.jgagent --message "What is Rust?"
+juglans src/agents/assistant.jgagent --message "What is Rust?"
 
 # 查看配置
-juglans agents/assistant.jgagent --info
+juglans src/agents/assistant.jgagent --info
 ```
 
 **交互命令：**
@@ -139,13 +139,13 @@ juglans path/to/prompt.jgprompt [OPTIONS]
 
 ```bash
 # 使用默认值渲染
-juglans prompts/greeting.jgprompt
+juglans src/prompts/greeting.jgprompt
 
 # 传入变量
-juglans prompts/greeting.jgprompt --input '{"name": "Alice"}'
+juglans src/prompts/greeting.jgprompt --input '{"name": "Alice"}'
 
 # 输出到文件
-juglans prompts/greeting.jgprompt --output rendered.txt
+juglans src/prompts/greeting.jgprompt --output rendered.txt
 ```
 
 ---
@@ -179,12 +179,16 @@ juglans init my-project --template advanced
 ```
 my-project/
 ├── juglans.toml
-├── prompts/
-│   └── example.jgprompt
-├── agents/
-│   └── example.jgagent
-└── workflows/
-    └── example.jgflow
+└── src/
+    ├── example.jg
+    ├── workflows/
+    │   └── example.jgflow
+    ├── agents/
+    │   └── example.jgagent
+    ├── pure-agents/
+    ├── prompts/
+    │   └── example.jgprompt
+    └── tools/
 ```
 
 ---
@@ -244,12 +248,12 @@ juglans apply [PATHS...] [OPTIONS]
 
 ```bash
 # 推送单个文件
-juglans apply prompts/my-prompt.jgprompt
-juglans apply agents/my-agent.jgagent
-juglans apply workflows/my-flow.jgflow
+juglans apply src/prompts/my-prompt.jgprompt
+juglans apply src/agents/my-agent.jgagent
+juglans apply src/workflows/my-flow.jgflow
 
 # 强制覆盖
-juglans apply prompts/my-prompt.jgprompt --force
+juglans apply src/prompts/my-prompt.jgprompt --force
 ```
 
 #### 批量操作
@@ -260,10 +264,10 @@ juglans apply prompts/my-prompt.jgprompt --force
 
 ```toml
 [workspace]
-agents = ["ops/agents/**/*.jgagent"]
-workflows = ["ops/workflows/**/*.jgflow"]
-prompts = ["ops/prompts/**/*.jgprompt"]
-tools = ["ops/tools/**/*.json"]
+agents = ["src/agents/**/*.jgagent", "src/pure-agents/**/*.jgagent"]
+workflows = ["src/**/*.jg", "src/workflows/**/*.jgflow"]
+prompts = ["src/prompts/**/*.jgprompt"]
+tools = ["src/tools/**/*.json"]
 exclude = ["**/*.backup", "**/test_*"]
 ```
 
@@ -295,7 +299,7 @@ juglans apply -t agent
 
 📤 Applying resources...
 
-  ✅ workflow: trading-assistant.jgflow - Applied
+  ✅ workflow: trading-assistant.jg - Applied
   ✅ agent: trader.jgagent - Applied
   ⚠️  agent: assistant.jgagent - Skipped (exists, use --force)
   ✅ prompt: greeting.jgprompt - Applied
@@ -310,26 +314,26 @@ juglans apply -t agent
 
 ```bash
 # Apply 整个目录
-juglans apply ops/workflows/
+juglans apply src/workflows/
 
 # 递归 apply 所有子目录
-juglans apply ops/ -r
+juglans apply src/ -r
 
 # Apply 多个目录
-juglans apply ops/agents/ ops/prompts/
+juglans apply src/agents/ src/prompts/
 
 # Apply 特定类型
-juglans apply ops/ -r --type workflow
+juglans apply src/ -r --type workflow
 ```
 
 **Glob 模式：**
 
 ```bash
 # Apply 所有 workflow
-juglans apply "ops/**/*.jgflow"
+juglans apply "src/**/*.jg"
 
 # Apply 特定前缀的文件
-juglans apply "ops/agents/prod_*.jgagent"
+juglans apply "src/agents/prod_*.jgagent"
 ```
 
 **Dry-run 模式：**
@@ -339,13 +343,13 @@ juglans apply "ops/agents/prod_*.jgagent"
 juglans apply --dry-run
 
 # 预览特定目录
-juglans apply ops/workflows/ --dry-run
+juglans apply src/workflows/ --dry-run
 ```
 
 输出：
 
 ```
-📦 Scanning workspace: ops/
+📦 Scanning workspace: src/
 
 📂 Found resources:
   📄 3 workflow(s)
@@ -353,11 +357,11 @@ juglans apply ops/workflows/ --dry-run
 
 🔍 Dry run mode - preview only:
 
-  ✓ ops/workflows/trading.jgflow
-  ✓ ops/workflows/analysis.jgflow
-  ✓ ops/workflows/pipeline.jgflow
-  ✓ ops/agents/trader.jgagent
-  ✓ ops/agents/assistant.jgagent
+  ✓ src/trading.jg
+  ✓ src/analysis.jg
+  ✓ src/pipeline.jg
+  ✓ src/agents/trader.jgagent
+  ✓ src/agents/assistant.jgagent
 
 📊 Total: 8 file(s)
 
@@ -388,7 +392,7 @@ juglans pull <SLUG> [OPTIONS]
 juglans pull my-prompt --type prompt
 
 # 拉取到指定目录
-juglans pull my-agent --type agent --output ./agents/
+juglans pull my-agent --type agent --output ./src/agents/
 ```
 
 ---
@@ -458,7 +462,7 @@ No resources found.
 
 ### check - 验证文件语法
 
-验证 `.jgflow`、`.jgagent`、`.jgprompt` 文件的语法正确性（类似 `cargo check`）。
+验证 `.jg`、`.jgagent`、`.jgprompt` 文件的语法正确性（类似 `cargo check`）。
 
 ```bash
 juglans check [PATH] [OPTIONS]
@@ -484,10 +488,10 @@ juglans check [PATH] [OPTIONS]
 juglans check
 
 # 检查特定目录
-juglans check ./workflows/
+juglans check ./src/
 
 # 检查单个文件
-juglans check workflow.jgflow
+juglans check workflow.jg
 
 # 显示所有警告
 juglans check --all
@@ -501,10 +505,10 @@ juglans check --format json
 ```
     Checking juglans files in "."
 
-    error[workflow]: workflows/main.jgflow (1 error(s), 0 warning(s))
+    error[workflow]: src/main.jg (1 error(s), 0 warning(s))
       --> [E001] Entry node 'start' not defined
 
-    warning[workflow]: workflows/test.jgflow (1 warning(s))
+    warning[workflow]: src/test.jg (1 warning(s))
       --> [W001] Unused node 'debug'
 
     Finished checking 3 workflow(s), 2 agent(s), 1 prompt(s) - 2 valid with warnings
@@ -527,7 +531,7 @@ error: could not validate 1 file(s) due to 1 previous error(s)
   },
   "results": [
     {
-      "file": "workflows/main.jgflow",
+      "file": "src/main.jg",
       "type": "workflow",
       "slug": "main",
       "valid": false,
@@ -664,10 +668,10 @@ Workspace:     ws_default (My Workspace)
 Members:       2 user(s)
 
 Resource Paths:
-  Agents:      ops/agents/**/*.jgagent
-  Workflows:   ops/workflows/**/*.jgflow
-  Prompts:     ops/prompts/**/*.jgprompt
-  Tools:       ops/tools/**/*.json
+  Agents:      src/agents/**/*.jgagent, src/pure-agents/**/*.jgagent
+  Workflows:   src/**/*.jg, src/workflows/**/*.jgflow
+  Prompts:     src/prompts/**/*.jgprompt
+  Tools:       src/tools/**/*.json
 
 Exclude:       **/*.backup, **/.draft, **/test_*
 
@@ -797,7 +801,7 @@ env = { ROOT_DIR = "/workspace" }
 ### 详细模式 (-v)
 
 ```
-[DEBUG] Loading workflow: main.jgflow
+[DEBUG] Loading workflow: main.jg
 [DEBUG] Parsed 5 nodes, 4 edges
 [INFO] [init] Starting...
 [DEBUG] [init] Output: null
@@ -810,7 +814,7 @@ env = { ROOT_DIR = "/workspace" }
 ### JSON 输出
 
 ```bash
-juglans workflow.jgflow --output-format json
+juglans workflow.jg --output-format json
 ```
 
 ```json
@@ -843,7 +847,7 @@ juglans workflow.jgflow --output-format json
 
 **Q: 找不到配置文件**
 ```bash
-juglans --config /path/to/juglans.toml workflow.jgflow
+juglans --config /path/to/juglans.toml workflow.jg
 ```
 
 **Q: API 连接失败**
@@ -852,7 +856,7 @@ juglans --config /path/to/juglans.toml workflow.jgflow
 curl http://localhost:3000/health
 
 # 查看详细日志
-JUGLANS_LOG_LEVEL=debug juglans workflow.jgflow
+JUGLANS_LOG_LEVEL=debug juglans workflow.jg
 ```
 
 **Q: MCP 工具不可用**
@@ -864,5 +868,5 @@ juglans install --force
 **Q: 内存不足**
 ```bash
 # 对于大型工作流，增加栈大小
-RUST_MIN_STACK=8388608 juglans workflow.jgflow
+RUST_MIN_STACK=8388608 juglans workflow.jg
 ```

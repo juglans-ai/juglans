@@ -232,7 +232,7 @@ skills:
 ```yaml
 slug: "workflow-agent"
 model: "gpt-4o"
-workflow: "./workflows/complex-task.jgflow"
+workflow: "../complex-task.jg"
 ```
 
 当用户与此 Agent 对话时，可以触发关联的工作流执行。
@@ -347,7 +347,7 @@ system_prompt: |
   2. Searching for information
   3. Synthesizing findings
   4. Providing cited conclusions
-workflow: "./workflows/research-pipeline.jgflow"
+workflow: "../research-pipeline.jg"
 mcp:
   - "web-search"
   - "document-reader"
@@ -386,13 +386,13 @@ mcp:
 直接与 Agent 对话：
 
 ```bash
-juglans agents/assistant.jgagent
+juglans src/agents/assistant.jgagent
 ```
 
 传入初始消息：
 
 ```bash
-juglans agents/assistant.jgagent --message "Hello, how are you?"
+juglans src/agents/assistant.jgagent --message "Hello, how are you?"
 ```
 
 ## 最佳实践
@@ -408,11 +408,11 @@ juglans agents/assistant.jgagent --message "Hello, how are you?"
 ### 查看 Agent 配置
 
 ```bash
-juglans agents/my-agent.jgagent --info
+juglans src/agents/my-agent.jgagent --info
 ```
 
 ### 详细日志
 
 ```bash
-juglans agents/my-agent.jgagent --verbose
+juglans src/agents/my-agent.jgagent --verbose
 ```

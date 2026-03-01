@@ -14,6 +14,8 @@ use petgraph::visit::EdgeRef;
 
 use crate::core::graph::{Action, Node, NodeType, SwitchCase, SwitchRoute, WorkflowGraph};
 use crate::core::parser::GraphParser;
+use crate::registry::cache::find_entry_in_dir;
+use crate::registry::package::{is_registry_import, parse_registry_import};
 
 lazy_static::lazy_static! {
     /// 匹配变量引用：$identifier.path.segments
@@ -39,6 +41,154 @@ pub fn expand_at_prefixes(patterns: &[String], at_base: Option<&Path>) -> Vec<St
         .iter()
         .map(|p| expand_at_prefix(p, at_base))
         .collect()
+}
+
+/// 解析 lib imports — 加载库文件，提取 function defs 并以命名空间前缀注册到父工作流
+///
+/// 与 flow imports 的区别：libs 只提取 functions，不合并 graph 节点/边。
+///
+/// 命名空间三级优先级（高 → 低）：
+/// 1. 对象形式的显式命名（parser 阶段确定，不在 lib_auto_namespaces 中）
+/// 2. 库文件内的 slug 字段（仅列表形式，即在 lib_auto_namespaces 中时）
+/// 3. 文件名 stem（列表形式的默认值，parser 阶段已存为 key）
+pub fn resolve_lib_imports(
+    workflow: &mut WorkflowGraph,
+    base_dir: &Path,
+    import_stack: &mut Vec<PathBuf>,
+    at_base: Option<&Path>,
+) -> Result<()> {
+    if workflow.lib_imports.is_empty() {
+        return Ok(());
+    }
+
+    let imports: Vec<(String, String)> = workflow.lib_imports.clone().into_iter().collect();
+    let auto_namespaces = workflow.lib_auto_namespaces.clone();
+
+    for (parser_namespace, rel_path) in imports {
+        // 【新增】Registry 包检测 — 非本地路径视为 registry 包
+        if is_registry_import(&rel_path) {
+            let (pkg_name, version_req) = parse_registry_import(&rel_path)?;
+
+            // 在项目根目录及向上查找 jg_modules/
+            let jg_modules_path = find_jg_modules_dir(base_dir).map(|d| d.join(&pkg_name));
+
+            let entry_path = if let Some(ref pkg_dir) = jg_modules_path {
+                if pkg_dir.exists() {
+                    // 已安装 → 读取 entry 文件
+                    find_entry_in_dir(pkg_dir)?
+                } else {
+                    // 未安装 → 尝试自动安装
+                    auto_install_package(&pkg_name, version_req.as_deref(), base_dir)?
+                }
+            } else {
+                // 无 jg_modules → 尝试自动安装
+                auto_install_package(&pkg_name, version_req.as_deref(), base_dir)?
+            };
+
+            // 解析库文件（与本地 lib 相同逻辑）
+            let canonical = entry_path.canonicalize().with_context(|| {
+                format!(
+                    "Lib import error: Cannot resolve registry package '{}' entry at {:?}",
+                    pkg_name, entry_path
+                )
+            })?;
+
+            if import_stack.contains(&canonical) {
+                return Err(anyhow!(
+                    "Circular lib import detected: '{}' ({:?})\nImport chain: {:?}",
+                    parser_namespace,
+                    canonical,
+                    import_stack
+                ));
+            }
+            import_stack.push(canonical.clone());
+
+            let content = std::fs::read_to_string(&canonical)
+                .with_context(|| format!("Lib import error: Cannot read '{:?}'", canonical))?;
+            let mut lib_graph = GraphParser::parse_lib(&content)
+                .with_context(|| format!("Lib import error: Failed to parse '{:?}'", canonical))?;
+
+            let lib_base_dir = canonical.parent().unwrap_or(Path::new("."));
+            resolve_lib_imports(&mut lib_graph, lib_base_dir, import_stack, at_base)?;
+
+            // Registry 包命名空间优先级：
+            // 1. 对象形式显式命名（parser_namespace 不在 auto_namespaces 中）
+            // 2. 库文件的 slug 字段
+            // 3. 包名（而非文件 stem）
+            let namespace = if !auto_namespaces.contains(&parser_namespace) {
+                parser_namespace.clone()
+            } else if !lib_graph.slug.is_empty() {
+                lib_graph.slug.clone()
+            } else {
+                pkg_name.clone()
+            };
+
+            for (func_name, func_def) in lib_graph.functions {
+                let namespaced = format!("{}.{}", namespace, func_name);
+                workflow.functions.insert(namespaced, func_def);
+            }
+
+            import_stack.pop();
+            continue;
+        }
+
+        // 本地文件路径解析（现有逻辑）
+        let expanded = expand_at_prefix(&rel_path, at_base);
+        let abs_path = if Path::new(&expanded).is_absolute() {
+            PathBuf::from(&expanded)
+        } else {
+            base_dir.join(&expanded)
+        };
+        let canonical = abs_path.canonicalize().with_context(|| {
+            format!(
+                "Lib import error: Cannot resolve path '{}' (base: {:?})",
+                rel_path, base_dir
+            )
+        })?;
+
+        // 2. 循环导入检测
+        if import_stack.contains(&canonical) {
+            return Err(anyhow!(
+                "Circular lib import detected: '{}' ({:?})\nImport chain: {:?}",
+                parser_namespace,
+                canonical,
+                import_stack
+            ));
+        }
+        import_stack.push(canonical.clone());
+
+        // 3. 解析库文件
+        let content = std::fs::read_to_string(&canonical)
+            .with_context(|| format!("Lib import error: Cannot read '{:?}'", canonical))?;
+        let mut lib_graph = GraphParser::parse_lib(&content)
+            .with_context(|| format!("Lib import error: Failed to parse '{:?}'", canonical))?;
+
+        // 4. 递归解析库自身的 lib imports
+        let lib_base_dir = canonical.parent().unwrap_or(Path::new("."));
+        resolve_lib_imports(&mut lib_graph, lib_base_dir, import_stack, at_base)?;
+
+        // 5. 确定最终命名空间（三级优先级）
+        let namespace = if !auto_namespaces.contains(&parser_namespace) {
+            // 对象形式显式命名 — 最高优先级
+            parser_namespace.clone()
+        } else if !lib_graph.slug.is_empty() {
+            // 列表形式 + 库文件有 slug — 中优先级
+            lib_graph.slug.clone()
+        } else {
+            // 列表形式 + 无 slug — 用文件名 stem（最低优先级）
+            parser_namespace.clone()
+        };
+
+        // 6. 提取 function defs，加命名空间前缀注册到父工作流
+        for (func_name, func_def) in lib_graph.functions {
+            let namespaced = format!("{}.{}", namespace, func_name);
+            workflow.functions.insert(namespaced, func_def);
+        }
+
+        import_stack.pop();
+    }
+
+    Ok(())
 }
 
 /// 解析 flow imports 并合并子图到父工作流
@@ -313,17 +463,23 @@ fn prefix_node_type(
                 body: Box::new(prefixed_body),
             }
         }
-        NodeType::Foreach { item, list, body } => {
+        NodeType::Foreach {
+            item,
+            list,
+            body,
+            parallel,
+        } => {
             let prefixed_list = prefix_variables(list, prefix, child_node_ids);
             let prefixed_body = prefix_subgraph_body(body, prefix, child_node_ids);
             NodeType::Foreach {
                 item: item.clone(),
                 list: prefixed_list,
                 body: Box::new(prefixed_body),
+                parallel: *parallel,
             }
         }
         NodeType::Literal(val) => NodeType::Literal(val.clone()),
-        NodeType::ExternalCall {
+        NodeType::_ExternalCall {
             call_path,
             args,
             kwargs,
@@ -336,7 +492,7 @@ fn prefix_node_type(
                 .iter()
                 .map(|(k, v)| (k.clone(), prefix_variables(v, prefix, child_node_ids)))
                 .collect();
-            NodeType::ExternalCall {
+            NodeType::_ExternalCall {
                 call_path: call_path.clone(),
                 args: prefixed_args,
                 kwargs: prefixed_kwargs,
@@ -367,6 +523,64 @@ fn prefix_subgraph_body(
         }
     }
     new_body
+}
+
+/// Find the jg_modules directory by searching from base_dir upward
+fn find_jg_modules_dir(start: &Path) -> Option<PathBuf> {
+    let mut dir = start.to_path_buf();
+    loop {
+        let candidate = dir.join("jg_modules");
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+        // Also check if jgpackage.toml exists here (project root)
+        if dir.join("jgpackage.toml").exists() {
+            return Some(candidate); // Return even if doesn't exist yet — installer will create it
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    // Fallback: create jg_modules in the start directory
+    Some(start.join("jg_modules"))
+}
+
+/// Auto-install a registry package using the registry client.
+/// This bridges from sync resolver code into async installer via tokio runtime.
+fn auto_install_package(
+    pkg_name: &str,
+    version_req: Option<&str>,
+    project_dir: &Path,
+) -> Result<PathBuf> {
+    tracing::info!("Auto-installing registry package '{}' ...", pkg_name);
+
+    // Load registry URL from config, or use default
+    let registry_url = crate::services::config::JuglansConfig::load()
+        .ok()
+        .and_then(|c| c.registry.map(|r| r.url))
+        .unwrap_or_else(|| "https://jgr.juglans.ai".to_string());
+
+    let installer = crate::registry::installer::PackageInstaller::with_defaults(&registry_url)
+        .with_context(|| "Failed to create package installer")?;
+
+    // Bridge into async: we're called from sync code, but the caller runs inside tokio
+    let handle = tokio::runtime::Handle::try_current().with_context(|| {
+        format!(
+            "Cannot auto-install package '{}': no async runtime available. \
+             Run 'juglans add {}' first, or ensure the workflow is run with 'juglans'.",
+            pkg_name, pkg_name
+        )
+    })?;
+
+    let name = pkg_name.to_string();
+    let ver = version_req.map(|s| s.to_string());
+    let proj = project_dir.to_path_buf();
+
+    let installed = handle
+        .block_on(async move { installer.install(&name, ver.as_deref(), &proj).await })
+        .with_context(|| format!("Failed to auto-install package '{}'", pkg_name))?;
+
+    Ok(installed.entry_path)
 }
 
 #[cfg(test)]
@@ -462,6 +676,148 @@ mod tests {
         assert_eq!(
             prefix_variables("$output + $ctx.x", "ns", &node_ids),
             "$output + $ctx.x"
+        );
+    }
+
+    #[test]
+    fn test_resolve_lib_imports_explicit_namespace() {
+        use std::io::Write;
+
+        // 创建临时 lib 文件
+        let dir = std::env::temp_dir().join("juglans_test_lib_explicit");
+        let _ = std::fs::create_dir_all(&dir);
+        let lib_path = dir.join("sqlite.jg");
+        let mut f = std::fs::File::create(&lib_path).unwrap();
+        writeln!(
+            f,
+            r#"
+slug: "sqlite3"
+name: "SQLite Lib"
+[read(table)]: bash(command="sqlite3 db.sqlite 'SELECT * FROM " + $table + "'")
+[write(table, data)]: bash(command="echo " + $data)
+"#
+        )
+        .unwrap();
+
+        // 主工作流
+        let main_content = format!(
+            r#"
+name: "Main"
+libs: {{ db: "{}" }}
+entry: [step1]
+[step1]: db.read(table="users")
+"#,
+            lib_path.to_string_lossy()
+        );
+
+        let mut graph = GraphParser::parse(&main_content).unwrap();
+
+        // 验证 parser 存入了 lib_imports（显式命名空间）
+        assert_eq!(
+            graph.lib_imports.get("db").unwrap(),
+            lib_path.to_str().unwrap()
+        );
+        assert!(!graph.lib_auto_namespaces.contains("db"));
+
+        // 解析 lib imports
+        let mut import_stack = vec![];
+        resolve_lib_imports(&mut graph, &dir, &mut import_stack, None).unwrap();
+
+        // 显式命名空间 "db"（忽略文件内 slug "sqlite3"）
+        assert!(
+            graph.functions.contains_key("db.read"),
+            "functions: {:?}",
+            graph.functions.keys().collect::<Vec<_>>()
+        );
+        assert!(graph.functions.contains_key("db.write"));
+        assert!(!graph.functions.contains_key("sqlite3.read")); // 不应使用 slug
+    }
+
+    #[test]
+    fn test_resolve_lib_imports_auto_namespace_with_slug() {
+        use std::io::Write;
+
+        let dir = std::env::temp_dir().join("juglans_test_lib_slug");
+        let _ = std::fs::create_dir_all(&dir);
+        let lib_path = dir.join("my_sqlite_lib.jg");
+        let mut f = std::fs::File::create(&lib_path).unwrap();
+        writeln!(
+            f,
+            r#"
+slug: "sqlite"
+name: "SQLite Lib"
+[query(sql)]: bash(command="sqlite3 db.sqlite '" + $sql + "'")
+"#
+        )
+        .unwrap();
+
+        // 列表形式 — stem = "my_sqlite_lib"，但文件有 slug = "sqlite"
+        let main_content = format!(
+            r#"
+name: "Main"
+libs: ["{}"]
+entry: [step1]
+[step1]: sqlite.query(sql="SELECT 1")
+"#,
+            lib_path.to_string_lossy()
+        );
+
+        let mut graph = GraphParser::parse(&main_content).unwrap();
+
+        // 验证 parser 存入 stem 作为占位
+        assert!(graph.lib_imports.contains_key("my_sqlite_lib"));
+        assert!(graph.lib_auto_namespaces.contains("my_sqlite_lib"));
+
+        // 解析 lib imports
+        let mut import_stack = vec![];
+        resolve_lib_imports(&mut graph, &dir, &mut import_stack, None).unwrap();
+
+        // 列表形式 + 文件有 slug → 使用 slug "sqlite"（中优先级）
+        assert!(
+            graph.functions.contains_key("sqlite.query"),
+            "functions: {:?}",
+            graph.functions.keys().collect::<Vec<_>>()
+        );
+        assert!(!graph.functions.contains_key("my_sqlite_lib.query"));
+    }
+
+    #[test]
+    fn test_resolve_lib_imports_auto_namespace_no_slug() {
+        use std::io::Write;
+
+        let dir = std::env::temp_dir().join("juglans_test_lib_stem");
+        let _ = std::fs::create_dir_all(&dir);
+        let lib_path = dir.join("utils.jg");
+        let mut f = std::fs::File::create(&lib_path).unwrap();
+        writeln!(
+            f,
+            r#"
+name: "Utils"
+[helper(x)]: bash(command="echo " + $x)
+"#
+        )
+        .unwrap();
+
+        let main_content = format!(
+            r#"
+name: "Main"
+libs: ["{}"]
+entry: [step1]
+[step1]: utils.helper(x="test")
+"#,
+            lib_path.to_string_lossy()
+        );
+
+        let mut graph = GraphParser::parse(&main_content).unwrap();
+
+        let mut import_stack = vec![];
+        resolve_lib_imports(&mut graph, &dir, &mut import_stack, None).unwrap();
+
+        // 列表形式 + 无 slug → 使用文件名 stem "utils"
+        assert!(
+            graph.functions.contains_key("utils.helper"),
+            "functions: {:?}",
+            graph.functions.keys().collect::<Vec<_>>()
         );
     }
 }

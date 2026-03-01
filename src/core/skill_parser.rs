@@ -13,10 +13,10 @@ use std::path::Path;
 pub struct SkillFrontmatter {
     pub name: String,
     pub description: String,
-    pub license: Option<String>,
-    pub compatibility: Option<String>,
-    pub allowed_tools: Option<String>,
-    pub metadata: HashMap<String, String>,
+    pub _license: Option<String>,
+    pub _compatibility: Option<String>,
+    pub _allowed_tools: Option<String>,
+    pub _metadata: HashMap<String, String>,
 }
 
 /// A fully parsed skill with body content and optional resources.
@@ -128,10 +128,10 @@ fn parse_frontmatter(input: &str) -> Result<SkillFrontmatter> {
         name: name.ok_or_else(|| anyhow!("SKILL.md frontmatter missing required 'name' field"))?,
         description: description
             .ok_or_else(|| anyhow!("SKILL.md frontmatter missing required 'description' field"))?,
-        license,
-        compatibility,
-        allowed_tools,
-        metadata,
+        _license: license,
+        _compatibility: compatibility,
+        _allowed_tools: allowed_tools,
+        _metadata: metadata,
     })
 }
 

@@ -203,7 +203,7 @@ fn split_message(text: &str, max_len: usize) -> Vec<String> {
         let split_pos = remaining[..max_len].rfind('\n').unwrap_or(max_len);
 
         chunks.push(remaining[..split_pos].to_string());
-        remaining = &remaining[split_pos..].trim_start();
+        remaining = remaining[split_pos..].trim_start();
     }
 
     chunks

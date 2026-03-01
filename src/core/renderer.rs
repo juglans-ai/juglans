@@ -9,6 +9,12 @@ pub struct JwlRenderer {
     eval: ExprEvaluator,
 }
 
+impl Default for JwlRenderer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl JwlRenderer {
     pub fn new() -> Self {
         Self {

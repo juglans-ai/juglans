@@ -1,10 +1,19 @@
 [package]
-name = "juglans" # 【修改】从 jwl_compiler 改为 juglans
+name = "juglans"
 version = "0.2.4"
 edition = "2021"
+rust-version = "1.80"
 default-run = "juglans"
-description = "Compiler and runtime for Juglans Workflow Language (JWL)"
+description = "Compiler and runtime for Juglans Workflow Language"
 license = "MIT"
+repository = "https://github.com/juglans-ai/juglans"
+homepage = "https://juglans.ai"
+documentation = "https://docs.juglans.ai"
+readme = "README.md"
+authors = ["Juglans Team"]
+keywords = ["workflow", "ai", "agent", "dsl", "orchestration"]
+categories = ["command-line-utilities", "development-tools"]
+exclude = ["docs/", "examples/", ".github/", "stdlib/"]
 
 [[bin]]
 name = "juglans"
@@ -47,7 +56,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 eventsource-stream = "0.2"
 async-trait = "0.1"
 pathdiff = "0.2"
-axum = "0.7"
+axum = { version = "0.7", features = ["multipart"] }
 tower-http = { version = "0.5", features = ["cors", "trace"] }
 # 【新增】tokio-stream 依赖
 tokio-stream = "0.1"
@@ -55,6 +64,20 @@ tokio-stream = "0.1"
 crossterm = "0.28"
 termimad = "0.30"
 dashmap = "6"
+semver = { version = "1.0", features = ["serde"] }
+tar = "0.4"
+flate2 = "1.0"
+rusqlite = { version = "0.31", features = ["bundled"] }
+sha2 = "0.10"
+md-5 = "0.10"
+base64 = "0.22"
+urlencoding = "2"
+rand = "0.8"
+# TUI
+ratatui = "0.29"
+arboard = "3"
+tui-textarea = "0.7"
+unicode-width = "0.2"
 
 [features]
 default = ["native"]

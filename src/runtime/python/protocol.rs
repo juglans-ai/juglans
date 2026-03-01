@@ -19,7 +19,7 @@ pub enum PythonRequest {
         kwargs: HashMap<String, Value>,
     },
     /// Get an attribute from a reference
-    Getattr {
+    _Getattr {
         id: String,
         target: String,
         attr: String,
@@ -51,10 +51,10 @@ impl PythonRequest {
         Self::Ping { id: id.into() }
     }
 
-    pub fn id(&self) -> &str {
+    pub fn _id(&self) -> &str {
         match self {
             Self::Call { id, .. } => id,
-            Self::Getattr { id, .. } => id,
+            Self::_Getattr { id, .. } => id,
             Self::Del { id, .. } => id,
             Self::Ping { id } => id,
         }
@@ -73,7 +73,8 @@ pub struct PythonError {
 /// Response from the Python worker
 #[derive(Debug, Clone, Deserialize)]
 pub struct PythonResponse {
-    pub id: String,
+    #[serde(rename = "id")]
+    pub _id: String,
     #[serde(rename = "type")]
     pub response_type: String,
     pub value: Option<Value>,
@@ -89,7 +90,7 @@ impl PythonResponse {
     }
 
     /// Get the result value, or None if this is a reference or error
-    pub fn into_value(self) -> Option<Value> {
+    pub fn _into_value(self) -> Option<Value> {
         if self.is_error() {
             None
         } else {
@@ -98,7 +99,7 @@ impl PythonResponse {
     }
 
     /// Get the reference ID if this response contains one
-    pub fn get_ref(&self) -> Option<&str> {
+    pub fn _get_ref(&self) -> Option<&str> {
         self.reference.as_deref()
     }
 }
@@ -129,7 +130,7 @@ mod tests {
             r#"{"id": "test-1", "type": "value", "value": {"a": 1}, "ref": null, "error": null}"#;
         let resp: PythonResponse = serde_json::from_str(json).unwrap();
 
-        assert_eq!(resp.id, "test-1");
+        assert_eq!(resp._id, "test-1");
         assert_eq!(resp.response_type, "value");
         assert!(resp.value.is_some());
         assert!(!resp.is_error());
