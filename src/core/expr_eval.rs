@@ -1902,8 +1902,8 @@ fn call_builtin(name: &str, args: &[Value]) -> Result<Value> {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 use rand::Rng;
-                let mut rng = rand::thread_rng();
-                Ok(json!(rng.gen::<f64>()))
+                let mut rng = rand::rng();
+                Ok(json!(rng.random::<f64>()))
             }
             #[cfg(target_arch = "wasm32")]
             {
@@ -1921,8 +1921,8 @@ fn call_builtin(name: &str, args: &[Value]) -> Result<Value> {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 use rand::Rng;
-                let mut rng = rand::thread_rng();
-                Ok(json!(rng.gen_range(min_val..=max_val)))
+                let mut rng = rand::rng();
+                Ok(json!(rng.random_range(min_val..=max_val)))
             }
             #[cfg(target_arch = "wasm32")]
             {

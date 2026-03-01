@@ -59,8 +59,11 @@ impl ToolRegistry {
     /// 3. Deduplicates by tool function name (last one wins)
     ///
     /// Example:
-    /// ```
-    /// let tools = registry.resolve_tools(&["web-tools", "data-tools"])?;
+    /// ```no_run
+    /// # use juglans::services::tool_registry::ToolRegistry;
+    /// # let registry = ToolRegistry::new();
+    /// let slugs = vec!["web-tools".to_string(), "data-tools".to_string()];
+    /// let tools = registry.resolve_tools(&slugs).unwrap();
     /// ```
     pub fn resolve_tools(&self, slugs: &[String]) -> Result<Vec<Value>> {
         let mut merged_tools: HashMap<String, Value> = HashMap::new();
