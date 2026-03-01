@@ -825,14 +825,13 @@ fn find_project_root(start_search_path: &Path) -> Result<PathBuf> {
     if current_ptr.is_file() {
         current_ptr.pop();
     }
+    let fallback = current_ptr.clone();
     loop {
         if current_ptr.join("juglans.toml").exists() {
             return Ok(current_ptr);
         }
         if !current_ptr.pop() {
-            return Err(anyhow!(
-                "Fatal: Project root not found (missing juglans.toml)."
-            ));
+            return Ok(fallback);
         }
     }
 }

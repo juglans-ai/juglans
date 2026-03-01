@@ -74,6 +74,7 @@ impl BuiltinRegistry {
         reg!(network::Fetch);
         reg!(system::Timer);
         reg!(system::Notify);
+        reg!(system::Print);
         reg!(system::Reply::new(runtime.clone()));
         reg!(system::SetContext);
         reg!(system::FeishuWebhook);

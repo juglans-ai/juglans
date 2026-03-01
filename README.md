@@ -22,7 +22,7 @@ Juglans is a declarative workflow language for building and orchestrating AI age
 
 - **Declarative DAG workflows** — conditional edges, switch routing, loops, error handling, function definitions
 - **AI-native builtins** — `chat()`, `p()` (prompt render), memory, history
-- **50+ expression functions** — Python-inspired: `len`, `map`, `filter`, `reduce`, `zip`, `sorted`, ...
+- **80+ expression functions** — `len`, `map`, `filter`, `reduce`, `zip`, `sorted`, `group_by`, ...
 - **Lambda expressions** — `filter($list, x => x > 10)`
 - **Python interop** — call pandas, sklearn, any Python module directly
 - **MCP integration** — connect external tools via Model Context Protocol
@@ -41,22 +41,53 @@ curl -fsSL https://raw.githubusercontent.com/juglans-ai/juglans/main/install.sh 
 
 ```yaml
 # hello.jg
-[greet]: chat(message="Say hello in 3 languages")
-[format]: chat(message="Format as a numbered list: $output")
-[greet] -> [format]
+[hello]: print(message="Hello, World!")
 ```
 
 ```bash
 juglans hello.jg
 ```
 
-## Agent Example
+## AI Chat Workflow
+
+```yaml
+# chat.jg
+[greet]: chat(message="Say hello in 3 languages")
+[format]: chat(message="Format as a numbered list: $output")
+[greet] -> [format]
+```
+
+## Conditional Routing
+
+```yaml
+# router.jg
+entry: [classify]
+exit: [reply]
+
+[classify]: chat(message=$input.message, format="json")
+[save]: set_context(intent=$classify.output.intent)
+
+[handle_question]: chat(message="Answer: " + $input.message)
+[handle_task]: chat(message="Execute: " + $input.message)
+[reply]: print(value=$output)
+
+[classify] -> [save]
+[save] if $ctx.intent == "question" -> [handle_question]
+[save] if $ctx.intent == "task" -> [handle_task]
+[save] -> [handle_question]
+
+[handle_question] -> [reply]
+[handle_task] -> [reply]
+```
+
+## Agent Config
 
 ```yaml
 # analyst.jgagent
-name: analyst
-model: claude-sonnet-4-20250514
-system: You are a data analyst. Answer questions with data-driven insights.
+slug: "analyst"
+name: "Data Analyst"
+model: "claude-sonnet-4-20250514"
+system_prompt: "You are a data analyst. Answer questions with data-driven insights."
 tools: ["devtools"]
 ```
 
@@ -77,11 +108,11 @@ juglans chat                      # Interactive TUI
 
 ## Documentation
 
-- [Getting Started](https://docs.juglans.ai/getting-started/)
-- [Workflow Guide](https://docs.juglans.ai/guide/)
-- [Builtin Reference](https://docs.juglans.ai/reference/)
-- [Python Integration](https://docs.juglans.ai/integrations/python.html)
-- [MCP Integration](https://docs.juglans.ai/integrations/mcp.html)
+- [Getting Started](https://docs.juglans.dev/getting-started/)
+- [Workflow Guide](https://docs.juglans.dev/guide/)
+- [Builtin Reference](https://docs.juglans.dev/reference/)
+- [Python Integration](https://docs.juglans.dev/integrations/python.html)
+- [MCP Integration](https://docs.juglans.dev/integrations/mcp.html)
 
 ## Contributing
 

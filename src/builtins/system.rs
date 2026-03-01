@@ -97,6 +97,29 @@ impl Tool for Notify {
     }
 }
 
+/// print(message="text") — 纯输出，无 emoji 前缀，不修改 context
+/// 与 notify 的区别：print 只做 println，适合调试和 Hello World
+pub struct Print;
+#[async_trait]
+impl Tool for Print {
+    fn name(&self) -> &str {
+        "print"
+    }
+    async fn execute(
+        &self,
+        params: &HashMap<String, String>,
+        _context: &WorkflowContext,
+    ) -> Result<Option<Value>> {
+        let msg = params
+            .get("message")
+            .or_else(|| params.get("value"))
+            .map(|s| s.as_str())
+            .unwrap_or("");
+        println!("{}", msg);
+        Ok(Some(json!(msg)))
+    }
+}
+
 /// reply(message="内容", state="context_visible") - 直接返回内容，不调用 AI
 /// 用于系统事件处理等场景，需要返回固定文本但不走 LLM
 /// 支持 state 参数控制 SSE/持久化，包括组合语法 input:output

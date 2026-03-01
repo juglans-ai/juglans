@@ -31,7 +31,7 @@ jobs:
       - name: Build
         run: |
           mdbook build docs
-          echo "book.juglans.dev" > target/book/CNAME
+          echo "docs.juglans.dev" > target/book/CNAME
       - uses: actions/upload-pages-artifact@v3
         with:
           path: target/book
