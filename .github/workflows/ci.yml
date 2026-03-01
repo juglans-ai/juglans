@@ -59,7 +59,7 @@ jobs:
   # 构建测试 — lint 通过后才跑
   build:
     name: Build (${{ matrix.os }})
-    needs: lint
+    needs: [lint, test]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

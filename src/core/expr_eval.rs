@@ -2310,7 +2310,7 @@ fn call_builtin(name: &str, args: &[Value]) -> Result<Value> {
             for arg in &args[1..] {
                 path = path.join(value_to_string(arg));
             }
-            Ok(json!(path.to_string_lossy().into_owned()))
+            Ok(json!(path.to_string_lossy().replace('\\', "/")))
         }
 
         // ============================================================

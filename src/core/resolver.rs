@@ -29,7 +29,7 @@ pub fn expand_at_prefix(pattern: &str, at_base: Option<&Path>) -> String {
         return pattern.to_string();
     };
     if let Some(rest) = pattern.strip_prefix("@/") {
-        base.join(rest).to_string_lossy().to_string()
+        base.join(rest).to_string_lossy().replace('\\', "/")
     } else {
         pattern.to_string()
     }
