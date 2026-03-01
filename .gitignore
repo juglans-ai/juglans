@@ -2,4 +2,4 @@ target/
 pkg/
 ops/
 .cargo/
-CLAUDE.md
+CLAUDE.mddebug.log
