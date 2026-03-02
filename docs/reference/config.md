@@ -1,63 +1,63 @@
-# 配置文件参考
+# Configuration File Reference
 
-Juglans 使用 `juglans.toml` 文件进行配置。
+Juglans uses a `juglans.toml` file for configuration.
 
-## 文件位置
+## File Location
 
-按优先级查找：
+Searched by priority:
 
-1. `./juglans.toml` - 当前目录（项目配置）
-2. `~/.config/juglans/juglans.toml` - 用户配置
-3. `/etc/juglans/juglans.toml` - 系统配置
+1. `./juglans.toml` - Current directory (project configuration)
+2. `~/.config/juglans/juglans.toml` - User configuration
+3. `/etc/juglans/juglans.toml` - System configuration
 
-也可以通过环境变量指定：
+Can also be specified via environment variable:
 
 ```bash
 JUGLANS_CONFIG=/path/to/juglans.toml juglans ...
 ```
 
-## 完整配置示例
+## Complete Configuration Example
 
 ```toml
 # juglans.toml
 
-# 账户配置
+# Account configuration
 [account]
 id = "user_123"
 name = "John Doe"
 role = "admin"
 api_key = "jug0_sk_..."
 
-# 工作空间配置（可选）
+# Workspace configuration (optional)
 [workspace]
 id = "workspace_456"
 name = "My Workspace"
 members = ["user_123", "user_789"]
 
-# 资源路径（支持 glob 模式）
+# Resource paths (supports glob patterns)
 agents = ["src/agents/**/*.jgagent", "src/pure-agents/**/*.jgagent"]
 workflows = ["src/**/*.jg", "src/workflows/**/*.jgflow"]
 prompts = ["src/prompts/**/*.jgprompt"]
 tools = ["src/tools/**/*.json"]
 
-# 排除规则
+# Exclude rules
 exclude = ["**/*.backup", "**/.draft", "**/test_*"]
 
-# Jug0 后端配置
+# Jug0 backend configuration
 [jug0]
 base_url = "http://localhost:3000"
 
-# Web 服务器配置
+# Web server configuration
 [server]
 host = "127.0.0.1"
 port = 8080
 
-# 环境变量（可选）
+# Environment variables (optional)
 [env]
 DATABASE_URL = "postgresql://localhost/mydb"
 CUSTOM_VAR = "value"
 
-# MCP 服务器配置（HTTP 连接方式）
+# MCP server configuration (HTTP connection method)
 [[mcp_servers]]
 name = "filesystem"
 base_url = "http://localhost:3001/mcp/filesystem"
@@ -70,16 +70,16 @@ base_url = "http://localhost:3001/mcp/github"
 token = "${GITHUB_TOKEN}"
 ```
 
-## 配置节详解
+## Configuration Sections Explained
 
-### [account] - 账户配置
+### [account] - Account Configuration
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `id` | string | 是 | 用户 ID |
-| `name` | string | 是 | 用户名称 |
-| `role` | string | 否 | 用户角色（如 admin, user） |
-| `api_key` | string | 否 | API 密钥 |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | string | Yes | User ID |
+| `name` | string | Yes | User name |
+| `role` | string | No | User role (e.g., admin, user) |
+| `api_key` | string | No | API key |
 
 ```toml
 [account]
@@ -89,7 +89,7 @@ role = "admin"
 api_key = "jug0_sk_abcdef123456"
 ```
 
-**环境变量覆盖：**
+**Environment variable override:**
 
 ```bash
 export JUGLANS_API_KEY="jug0_sk_..."
@@ -97,20 +97,20 @@ export JUGLANS_API_KEY="jug0_sk_..."
 
 ---
 
-### [workspace] - 工作空间配置
+### [workspace] - Workspace Configuration
 
-工作空间用于多用户协作和资源批量管理。
+Workspaces are used for multi-user collaboration and batch resource management.
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `id` | string | 是 | 工作空间 ID |
-| `name` | string | 是 | 工作空间名称 |
-| `members` | array | 否 | 成员用户 ID 列表 |
-| `agents` | array | 否 | Agent 文件路径模式 |
-| `workflows` | array | 否 | Workflow 文件路径模式 |
-| `prompts` | array | 否 | Prompt 文件路径模式 |
-| `tools` | array | 否 | Tool 定义文件路径模式 |
-| `exclude` | array | 否 | 排除文件路径模式 |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | string | Yes | Workspace ID |
+| `name` | string | Yes | Workspace name |
+| `members` | array | No | Member user ID list |
+| `agents` | array | No | Agent file path patterns |
+| `workflows` | array | No | Workflow file path patterns |
+| `prompts` | array | No | Prompt file path patterns |
+| `tools` | array | No | Tool definition file path patterns |
+| `exclude` | array | No | Exclude file path patterns |
 
 ```toml
 [workspace]
@@ -118,13 +118,13 @@ id = "workspace_456"
 name = "My Team Workspace"
 members = ["user_123", "user_789", "user_456"]
 
-# 资源路径配置（支持 glob 模式）
+# Resource path configuration (supports glob patterns)
 agents = ["src/agents/**/*.jgagent", "src/pure-agents/**/*.jgagent"]
 workflows = ["src/**/*.jg", "src/workflows/**/*.jgflow"]
 prompts = ["src/prompts/**/*.jgprompt"]
 tools = ["src/tools/**/*.json"]
 
-# 排除规则
+# Exclude rules
 exclude = [
   "**/*.backup",
   "**/.draft",
@@ -133,73 +133,73 @@ exclude = [
 ]
 ```
 
-#### 资源路径配置
+#### Resource Path Configuration
 
-资源路径支持 **glob 模式**，用于批量操作时自动发现文件。
+Resource paths support **glob patterns**, used for automatic file discovery during batch operations.
 
-**常用模式：**
+**Common patterns:**
 
-- `**/*.jg` - 递归匹配所有 .jg 文件
-- `src/*.jg` - 只匹配 src 目录下的 .jg 文件（不递归）
-- `src/**/*.jgagent` - 递归匹配 src 下所有 agent
+- `**/*.jg` - Recursively match all .jg files
+- `src/*.jg` - Match only .jg files in the src directory (non-recursive)
+- `src/**/*.jgagent` - Recursively match all agents under src
 
-**使用场景：**
+**Use cases:**
 
 ```bash
-# 使用 workspace 配置批量 apply
-juglans apply                    # apply 所有配置的资源
-juglans apply --type workflow    # 只 apply workflows
-juglans apply --dry-run          # 预览
+# Batch apply using workspace configuration
+juglans apply                    # Apply all configured resources
+juglans apply --type workflow    # Apply only workflows
+juglans apply --dry-run          # Preview
 ```
 
-**排除规则：**
+**Exclude rules:**
 
-使用 `exclude` 字段忽略特定文件：
+Use the `exclude` field to ignore specific files:
 
 ```toml
 [workspace]
 exclude = [
-  "**/*.backup",        # 所有备份文件
-  "**/.draft",          # 草稿文件
-  "**/test_*",          # 测试文件
-  "**/private_*",       # 私有文件
-  "src/experimental/**" # 实验性目录
+  "**/*.backup",        # All backup files
+  "**/.draft",          # Draft files
+  "**/test_*",          # Test files
+  "**/private_*",       # Private files
+  "src/experimental/**" # Experimental directory
 ]
 ```
 
 ---
 
-### [jug0] - 后端配置
+### [jug0] - Backend Configuration
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `base_url` | string | https://api.jug0.com | API 地址 |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `base_url` | string | https://api.jug0.com | API address |
 
 ```toml
 [jug0]
 base_url = "https://api.jug0.com"
 ```
 
-**不同环境配置：**
+**Different environment configurations:**
 
 ```toml
-# 开发环境
+# Development environment
 [jug0]
 base_url = "http://localhost:3000"
 
-# 生产环境
+# Production environment
 # [jug0]
 # base_url = "https://api.jug0.com"
 ```
 
 ---
 
-### [server] - Web 服务器
+### [server] - Web Server
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `host` | string | 127.0.0.1 | 绑定地址 |
-| `port` | number | 3000 | 端口号 |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `host` | string | 127.0.0.1 | Bind address |
+| `port` | number | 3000 | Port number |
 
 ```toml
 [server]
@@ -209,9 +209,9 @@ port = 8080
 
 ---
 
-### [env] - 环境变量
+### [env] - Environment Variables
 
-自定义环境变量字典，可在工作流中访问。
+Custom environment variable dictionary, accessible in workflows.
 
 ```toml
 [env]
@@ -220,36 +220,36 @@ API_ENDPOINT = "https://api.example.com"
 CUSTOM_SETTING = "value"
 ```
 
-这些环境变量可以在工作流执行时通过 `$env.DATABASE_URL` 等方式访问。
+These environment variables can be accessed during workflow execution via `$env.DATABASE_URL` and similar paths.
 
-**使用场景：**
-- 数据库连接字符串
-- API 端点配置
-- 自定义配置项
-- 开发/生产环境切换
+**Use cases:**
+- Database connection strings
+- API endpoint configuration
+- Custom configuration items
+- Development/production environment switching
 
 ---
 
-### [logging] - 日志配置
+### [logging] - Logging Configuration
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `level` | string | info | 日志级别 |
-| `format` | string | pretty | 输出格式 |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `level` | string | info | Log level |
+| `format` | string | pretty | Output format |
 
-**日志级别：**
+**Log levels:**
 
-- `error` - 仅错误
-- `warn` - 警告和错误
-- `info` - 信息、警告、错误
-- `debug` - 调试信息
-- `trace` - 详细跟踪
+- `error` - Errors only
+- `warn` - Warnings and errors
+- `info` - Info, warnings, and errors
+- `debug` - Debug information
+- `trace` - Detailed tracing
 
-**输出格式：**
+**Output formats:**
 
-- `pretty` - 彩色可读格式
-- `json` - JSON 格式（适合日志收集）
-- `compact` - 紧凑单行格式
+- `pretty` - Colorized readable format
+- `json` - JSON format (suitable for log collection)
+- `compact` - Compact single-line format
 
 ```toml
 [logging]
@@ -257,7 +257,7 @@ level = "debug"
 format = "json"
 ```
 
-**环境变量覆盖：**
+**Environment variable override:**
 
 ```bash
 export JUGLANS_LOG_LEVEL=debug
@@ -265,13 +265,13 @@ export JUGLANS_LOG_LEVEL=debug
 
 ---
 
-### [[mcp_servers]] - MCP 服务器
+### [[mcp_servers]] - MCP Servers
 
-配置 Model Context Protocol 服务器以扩展工具能力。
+Configure Model Context Protocol servers to extend tool capabilities.
 
-**重要：** Juglans 使用 HTTP/JSON-RPC 连接 MCP 服务器，不支持进程启动方式。你需要先启动 MCP 服务器，然后通过 HTTP 连接。
+**Important:** Juglans uses HTTP/JSON-RPC to connect to MCP servers and does not support process launching. You need to start the MCP server first, then connect via HTTP.
 
-#### 配置格式
+#### Configuration Format
 
 ```toml
 [[mcp_servers]]
@@ -281,14 +281,14 @@ alias = "fs"
 token = "optional_token"
 ```
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `name` | string | 是 | 服务器名称（用于工具命名） |
-| `base_url` | string | 是 | MCP 服务器 HTTP 地址 |
-| `alias` | string | 否 | 别名 |
-| `token` | string | 否 | 认证令牌 |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Server name (used for tool naming) |
+| `base_url` | string | Yes | MCP server HTTP address |
+| `alias` | string | No | Alias |
+| `token` | string | No | Authentication token |
 
-#### 多个 MCP 服务器
+#### Multiple MCP Servers
 
 ```toml
 [[mcp_servers]]
@@ -309,16 +309,16 @@ token = "db_mcp_key"
 
 ---
 
-## 环境变量
+## Environment Variables
 
-| 变量 | 说明 |
-|------|------|
-| `JUGLANS_API_KEY` | API 密钥 |
-| `JUGLANS_CONFIG` | 配置文件路径 |
-| `JUGLANS_LOG_LEVEL` | 日志级别 |
-| `JUGLANS_JUG0_URL` | Jug0 API 地址 |
+| Variable | Description |
+|----------|-------------|
+| `JUGLANS_API_KEY` | API key |
+| `JUGLANS_CONFIG` | Config file path |
+| `JUGLANS_LOG_LEVEL` | Log level |
+| `JUGLANS_JUG0_URL` | Jug0 API address |
 
-**在配置中引用环境变量：**
+**Referencing environment variables in configuration:**
 
 ```toml
 [mcp.github]
@@ -327,14 +327,14 @@ env = { GITHUB_TOKEN = "${GITHUB_TOKEN}" }
 
 ---
 
-## 项目配置 vs 用户配置
+## Project Configuration vs User Configuration
 
-### 项目配置 (./juglans.toml)
+### Project Configuration (./juglans.toml)
 
-项目特定设置，应提交到版本控制（不含敏感信息）：
+Project-specific settings, should be committed to version control (without sensitive information):
 
 ```toml
-# 项目配置示例
+# Project configuration example
 [jug0]
 base_url = "http://localhost:3000"
 
@@ -346,12 +346,12 @@ name = "filesystem"
 base_url = "http://localhost:3001/mcp/filesystem"
 ```
 
-### 用户配置 (~/.config/juglans/juglans.toml)
+### User Configuration (~/.config/juglans/juglans.toml)
 
-个人设置和敏感信息：
+Personal settings and sensitive information:
 
 ```toml
-# 用户配置示例
+# User configuration example
 [account]
 id = "my_user_id"
 api_key = "jug0_sk_my_secret_key"
@@ -362,15 +362,15 @@ level = "debug"
 
 ---
 
-## 配置验证
+## Configuration Validation
 
-检查配置是否有效：
+Check if configuration is valid:
 
 ```bash
 juglans config --check
 ```
 
-查看生效的配置：
+View active configuration:
 
 ```bash
 juglans config --show
@@ -378,29 +378,29 @@ juglans config --show
 
 ---
 
-## 最佳实践
+## Best Practices
 
-### 1. 分离敏感信息
+### 1. Separate Sensitive Information
 
 ```toml
-# juglans.toml (提交到 git)
+# juglans.toml (committed to git)
 [jug0]
 base_url = "http://localhost:3000"
 
-# 敏感信息用环境变量
+# Use environment variables for sensitive information
 # export JUGLANS_API_KEY="..."
 ```
 
-### 2. 使用 .env 文件
+### 2. Use .env Files
 
-创建 `.env` 文件（加入 .gitignore）：
+Create a `.env` file (add to .gitignore):
 
 ```bash
 JUGLANS_API_KEY=jug0_sk_...
 GITHUB_TOKEN=ghp_...
 ```
 
-### 3. 环境特定配置
+### 3. Environment-Specific Configuration
 
 ```toml
 # juglans.dev.toml
@@ -412,7 +412,7 @@ base_url = "http://localhost:3000"
 base_url = "https://api.jug0.com"
 ```
 
-使用：
+Usage:
 
 ```bash
 JUGLANS_CONFIG=juglans.prod.toml juglans ...

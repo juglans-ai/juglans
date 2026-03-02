@@ -1,66 +1,66 @@
-# 示例集合
+# Example Collection
 
-本目录包含各种 Juglans 工作流示例。
+This directory contains various Juglans workflow examples.
 
-## 示例列表
+## Example List
 
-| 示例 | 说明 | 难度 |
-|------|------|------|
-| [basic-chat](./basic-chat.md) | 基础对话工作流 | 入门 |
-| [intent-router](./intent-router.md) | 意图分类路由 | 入门 |
-| [tool-calling](./tool-calling.md) | Function Calling 工具调用 | 入门 |
-| [rag-pipeline](./rag-pipeline.md) | RAG 检索增强生成 | 中级 |
-| [multi-agent](./multi-agent.md) | 多 Agent 协作 | 中级 |
-| [code-review](./code-review.md) | 自动代码审查 | 中级 |
-| [data-pipeline](./data-pipeline.md) | 数据处理管道 | 高级 |
+| Example | Description | Difficulty |
+|---------|-------------|------------|
+| [basic-chat](./basic-chat.md) | Basic chat workflow | Beginner |
+| [intent-router](./intent-router.md) | Intent classification routing | Beginner |
+| [tool-calling](./tool-calling.md) | Function Calling tool invocation | Beginner |
+| [rag-pipeline](./rag-pipeline.md) | RAG Retrieval-Augmented Generation | Intermediate |
+| [multi-agent](./multi-agent.md) | Multi-Agent collaboration | Intermediate |
+| [code-review](./code-review.md) | Automated code review | Intermediate |
+| [data-pipeline](./data-pipeline.md) | Data processing pipeline | Advanced |
 
-## 按场景分类
+## By Category
 
-### 对话类
-- 基础对话 - 单轮问答
-- 多轮对话 - 带上下文记忆
-- 意图路由 - 分类并分发
+### Conversational
+- Basic chat - Single-turn Q&A
+- Multi-turn chat - With context memory
+- Intent routing - Classify and dispatch
 
-### 内容生成
-- 文章生成 - 带质量检查
-- 摘要提取 - 长文本压缩
-- 翻译工作流 - 多语言转换
+### Content Generation
+- Article generation - With quality checks
+- Summary extraction - Long text compression
+- Translation workflow - Multi-language conversion
 
-### 数据处理
-- 批量处理 - 遍历集合
-- ETL 管道 - 提取转换加载
-- RAG 检索 - 向量搜索 + 生成
+### Data Processing
+- Batch processing - Iterate over collections
+- ETL pipeline - Extract, Transform, Load
+- RAG retrieval - Vector search + generation
 
-### 工具集成
-- GitHub 集成 - PR/Issue 自动化
-- 文件处理 - 读写本地文件
-- API 调用 - 外部服务集成
+### Tool Integration
+- GitHub integration - PR/Issue automation
+- File processing - Read/write local files
+- API calls - External service integration
 
-## 运行示例
+## Running Examples
 
 ```bash
-# 克隆示例
+# Clone examples
 git clone https://github.com/juglans-ai/juglans-examples.git
 cd juglans-examples
 
-# 运行基础示例
+# Run a basic example
 juglans basic-chat.jg --input '{"message": "Hello!"}'
 
-# 运行带配置的示例
+# Run an example with configuration
 juglans rag-pipeline.jg --input '{"query": "What is Juglans?"}' --config juglans.toml
 ```
 
-## 示例结构
+## Example Structure
 
-每个示例包含：
+Each example contains:
 
 ```
 example-name/
-├── workflow.jg      # 主工作流
-├── prompts/             # Prompt 模板
+├── workflow.jg      # Main workflow
+├── prompts/             # Prompt templates
 │   └── *.jgprompt
-├── agents/              # Agent 定义
+├── agents/              # Agent definitions
 │   └── *.jgagent
-├── README.md            # 说明文档
-└── test-input.json      # 测试输入
+├── README.md            # Documentation
+└── test-input.json      # Test input
 ```

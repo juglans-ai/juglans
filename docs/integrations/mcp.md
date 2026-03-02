@@ -1,120 +1,120 @@
-# MCP 工具集成
+# MCP Tool Integration
 
-本指南介绍如何在 Juglans 中集成 Model Context Protocol (MCP) 工具服务器。
+This guide explains how to integrate Model Context Protocol (MCP) tool servers in Juglans.
 
-## 什么是 MCP
+## What is MCP
 
-MCP (Model Context Protocol) 是一个开放协议，用于将外部工具能力暴露给 AI 系统。
+MCP (Model Context Protocol) is an open protocol for exposing external tool capabilities to AI systems.
 
 ```
 ┌─────────────────┐  HTTP   ┌─────────────────┐
 │    Juglans      │◀───────▶│   MCP Server    │
 │                 │ JSON-RPC│                 │
-│  工作流执行器    │         │  - 文件系统      │
-│                 │         │  - GitHub       │
-│                 │         │  - 数据库        │
+│  Workflow       │         │  - Filesystem   │
+│  Executor       │         │  - GitHub       │
+│                 │         │  - Database     │
 └─────────────────┘         └─────────────────┘
 ```
 
-## 配置 MCP 服务器
+## Configure MCP Servers
 
-### juglans.toml 配置
+### juglans.toml Configuration
 
-**重要：** Juglans 使用 HTTP/JSON-RPC 连接 MCP 服务器。你需要先启动 MCP 服务器（可以在 jug0 或独立服务中），然后配置 HTTP 连接。
+**Important:** Juglans connects to MCP servers via HTTP/JSON-RPC. You need to start the MCP server first (either in jug0 or as a standalone service), then configure the HTTP connection.
 
-#### HTTP 连接方式
+#### HTTP Connection Method
 
 ```toml
-# 文件系统工具
+# Filesystem tools
 [[mcp_servers]]
 name = "filesystem"
 base_url = "http://localhost:3001/mcp/filesystem"
 alias = "fs"
 
-# GitHub 工具
+# GitHub tools
 [[mcp_servers]]
 name = "github"
 base_url = "http://localhost:3001/mcp/github"
 token = "${GITHUB_TOKEN}"
 
-# 自定义 MCP 服务器
+# Custom MCP server
 [[mcp_servers]]
 name = "my-tools"
 base_url = "http://localhost:5000/mcp"
 token = "optional_token"
 
-# 云端 MCP 服务
+# Cloud MCP service
 [[mcp_servers]]
 name = "cloud-service"
 base_url = "https://mcp.example.com/v1"
 token = "${MCP_API_KEY}"
 ```
 
-**配置说明：**
+**Configuration details:**
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `name` | string | 是 | 服务器名称（用于生成工具名） |
-| `base_url` | string | 是 | MCP 服务器 HTTP 地址 |
-| `alias` | string | 否 | 别名 |
-| `token` | string | 否 | 认证令牌（Bearer token） |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Server name (used to generate tool names) |
+| `base_url` | string | Yes | MCP server HTTP address |
+| `alias` | string | No | Alias |
+| `token` | string | No | Authentication token (Bearer token) |
 
-### 启动 MCP 服务器
+### Starting MCP Servers
 
-Juglans 不会自动启动 MCP 服务器，你需要先手动启动或使用 jug0 集成的 MCP 服务：
+Juglans does not automatically start MCP servers. You need to start them manually or use jug0's integrated MCP service:
 
-**选项 1: 使用 jug0 的 MCP 集成**
+**Option 1: Use jug0's MCP Integration**
 
-jug0 可以托管 MCP 服务器，然后通过 HTTP 暴露：
+jug0 can host MCP servers and expose them via HTTP:
 
 ```bash
-# 在 jug0 中配置并启动 MCP 服务
+# Configure and start MCP service in jug0
 cd jug0
 cargo run -- --mcp-enabled
 ```
 
-**选项 2: 独立启动 MCP 服务器**
+**Option 2: Start an Independent MCP Server**
 
-使用 HTTP-to-MCP 桥接工具：
+Use an HTTP-to-MCP bridge tool:
 
 ```bash
-# 示例：启动文件系统 MCP 服务
+# Example: Start filesystem MCP service
 npx @anthropic/mcp-filesystem --http --port 3001
 ```
 
-**选项 3: 自定义 HTTP MCP 服务器**
+**Option 3: Custom HTTP MCP Server**
 
-实现一个 HTTP 服务器，遵循 MCP JSON-RPC 协议（见下文）
+Implement an HTTP server following the MCP JSON-RPC protocol (see below)
 
-## 在工作流中使用 MCP 工具
+## Using MCP Tools in Workflows
 
-### 工具命名规则
+### Tool Naming Convention
 
-MCP 工具在工作流中以 `<namespace>.<tool_name>` 格式使用：
+MCP tools are used in workflows with the `<namespace>.<tool_name>` format:
 
-**namespace 来源：**
-- 如果配置中有 `alias`，使用 alias
-- 否则使用 `name`
+**Namespace source:**
+- If `alias` is configured, use the alias
+- Otherwise use the `name`
 
-**示例配置：**
+**Example configuration:**
 
 ```toml
 [[mcp_servers]]
 name = "filesystem"
 base_url = "http://localhost:3001/mcp/filesystem"
-alias = "fs"  # 可选别名
+alias = "fs"  # Optional alias
 ```
 
-**工作流中调用：**
+**Calling in workflows:**
 
 ```yaml
-# 使用 alias（如果配置了）
+# Use alias (if configured)
 [read]: fs.read_file(path="/data/input.txt")
 
-# 或使用 name（如果没有 alias）
+# Or use name (if no alias)
 [read]: filesystem.read_file(path="/data/input.txt")
 
-# GitHub 工具示例
+# GitHub tool example
 [issue]: github.create_issue(
   repo="owner/repo",
   title="Bug Report",
@@ -122,9 +122,9 @@ alias = "fs"  # 可选别名
 )
 ```
 
-**命名格式：** `namespace.tool_name`（使用点号分隔，不是下划线）
+**Naming format:** `namespace.tool_name` (separated by a dot, not an underscore)
 
-### 完整示例
+### Complete Example
 
 ```yaml
 name: "Code Review Workflow"
@@ -132,28 +132,28 @@ name: "Code Review Workflow"
 entry: [fetch_pr]
 exit: [done]
 
-# 从 GitHub 获取 PR
+# Fetch PR from GitHub
 [fetch_pr]: github.get_pull_request(
   repo=$input.repo,
   number=$input.pr_number
 )
 
-# 保存 PR 信息
+# Save PR info
 [save_pr]: set_context(pr=$output)
 
-# 获取变更文件
+# Get changed files
 [get_files]: github.list_pr_files(
   repo=$input.repo,
   number=$input.pr_number
 )
 
-# AI 审查代码
+# AI code review
 [review]: chat(
   agent="code-reviewer",
   message="Review these changes:\n" + json($output)
 )
 
-# 发表评论
+# Post comment
 [comment]: github.create_review_comment(
   repo=$input.repo,
   number=$input.pr_number,
@@ -165,11 +165,11 @@ exit: [done]
 [fetch_pr] -> [save_pr] -> [get_files] -> [review] -> [comment] -> [done]
 ```
 
-## 常用 MCP 服务器
+## Common MCP Servers
 
 ### @anthropic/mcp-filesystem
 
-文件系统操作（需要先启动 HTTP 服务）：
+Filesystem operations (requires starting the HTTP service first):
 
 ```toml
 [[mcp_servers]]
@@ -177,42 +177,42 @@ name = "filesystem"
 base_url = "http://localhost:3001/mcp/filesystem"
 ```
 
-启动服务器（假设有 HTTP 桥接）：
+Start the server (assuming an HTTP bridge is available):
 
 ```bash
-# 需要 HTTP-to-stdio 桥接工具
+# Requires HTTP-to-stdio bridge tool
 npx @anthropic/mcp-filesystem --http --port 3001
 ```
 
-可用工具：
+Available tools:
 
-| 工具 | 说明 |
-|------|------|
-| `read_file` | 读取文件内容 |
-| `write_file` | 写入文件 |
-| `list_directory` | 列出目录 |
-| `create_directory` | 创建目录 |
-| `delete_file` | 删除文件 |
-| `move_file` | 移动/重命名文件 |
-| `search_files` | 搜索文件 |
+| Tool | Description |
+|------|-------------|
+| `read_file` | Read file contents |
+| `write_file` | Write to a file |
+| `list_directory` | List a directory |
+| `create_directory` | Create a directory |
+| `delete_file` | Delete a file |
+| `move_file` | Move/rename a file |
+| `search_files` | Search for files |
 
 ```yaml
-# 读取文件
+# Read a file
 [read]: filesystem.read_file(path="data/config.json")
 
-# 写入文件
+# Write a file
 [write]: filesystem.write_file(
   path="output/result.txt",
   content=$ctx.result
 )
 
-# 列出目录
+# List a directory
 [list]: filesystem.list_directory(path="src/")
 ```
 
 ### @anthropic/mcp-github
 
-GitHub 操作（需要先启动 HTTP 服务）：
+GitHub operations (requires starting the HTTP service first):
 
 ```toml
 [[mcp_servers]]
@@ -221,33 +221,33 @@ base_url = "http://localhost:3001/mcp/github"
 token = "${GITHUB_TOKEN}"
 ```
 
-启动服务器（假设有 HTTP 桥接）：
+Start the server (assuming an HTTP bridge is available):
 
 ```bash
 export GITHUB_TOKEN="ghp_..."
 npx @anthropic/mcp-github --http --port 3001
 ```
 
-可用工具：
+Available tools:
 
-| 工具 | 说明 |
-|------|------|
-| `get_repo` | 获取仓库信息 |
-| `list_issues` | 列出 Issues |
-| `create_issue` | 创建 Issue |
-| `get_pull_request` | 获取 PR |
-| `create_pull_request` | 创建 PR |
-| `list_pr_files` | 列出 PR 文件 |
-| `search_code` | 搜索代码 |
+| Tool | Description |
+|------|-------------|
+| `get_repo` | Get repository information |
+| `list_issues` | List Issues |
+| `create_issue` | Create an Issue |
+| `get_pull_request` | Get a PR |
+| `create_pull_request` | Create a PR |
+| `list_pr_files` | List PR files |
+| `search_code` | Search code |
 
 ```yaml
-# 搜索代码
+# Search code
 [search]: github.search_code(
   query="TODO in:file language:rust",
   repo=$input.repo
 )
 
-# 创建 Issue
+# Create an Issue
 [create]: github.create_issue(
   repo=$input.repo,
   title="Found TODOs",
@@ -257,7 +257,7 @@ npx @anthropic/mcp-github --http --port 3001
 
 ### @anthropic/mcp-postgres
 
-PostgreSQL 数据库（需要先启动 HTTP 服务）：
+PostgreSQL database (requires starting the HTTP service first):
 
 ```toml
 [[mcp_servers]]
@@ -265,37 +265,37 @@ name = "postgres"
 base_url = "http://localhost:3001/mcp/postgres"
 ```
 
-启动服务器（假设有 HTTP 桥接）：
+Start the server (assuming an HTTP bridge is available):
 
 ```bash
 export DATABASE_URL="postgresql://..."
 npx @anthropic/mcp-postgres --http --port 3001
 ```
 
-可用工具：
+Available tools:
 
-| 工具 | 说明 |
-|------|------|
-| `query` | 执行 SQL 查询 |
-| `execute` | 执行 SQL 命令 |
-| `list_tables` | 列出表 |
-| `describe_table` | 描述表结构 |
+| Tool | Description |
+|------|-------------|
+| `query` | Execute a SQL query |
+| `execute` | Execute a SQL command |
+| `list_tables` | List tables |
+| `describe_table` | Describe table structure |
 
 ```yaml
-# 查询数据
+# Query data
 [query]: postgres.query(
   sql="SELECT * FROM users WHERE active = true LIMIT 10"
 )
 
-# 获取表结构
+# Get table structure
 [schema]: postgres.describe_table(table="users")
 ```
 
-## 自定义 MCP 服务器
+## Custom MCP Servers
 
-### 创建 HTTP MCP 服务器
+### Creating an HTTP MCP Server
 
-使用任何语言实现 HTTP + JSON-RPC 协议：
+Implement the HTTP + JSON-RPC protocol in any language:
 
 ```python
 # my_mcp_server.py
@@ -349,15 +349,15 @@ if __name__ == '__main__':
     app.run(port=5000)
 ```
 
-### 配置自定义服务器
+### Configure the Custom Server
 
-先启动服务器：
+Start the server first:
 
 ```bash
 python ./tools/my_mcp_server.py
 ```
 
-然后配置 Juglans：
+Then configure Juglans:
 
 ```toml
 [[mcp_servers]]
@@ -365,39 +365,39 @@ name = "my-tools"
 base_url = "http://localhost:5000"
 ```
 
-### 在工作流中使用
+### Use in Workflows
 
 ```yaml
 [custom]: my-tools.my_tool(input=$ctx.data)
 ```
 
-## 工具发现
+## Tool Discovery
 
-### 列出可用工具
+### List Available Tools
 
 ```bash
-# 列出所有 MCP 工具
+# List all MCP tools
 juglans tools --list
 
-# 列出特定服务器的工具
+# List tools from a specific server
 juglans tools --list --server filesystem
 
-# 显示工具详情
+# Show tool details
 juglans tools --describe filesystem.read_file
 ```
 
-### 工具发现过程
+### Tool Discovery Process
 
-当工作流加载 Agent 时，Juglans 会：
+When a workflow loads an Agent, Juglans will:
 
-1. 读取 `juglans.toml` 中的 `[[mcp_servers]]` 配置
-2. 对每个服务器发送 `tools/list` JSON-RPC 请求
-3. 获取工具定义并缓存到内存
-4. 将工具注册为可调用的内置函数
+1. Read the `[[mcp_servers]]` configuration from `juglans.toml`
+2. Send a `tools/list` JSON-RPC request to each server
+3. Retrieve tool definitions and cache them in memory
+4. Register the tools as callable built-in functions
 
-## 错误处理
+## Error Handling
 
-### MCP 工具错误
+### MCP Tool Errors
 
 ```yaml
 [api_call]: github.get_repo(repo=$input.repo)
@@ -410,41 +410,41 @@ juglans tools --describe filesystem.read_file
 [handle_error] -> [fallback]
 ```
 
-### 超时处理
+### Timeout Handling
 
-在配置中设置超时：
+Set timeouts in configuration:
 
 ```toml
 [mcp.slow-service]
 url = "http://slow-api.example.com/mcp"
-timeout = 120  # 秒
+timeout = 120  # Seconds
 ```
 
-## 最佳实践
+## Best Practices
 
-### 1. 环境变量管理
+### 1. Environment Variable Management
 
-不要在配置文件中硬编码密钥：
+Do not hardcode secrets in configuration files:
 
 ```toml
-# 好
+# Good
 [mcp.github]
 env = { GITHUB_TOKEN = "${GITHUB_TOKEN}" }
 
-# 不好
+# Bad
 [mcp.github]
 env = { GITHUB_TOKEN = "ghp_xxxx..." }
 ```
 
-### 2. 工具权限
+### 2. Tool Permissions
 
-在 MCP 服务器实现中限制访问范围，或使用代理层控制权限。
+Restrict access scope in the MCP server implementation, or use a proxy layer to control permissions.
 
-Juglans 仅通过 HTTP 连接，权限控制应在 MCP 服务器端实现。
+Juglans only connects via HTTP; permission control should be implemented on the MCP server side.
 
-### 3. 错误恢复
+### 3. Error Recovery
 
-为 MCP 调用添加错误处理：
+Add error handling for MCP calls:
 
 ```yaml
 [fetch]: github.get_repo(repo=$input.repo)
@@ -452,58 +452,58 @@ Juglans 仅通过 HTTP 连接，权限控制应在 MCP 服务器端实现。
 [fetch] on error -> [retry_or_fallback]
 ```
 
-### 4. 日志记录
+### 4. Logging
 
-启用调试日志排查问题：
+Enable debug logging to troubleshoot issues:
 
 ```toml
 [logging]
 level = "debug"
 ```
 
-### 5. 服务健康检查
+### 5. Service Health Checks
 
-确保 MCP 服务器在 Juglans 启动前已运行：
+Ensure MCP servers are running before Juglans starts:
 
 ```bash
-# 检查 MCP 服务器是否可达
+# Check if MCP server is reachable
 curl http://localhost:3001/mcp/filesystem/messages -d '{"jsonrpc":"2.0","method":"tools/list","id":"1"}'
 ```
 
-## 故障排查
+## Troubleshooting
 
-### Q: 工具未找到
+### Q: Tool Not Found
 
-确保 MCP 服务器正在运行并可访问：
+Make sure the MCP server is running and accessible:
 
 ```bash
-# 测试 MCP 服务器连接
+# Test MCP server connection
 curl http://localhost:3001/mcp/filesystem/messages \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"tools/list","id":"1"}'
 ```
 
-### Q: MCP 服务器连接失败
+### Q: MCP Server Connection Failed
 
-检查服务器地址和状态：
+Check the server address and status:
 
 ```bash
-# 检查服务器是否运行
+# Check if the server is running
 curl http://localhost:3001/health
 
-# 检查配置的 base_url 是否正确
+# Check if the configured base_url is correct
 ```
 
-### Q: 认证失败
+### Q: Authentication Failed
 
-验证环境变量：
+Verify environment variables:
 
 ```bash
 echo $GITHUB_TOKEN
 ```
 
-### Q: 超时错误
+### Q: Timeout Error
 
-MCP 客户端默认超时 30 秒。检查网络或 MCP 服务器性能。
+The MCP client has a default timeout of 30 seconds. Check the network or MCP server performance.
 
-如需调整超时，需要修改 Juglans 源码中的 `src/services/mcp.rs`。
+To adjust the timeout, you need to modify `src/services/mcp.rs` in the Juglans source code.

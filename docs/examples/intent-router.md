@@ -1,8 +1,8 @@
-# 意图分类路由
+# Intent Classification Routing
 
-根据用户输入的意图，路由到不同的处理流程。
+Route to different processing flows based on the user input's intent.
 
-## 工作流文件
+## Workflow File
 
 ### intent-router.jg
 
@@ -16,52 +16,52 @@ agents: ["./agents/*.jgagent"]
 entry: [classify]
 exit: [respond]
 
-# 意图分类
+# Intent classification
 [classify]: chat(
   agent="classifier",
   message=$input.message,
   format="json"
 )
 
-# 路由到不同处理器
+# Route to different handlers
 [classify] if $output.intent == "question" -> [handle_question]
 [classify] if $output.intent == "task" -> [handle_task]
 [classify] if $output.intent == "greeting" -> [handle_greeting]
 [classify] if $output.intent == "feedback" -> [handle_feedback]
 [classify] -> [handle_general]
 
-# 问题处理
+# Question handling
 [handle_question]: chat(
   agent="qa-expert",
   message=$input.message
 )
 
-# 任务处理
+# Task handling
 [handle_task]: chat(
   agent="task-executor",
   message=$input.message,
   format="json"
 )
 
-# 问候处理
+# Greeting handling
 [handle_greeting]: p(
   slug="greeting-response",
   name=$output.detected_name || "friend"
 )
 
-# 反馈处理
+# Feedback handling
 [handle_feedback]: chat(
   agent="support",
   message=$input.message
 )
 
-# 通用处理
+# General handling
 [handle_general]: chat(
   agent="assistant",
   message=$input.message
 )
 
-# 汇总响应
+# Aggregate response
 [respond]: set_context(
   response=$output,
   intent=$ctx.classified_intent
@@ -74,7 +74,7 @@ exit: [respond]
 [handle_general] -> [respond]
 ```
 
-## Agent 定义
+## Agent Definitions
 
 ### src/agents/classifier.jgagent
 
@@ -164,7 +164,7 @@ system_prompt: |
   - Thank them for their input
 ```
 
-## Prompt 模板
+## Prompt Template
 
 ### src/prompts/greeting-response.jgprompt
 
@@ -182,31 +182,31 @@ template: |
   What would you like to do today?
 ```
 
-## 运行示例
+## Running Examples
 
 ```bash
-# 问题
+# Question
 juglans intent-router.jg --input '{"message": "What is the capital of France?"}'
 # Intent: question -> qa-expert
 # > Paris is the capital of France...
 
-# 任务
+# Task
 juglans intent-router.jg --input '{"message": "Create a summary of this article..."}'
 # Intent: task -> task-executor
 # > {"status": "completed", "result": "..."}
 
-# 问候
+# Greeting
 juglans intent-router.jg --input '{"message": "Hi, I am Bob"}'
 # Intent: greeting -> greeting template
 # > Hello Bob! 👋 I am your AI assistant...
 
-# 反馈
+# Feedback
 juglans intent-router.jg --input '{"message": "The app keeps crashing when I try to save"}'
 # Intent: feedback -> support
 # > I am sorry to hear about the crashes...
 ```
 
-## 高级：多级路由
+## Advanced: Multi-level Routing
 
 ### advanced-router.jg
 
@@ -216,7 +216,7 @@ name: "Advanced Multi-level Router"
 entry: [classify_primary]
 exit: [respond]
 
-# 一级分类
+# Primary classification
 [classify_primary]: chat(
   agent="classifier",
   message=$input.message,
@@ -227,7 +227,7 @@ exit: [respond]
 [classify_primary] if $output.intent == "task" -> [classify_task_type]
 [classify_primary] -> [handle_general]
 
-# 二级分类：问题类型
+# Secondary classification: Question type
 [classify_question_type]: chat(
   agent="question-classifier",
   message=$input.message,
@@ -239,7 +239,7 @@ exit: [respond]
 [classify_question_type] if $output.type == "how_to" -> [howto_qa]
 [classify_question_type] -> [general_qa]
 
-# 二级分类：任务类型
+# Secondary classification: Task type
 [classify_task_type]: chat(
   agent="task-classifier",
   message=$input.message,
@@ -251,7 +251,7 @@ exit: [respond]
 [classify_task_type] if $output.type == "search" -> [search_handler]
 [classify_task_type] -> [general_task]
 
-# 具体处理器...
+# Specific handlers...
 [factual_qa]: chat(agent="fact-checker", message=$input.message)
 [opinion_qa]: chat(agent="opinion-responder", message=$input.message)
 [howto_qa]: chat(agent="tutorial-writer", message=$input.message)
@@ -264,7 +264,7 @@ exit: [respond]
 
 [handle_general]: chat(agent="assistant", message=$input.message)
 
-# 汇总
+# Aggregate
 [respond]: set_context(response=$output)
 
 [factual_qa] -> [respond]
@@ -278,7 +278,7 @@ exit: [respond]
 [handle_general] -> [respond]
 ```
 
-## 目录结构
+## Directory Structure
 
 ```
 intent-router/

@@ -1,19 +1,19 @@
-# 工具定义文件（Tools）
+# Tool Definition Files (Tools)
 
-本指南介绍如何使用工具定义文件（`.json`）管理和复用 AI 工具配置。
+This guide introduces how to use tool definition files (`.json`) to manage and reuse AI tool configurations.
 
-## 什么是工具定义文件
+## What Are Tool Definition Files
 
-工具定义文件允许你将 OpenAI Function Calling 格式的工具定义独立存储，便于：
+Tool definition files allow you to store OpenAI Function Calling format tool definitions independently, making it easy to:
 
-- **模块化管理** - 分离工具定义和业务逻辑
-- **复用** - 多个 Agent 和 Workflow 共享同一工具集
-- **版本控制** - 独立追踪工具定义的变更
-- **团队协作** - 不同成员维护不同的工具集
+- **Modular management** - Separate tool definitions from business logic
+- **Reuse** - Share the same tool set across multiple Agents and Workflows
+- **Version control** - Track tool definition changes independently
+- **Team collaboration** - Different team members maintain different tool sets
 
-## 文件格式
+## File Format
 
-### 基本结构
+### Basic Structure
 
 ```json
 {
@@ -25,11 +25,11 @@
       "type": "function",
       "function": {
         "name": "fetch_url",
-        "description": "获取网页内容",
+        "description": "Fetch web page content",
         "parameters": {
           "type": "object",
           "properties": {
-            "url": {"type": "string", "description": "目标 URL"}
+            "url": {"type": "string", "description": "Target URL"}
           },
           "required": ["url"]
         }
@@ -39,25 +39,25 @@
 }
 ```
 
-### 字段说明
+### Field Descriptions
 
-| 字段 | 类型 | 必填 | 说明 |
+| Field | Type | Required | Description |
 |------|------|------|------|
-| `slug` | string | 是 | 唯一标识符，用于引用 |
-| `name` | string | 是 | 工具集名称 |
-| `description` | string | 否 | 工具集描述 |
-| `tools` | array | 是 | 工具定义数组（OpenAI 格式） |
+| `slug` | string | Yes | Unique identifier, used for referencing |
+| `name` | string | Yes | Tool set name |
+| `description` | string | No | Tool set description |
+| `tools` | array | Yes | Tool definition array (OpenAI format) |
 
-## 在 Workflow 中使用
+## Usage in Workflows
 
-### 1. 导入工具定义
+### 1. Importing Tool Definitions
 
-在 workflow 文件头部导入工具定义：
+Import tool definitions at the top of a workflow file:
 
 ```yaml
 name: "My Workflow"
 
-# 导入工具定义文件
+# Import tool definition files
 tools: ["./tools/*.json"]
 agents: ["./agents/*.jgagent"]
 prompts: ["./prompts/*.jgprompt"]
@@ -65,29 +65,29 @@ prompts: ["./prompts/*.jgprompt"]
 entry: [start]
 ```
 
-### 2. 引用工具集
+### 2. Referencing Tool Sets
 
-#### 单个工具集
-
-```yaml
-[step]: chat(
-  agent="assistant",
-  message=$input.query,
-  tools="web-tools"  # 引用 slug
-)
-```
-
-#### 多个工具集
+#### Single Tool Set
 
 ```yaml
 [step]: chat(
   agent="assistant",
   message=$input.query,
-  tools=["web-tools", "data-tools"]  # 合并多个工具集
+  tools="web-tools"  # Reference by slug
 )
 ```
 
-#### 内联 JSON（向后兼容）
+#### Multiple Tool Sets
+
+```yaml
+[step]: chat(
+  agent="assistant",
+  message=$input.query,
+  tools=["web-tools", "data-tools"]  # Merge multiple tool sets
+)
+```
+
+#### Inline JSON (Backward Compatible)
 
 ```yaml
 [step]: chat(
@@ -102,73 +102,73 @@ entry: [start]
 )
 ```
 
-## 在 Agent 中使用
+## Usage in Agents
 
-### Agent 默认工具
+### Agent Default Tools
 
-在 `.jgagent` 文件中配置默认工具集：
+Configure default tool sets in `.jgagent` files:
 
 ```yaml
 slug: "web-agent"
 model: "gpt-4o"
 system_prompt: "You are a web scraping assistant."
 
-# 单个工具集
+# Single tool set
 tools: "web-tools"
 
-# 或多个工具集
+# Or multiple tool sets
 tools: ["web-tools", "data-tools"]
 ```
 
-Agent 的默认工具会自动附加到所有 `chat()` 调用，除非 workflow 中显式覆盖。
+The Agent's default tools are automatically attached to all `chat()` calls, unless explicitly overridden in the workflow.
 
-## 内置开发者工具 (devtools)
+## Built-in Developer Tools (devtools)
 
-Juglans 内置 6 个 Claude Code 风格的开发者工具，自动注册为 `"devtools"` slug。无需创建 JSON 文件，直接引用即可。
+Juglans includes 6 Claude Code-style built-in developer tools, automatically registered under the `"devtools"` slug. No need to create JSON files -- just reference them directly.
 
-### 在 Agent 中使用
+### Usage in Agents
 
 ```yaml
 slug: "code-assistant"
 model: "deepseek-chat"
 tools: ["devtools"]
 
-# 可与其他工具集组合
+# Can be combined with other tool sets
 # tools: ["devtools", "web-tools"]
 ```
 
-### 在 Workflow 中使用
+### Usage in Workflows
 
-devtools 作为内置工具可直接在节点中调用，无需在 `tools:` 字段中声明：
+devtools can be called directly in nodes as built-in tools, without declaring them in the `tools:` field:
 
 ```yaml
-# 直接作为节点调用
+# Call directly as nodes
 [read]: read_file(file_path="./src/main.rs")
 [search]: grep(pattern="TODO|FIXME", path="./src")
 [review]: chat(agent="reviewer", message="Review:\n$read.output.content")
 [read] -> [search] -> [review]
 ```
 
-### 包含的工具
+### Included Tools
 
-| 工具 | 说明 |
+| Tool | Description |
 |------|------|
-| `read_file` | 读取文件，返回带行号的内容 |
-| `write_file` | 写入文件，自动创建父目录 |
-| `edit_file` | 精确字符串替换 |
-| `glob` | 文件模式匹配 |
-| `grep` | 正则搜索文件内容 |
-| `bash` | 执行 Shell 命令（别名: `sh`） |
+| `read_file` | Read a file, returns content with line numbers |
+| `write_file` | Write a file, automatically creates parent directories |
+| `edit_file` | Exact string replacement |
+| `glob` | File pattern matching |
+| `grep` | Regex search file contents |
+| `bash` | Execute shell commands (alias: `sh`) |
 
-详细参数参见 [内置工具参考](../reference/builtins.md#开发者工具)。
+For detailed parameters, see [Built-in Tools Reference](../reference/builtins.md#developer-tools).
 
-## 优先级规则
+## Priority Rules
 
 ```
-Workflow 内联 JSON > Workflow 引用 > Agent 默认
+Workflow inline JSON > Workflow reference > Agent default
 ```
 
-示例：
+Example:
 
 ```yaml
 # src/agents/my-agent.jgagent
@@ -176,35 +176,35 @@ tools: "default-tools"
 
 # workflow.jg
 [step1]: chat(agent="my-agent", message="...")
-# 使用 "default-tools"
+# Uses "default-tools"
 
 [step2]: chat(agent="my-agent", message="...", tools="override-tools")
-# 使用 "override-tools"（覆盖）
+# Uses "override-tools" (overrides)
 ```
 
-## 工具合并和去重
+## Tool Merging and Deduplication
 
-当引用多个工具集时：
+When referencing multiple tool sets:
 
 ```yaml
 tools: ["web-tools", "data-tools"]
 ```
 
-系统会：
-1. 加载所有工具集
-2. 合并所有工具定义
-3. 去重（同名工具后者覆盖前者）
+The system will:
+1. Load all tool sets
+2. Merge all tool definitions
+3. Deduplicate (tools with the same name are overridden by the latter)
 
 ```
 web-tools: [fetch_url, parse_html]
-data-tools: [calculate, fetch_url]  # fetch_url 覆盖 web-tools 的版本
+data-tools: [calculate, fetch_url]  # fetch_url overrides the version from web-tools
 
-最终: [parse_html, calculate, fetch_url]
+Final: [parse_html, calculate, fetch_url]
 ```
 
-## 示例
+## Examples
 
-### 示例 1: Web 抓取工具
+### Example 1: Web Scraping Tools
 
 **tools/web-tools.json:**
 
@@ -217,7 +217,7 @@ data-tools: [calculate, fetch_url]  # fetch_url 覆盖 web-tools 的版本
       "type": "function",
       "function": {
         "name": "fetch_url",
-        "description": "获取网页内容",
+        "description": "Fetch web page content",
         "parameters": {
           "type": "object",
           "properties": {
@@ -244,7 +244,7 @@ tools: ["./tools/*.json"]
 )
 ```
 
-### 示例 2: 组合多个工具集
+### Example 2: Combining Multiple Tool Sets
 
 **tools/math-tools.json:**
 
@@ -256,7 +256,7 @@ tools: ["./tools/*.json"]
       "type": "function",
       "function": {
         "name": "calculate",
-        "description": "执行数学计算"
+        "description": "Perform mathematical calculations"
       }
     }
   ]
@@ -267,51 +267,51 @@ tools: ["./tools/*.json"]
 
 ```yaml
 slug: "analyst"
-tools: ["web-tools", "math-tools"]  # 组合工具
+tools: ["web-tools", "math-tools"]  # Combined tools
 ```
 
-## 最佳实践
+## Best Practices
 
-### 1. 命名规范
+### 1. Naming Conventions
 
 ```
 tools/
-├── web-tools.json      # 功能分类命名
+├── web-tools.json      # Named by functional category
 ├── data-tools.json
 ├── api-tools.json
 └── custom-tools.json
 ```
 
-### 2. 工具粒度
+### 2. Tool Granularity
 
-- **粗粒度** - 按功能领域分组（web-tools, data-tools）
-- **细粒度** - 按具体用途拆分（github-tools, slack-tools）
+- **Coarse-grained** - Group by functional domain (web-tools, data-tools)
+- **Fine-grained** - Split by specific use case (github-tools, slack-tools)
 
-选择适合团队的粒度。
+Choose the granularity that suits your team.
 
-### 3. 版本管理
+### 3. Version Management
 
 ```bash
-# 提交工具定义到版本控制
+# Commit tool definitions to version control
 git add tools/
 git commit -m "feat: Add web scraping tools"
 ```
 
-### 4. 文档化
+### 4. Documentation
 
-在工具定义中提供清晰的描述：
+Provide clear descriptions in tool definitions:
 
 ```json
 {
   "slug": "api-tools",
-  "description": "连接外部 API 的工具集，包括认证和数据转换",
+  "description": "Tool set for connecting to external APIs, including authentication and data transformation",
   "tools": [...]
 }
 ```
 
-### 5. 测试
+### 5. Testing
 
-创建测试 workflow 验证工具定义：
+Create test workflows to verify tool definitions:
 
 ```yaml
 name: "Test Web Tools"
@@ -324,63 +324,63 @@ tools: ["./tools/web-tools.json"]
 )
 ```
 
-## 错误处理
+## Error Handling
 
-### 工具集不存在
+### Tool Set Not Found
 
 ```yaml
-tools: "nonexistent"  # ❌ 错误
+tools: "nonexistent"  # Error
 ```
 
-错误信息：
+Error message:
 ```
 Tool resource 'nonexistent' not found
 ```
 
-**解决方法：**
-1. 检查 slug 拼写
-2. 确认工具文件已导入
-3. 查看加载日志
+**Solution:**
+1. Check the slug spelling
+2. Confirm the tool file has been imported
+3. Review the loading logs
 
-### 工具定义格式错误
+### Tool Definition Format Error
 
 ```json
 {
   "slug": "bad-tools",
-  "tools": "not an array"  // ❌ 错误
+  "tools": "not an array"  // Error
 }
 ```
 
-**解决方法：**
-检查 JSON 格式，确保 `tools` 是数组。
+**Solution:**
+Check the JSON format and ensure `tools` is an array.
 
-## 调试
+## Debugging
 
-### 查看加载的工具
+### View Loaded Tools
 
-启用调试日志：
+Enable debug logging:
 
 ```bash
 DEBUG=true juglans workflow.jg
 ```
 
-输出：
+Output:
 ```
-📦 Loading tool definitions from 1 pattern(s)...
-  ✅ Loaded 2 tool resource(s) with 5 total tools
+Loading tool definitions from 1 pattern(s)...
+  Loaded 2 tool resource(s) with 5 total tools
 Registered tool resource: web-tools
 Registered tool resource: data-tools
 ```
 
-### 工具解析日志
+### Tool Resolution Logs
 
 ```
 Resolving tool reference: web-tools
-🛠️ Attaching 2 custom tools to the request.
+Attaching 2 custom tools to the request.
 ```
 
-## 相关文档
+## Related Documentation
 
-- [Agent 配置](./agent-syntax.md) - Agent 默认工具配置
-- [Workflow 语法](./workflow-syntax.md) - 导入工具定义
-- [内置工具](../reference/builtins.md) - chat() 参数说明
+- [Agent Configuration](./agent-syntax.md) - Agent default tool configuration
+- [Workflow Syntax](./workflow-syntax.md) - Importing tool definitions
+- [Built-in Tools](../reference/builtins.md) - chat() parameter descriptions

@@ -1,8 +1,8 @@
-# Prompt 模板语法 (.jgprompt)
+# Prompt Template Syntax (.jgprompt)
 
-`.jgprompt` 文件定义可复用的 Prompt 模板，支持变量插值和控制流。
+`.jgprompt` files define reusable Prompt templates with support for variable interpolation and control flow.
 
-## 文件结构
+## File Structure
 
 ```yaml
 ---
@@ -18,44 +18,44 @@ Template content goes here...
 {{ variable }}
 ```
 
-## 前置元数据 (Frontmatter)
+## Frontmatter
 
-使用 YAML 格式定义元数据，用 `---` 包围：
+Define metadata using YAML format, enclosed by `---`:
 
-| 字段 | 类型 | 必填 | 说明 |
+| Field | Type | Required | Description |
 |------|------|------|------|
-| `slug` | string | 是 | 唯一标识符，用于引用 |
-| `name` | string | 否 | 显示名称 |
-| `type` | string | 否 | 类型，默认 "prompt" |
-| `description` | string | 否 | 描述说明 |
-| `inputs` | object | 否 | 输入参数及默认值 |
+| `slug` | string | Yes | Unique identifier, used for referencing |
+| `name` | string | No | Display name |
+| `type` | string | No | Type, defaults to "prompt" |
+| `description` | string | No | Description |
+| `inputs` | object | No | Input parameters and default values |
 
-### 输入参数
+### Input Parameters
 
 ```yaml
 ---
 slug: "analysis"
 inputs:
-  # 简单类型
+  # Simple types
   name: "Default Name"
   count: 10
   enabled: true
 
-  # 嵌套对象
+  # Nested objects
   config:
     model: "gpt-4"
     temperature: 0.7
 
-  # 数组
+  # Arrays
   tags: ["tag1", "tag2"]
 ---
 ```
 
-## 模板语法
+## Template Syntax
 
-### 变量插值
+### Variable Interpolation
 
-使用 `{{ }}` 插入变量：
+Use `{{ }}` to insert variables:
 
 ```
 Hello, {{ name }}!
@@ -65,29 +65,29 @@ Your score is {{ score }}.
 Config: {{ config.model }} at {{ config.temperature }}
 ```
 
-### 过滤器
+### Filters
 
-对变量应用转换：
+Apply transformations to variables:
 
 ```
-# 四舍五入
+# Rounding
 {{ price | round(2) }}
 
-# 截断文本
+# Truncate text
 {{ description | truncate(100) }}
 
-# 大小写
+# Case conversion
 {{ name | upper }}
 {{ name | lower }}
 
-# 默认值
+# Default value
 {{ optional_field | default("N/A") }}
 
-# JSON 格式化
+# JSON formatting
 {{ data | json }}
 ```
 
-### 条件语句
+### Conditional Statements
 
 ```
 {% if condition %}
@@ -103,18 +103,18 @@ Config: {{ config.model }} at {{ config.temperature }}
 {% endif %}
 ```
 
-### 比较运算符
+### Comparison Operators
 
-| 运算符 | 说明 |
+| Operator | Description |
 |--------|------|
-| `==` | 等于 |
-| `!=` | 不等于 |
-| `>` | 大于 |
-| `<` | 小于 |
-| `>=` | 大于等于 |
-| `<=` | 小于等于 |
+| `==` | Equal to |
+| `!=` | Not equal to |
+| `>` | Greater than |
+| `<` | Less than |
+| `>=` | Greater than or equal to |
+| `<=` | Less than or equal to |
 
-### 逻辑运算符
+### Logical Operators
 
 ```
 {% if a && b %}        # AND
@@ -122,14 +122,14 @@ Config: {{ config.model }} at {{ config.temperature }}
 {% if !condition %}    # NOT
 ```
 
-### 循环语句
+### Loop Statements
 
 ```
 {% for item in items %}
   - {{ item.name }}: {{ item.value }}
 {% endfor %}
 
-# 带 else（空列表时）
+# With else (when the list is empty)
 {% for item in items %}
   - {{ item }}
 {% else %}
@@ -137,20 +137,20 @@ Config: {{ config.model }} at {{ config.temperature }}
 {% endfor %}
 ```
 
-### 循环上下文变量
+### Loop Context Variables
 
 ```
 {% for item in items %}
-  {{ loop.index }}: {{ item }}       # 索引 (1-based，从 1 开始)
-  {{ loop.index0 }}: {{ item }}      # 索引 (0-based，从 0 开始)
+  {{ loop.index }}: {{ item }}       # Index (1-based, starting from 1)
+  {{ loop.index0 }}: {{ item }}      # Index (0-based, starting from 0)
   {% if loop.first %}(First!){% endif %}
   {% if loop.last %}(Last!){% endif %}
 {% endfor %}
 ```
 
-## 完整示例
+## Complete Examples
 
-### 简单 Prompt
+### Simple Prompt
 
 ```yaml
 ---
@@ -165,7 +165,7 @@ Hello, {{ name }}!
 Please respond in {{ language }}.
 ```
 
-### 分析 Prompt
+### Analysis Prompt
 
 ```yaml
 ---
@@ -203,7 +203,7 @@ Analyze the following topic: {{ topic }}
 4. Recommendations
 ```
 
-### 多轮对话 Prompt
+### Multi-Turn Conversation Prompt
 
 ```yaml
 ---
@@ -232,7 +232,7 @@ User: {{ current_message }}
 - Ask clarifying questions if needed
 ```
 
-### 代码生成 Prompt
+### Code Generation Prompt
 
 ```yaml
 ---
@@ -269,7 +269,7 @@ You are an expert {{ language }} developer.
 Provide only the code, wrapped in appropriate markdown code blocks.
 ```
 
-### 带示例的 Prompt
+### Few-Shot Prompt
 
 ```yaml
 ---
@@ -294,15 +294,15 @@ Input: {{ query }}
 Output:
 ```
 
-## 在工作流中使用
+## Usage in Workflows
 
-### 基本调用
+### Basic Call
 
 ```yaml
 [render]: p(slug="greeting", name="Alice")
 ```
 
-### 传递变量
+### Passing Variables
 
 ```yaml
 [render]: p(
@@ -313,7 +313,7 @@ Output:
 )
 ```
 
-### 结合 Chat
+### Combined with Chat
 
 ```yaml
 [prompt]: p(slug="analysis", data=$input)
@@ -322,32 +322,32 @@ Output:
 [prompt] -> [chat]
 ```
 
-## 最佳实践
+## Best Practices
 
-1. **明确输入** - 在 `inputs` 中定义所有参数和默认值
-2. **结构化输出** - 使用 Markdown 结构组织长 Prompt
-3. **条件逻辑** - 用条件语句处理不同场景
-4. **可测试** - 提供合理的默认值便于测试
-5. **文档化** - 使用 `description` 说明用途
+1. **Define inputs clearly** - Define all parameters and default values in `inputs`
+2. **Structured output** - Use Markdown structure to organize long Prompts
+3. **Conditional logic** - Use conditional statements to handle different scenarios
+4. **Testable** - Provide reasonable default values for easy testing
+5. **Document** - Use `description` to explain the purpose
 
-## 调试技巧
+## Debugging Tips
 
-### 本地渲染测试
+### Local Rendering Test
 
 ```bash
-# 使用默认值渲染
+# Render using default values
 juglans src/prompts/my-prompt.jgprompt
 
-# 传入自定义输入
+# Pass custom input
 juglans src/prompts/my-prompt.jgprompt --input '{
   "name": "Test User",
   "score": 95
 }'
 ```
 
-### 查看渲染结果
+### View Rendered Result
 
 ```bash
-# 只输出渲染后的文本，不执行
+# Output rendered text only, without executing
 juglans src/prompts/my-prompt.jgprompt --dry-run
 ```

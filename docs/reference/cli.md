@@ -1,73 +1,73 @@
-# CLI 命令参考
+# CLI Command Reference
 
-Juglans CLI 提供工作流执行、资源管理和开发工具。
+The Juglans CLI provides workflow execution, resource management, and development tools.
 
-## 安装
+## Installation
 
 ```bash
-# 从源码构建
+# Build from source
 git clone https://github.com/juglans-ai/juglans.git
 cd juglans
 cargo build --release
 
-# 安装到系统
+# Install to system
 cargo install --path .
 
-# 或添加到 PATH
+# Or add to PATH
 export PATH="$PATH:$(pwd)/target/release"
 ```
 
-## 基本用法
+## Basic Usage
 
 ```bash
 juglans [OPTIONS] <FILE> [ARGS]
 juglans <COMMAND> [OPTIONS]
 ```
 
-## 执行命令
+## Execution Commands
 
-### 执行工作流
+### Execute Workflow
 
 ```bash
 juglans path/to/workflow.jg [OPTIONS]
 ```
 
-**选项：**
+**Options:**
 
-| 选项 | 说明 |
+| Option | Description |
 |------|------|
-| `--input <JSON>` | 输入数据 (JSON 格式) |
-| `--input-file <FILE>` | 从文件读取输入 |
-| `--verbose`, `-v` | 详细输出 |
-| `--dry-run` | 仅解析，不执行 |
-| `--output <FILE>` | 输出结果到文件 |
-| `--output-format <FORMAT>` | 输出格式 (text, json)，默认 text |
+| `--input <JSON>` | Input data (JSON format) |
+| `--input-file <FILE>` | Read input from file |
+| `--verbose`, `-v` | Verbose output |
+| `--dry-run` | Parse only, do not execute |
+| `--output <FILE>` | Output result to file |
+| `--output-format <FORMAT>` | Output format (text, json), default text |
 
-**示例：**
+**Examples:**
 
 ```bash
-# 基本执行
+# Basic execution
 juglans src/main.jg
 
-# 传入输入
+# Pass input
 juglans src/main.jg --input '{"query": "Hello"}'
 
-# 从文件读取输入
+# Read input from file
 juglans src/main.jg --input-file input.json
 
-# 详细模式
+# Verbose mode
 juglans src/main.jg -v
 
-# 仅验证
+# Validate only
 juglans src/main.jg --dry-run
 
-# JSON 格式输出（便于程序化处理）
+# JSON format output (convenient for programmatic processing)
 juglans src/main.jg --output-format json
 ```
 
-**JSON 输出格式：**
+**JSON Output Format:**
 
-当使用 `--output-format json` 时，输出结构化的执行结果：
+When using `--output-format json`, structured execution results are output:
 
 ```json
 {
@@ -81,100 +81,100 @@ juglans src/main.jg --output-format json
 }
 ```
 
-这对于 CI/CD 集成或程序化处理工作流结果非常有用
+This is very useful for CI/CD integration or programmatic processing of workflow results.
 
 ---
 
-### 执行 Agent (交互模式)
+### Execute Agent (Interactive Mode)
 
 ```bash
 juglans path/to/agent.jgagent [OPTIONS]
 ```
 
-**选项：**
+**Options:**
 
-| 选项 | 说明 |
+| Option | Description |
 |------|------|
-| `--message <TEXT>` | 初始消息 |
-| `--verbose`, `-v` | 详细输出 |
-| `--info` | 显示 Agent 信息 |
+| `--message <TEXT>` | Initial message |
+| `--verbose`, `-v` | Verbose output |
+| `--info` | Show Agent information |
 
-**示例：**
+**Examples:**
 
 ```bash
-# 交互对话
+# Interactive conversation
 juglans src/agents/assistant.jgagent
 
-# 发送单条消息
+# Send a single message
 juglans src/agents/assistant.jgagent --message "What is Rust?"
 
-# 查看配置
+# View configuration
 juglans src/agents/assistant.jgagent --info
 ```
 
-**交互命令：**
+**Interactive Commands:**
 
-在交互模式中：
-- 输入消息发送给 Agent
-- `exit` 或 `quit` 退出
-- `clear` 清除历史
-- `history` 查看对话历史
+In interactive mode:
+- Type a message to send it to the Agent
+- `exit` or `quit` to exit
+- `clear` to clear history
+- `history` to view conversation history
 
 ---
 
-### 渲染 Prompt
+### Render Prompt
 
 ```bash
 juglans path/to/prompt.jgprompt [OPTIONS]
 ```
 
-**选项：**
+**Options:**
 
-| 选项 | 说明 |
+| Option | Description |
 |------|------|
-| `--input <JSON>` | 模板变量 |
-| `--output <FILE>` | 输出到文件 |
+| `--input <JSON>` | Template variables |
+| `--output <FILE>` | Output to file |
 
-**示例：**
+**Examples:**
 
 ```bash
-# 使用默认值渲染
+# Render with default values
 juglans src/prompts/greeting.jgprompt
 
-# 传入变量
+# Pass variables
 juglans src/prompts/greeting.jgprompt --input '{"name": "Alice"}'
 
-# 输出到文件
+# Output to file
 juglans src/prompts/greeting.jgprompt --output rendered.txt
 ```
 
 ---
 
-## 项目命令
+## Project Commands
 
-### init - 初始化项目
+### init - Initialize Project
 
 ```bash
 juglans init <PROJECT_NAME> [OPTIONS]
 ```
 
-**选项：**
+**Options:**
 
-| 选项 | 说明 |
+| Option | Description |
 |------|------|
-| `--template <NAME>` | 使用模板 (basic, advanced) |
+| `--template <NAME>` | Use template (basic, advanced) |
 
-**示例：**
+**Examples:**
 
 ```bash
-# 创建新项目
+# Create a new project
 juglans init my-project
 
-# 使用高级模板
+# Use advanced template
 juglans init my-project --template advanced
 ```
 
-**生成结构：**
+**Generated Structure:**
 
 ```
 my-project/
@@ -193,74 +193,74 @@ my-project/
 
 ---
 
-### install - 安装依赖
+### install - Install Dependencies
 
-获取 MCP 工具 schema：
+Fetch MCP tool schemas:
 
 ```bash
 juglans install [OPTIONS]
 ```
 
-**选项：**
+**Options:**
 
-| 选项 | 说明 |
+| Option | Description |
 |------|------|
-| `--force` | 强制重新获取 |
+| `--force` | Force re-fetch |
 
-**示例：**
+**Examples:**
 
 ```bash
-# 安装 MCP 工具
+# Install MCP tools
 juglans install
 
-# 强制刷新
+# Force refresh
 juglans install --force
 ```
 
 ---
 
-## 资源管理
+## Resource Management
 
-### apply - 推送资源
+### apply - Push Resources
 
-将本地资源推送到 Jug0 后端，支持单文件或批量操作。
+Push local resources to the Jug0 backend, supporting single file or batch operations.
 
 ```bash
 juglans apply [PATHS...] [OPTIONS]
 ```
 
-**参数：**
+**Arguments:**
 
-| 参数 | 说明 |
+| Argument | Description |
 |------|------|
-| `PATHS` | 文件或目录路径（可选，为空时使用 workspace 配置） |
+| `PATHS` | File or directory paths (optional, uses workspace configuration when empty) |
 
-**选项：**
+**Options:**
 
-| 选项 | 说明 |
+| Option | Description |
 |------|------|
-| `--force` | 覆盖已存在的资源 |
-| `--dry-run` | 预览但不执行 |
-| `--type <TYPE>`, `-t` | 过滤资源类型 (workflow, agent, prompt, tool, all) |
-| `--recursive`, `-r` | 递归扫描目录 |
+| `--force` | Overwrite existing resources |
+| `--dry-run` | Preview without executing |
+| `--type <TYPE>`, `-t` | Filter resource type (workflow, agent, prompt, tool, all) |
+| `--recursive`, `-r` | Recursively scan directories |
 
-#### 基本用法
+#### Basic Usage
 
 ```bash
-# 推送单个文件
+# Push a single file
 juglans apply src/prompts/my-prompt.jgprompt
 juglans apply src/agents/my-agent.jgagent
 juglans apply src/workflows/my-flow.jgflow
 
-# 强制覆盖
+# Force overwrite
 juglans apply src/prompts/my-prompt.jgprompt --force
 ```
 
-#### 批量操作
+#### Batch Operations
 
-**使用 workspace 配置：**
+**Using workspace configuration:**
 
-首先在 `juglans.toml` 中配置资源路径：
+First configure resource paths in `juglans.toml`:
 
 ```toml
 [workspace]
@@ -271,23 +271,23 @@ tools = ["src/tools/**/*.json"]
 exclude = ["**/*.backup", "**/test_*"]
 ```
 
-然后无参数运行 apply：
+Then run apply without arguments:
 
 ```bash
-# Apply 所有配置的资源
+# Apply all configured resources
 juglans apply
 
-# 预览将要 apply 的文件
+# Preview files that will be applied
 juglans apply --dry-run
 
-# 只 apply workflows
+# Apply only workflows
 juglans apply --type workflow
 
-# 只 apply agents
+# Apply only agents
 juglans apply -t agent
 ```
 
-**输出示例：**
+**Output example:**
 
 ```
 📦 Using workspace configuration from juglans.toml
@@ -310,43 +310,43 @@ juglans apply -t agent
   ❌ 0 failed
 ```
 
-**Apply 指定目录：**
+**Apply specific directories:**
 
 ```bash
-# Apply 整个目录
+# Apply an entire directory
 juglans apply src/workflows/
 
-# 递归 apply 所有子目录
+# Recursively apply all subdirectories
 juglans apply src/ -r
 
-# Apply 多个目录
+# Apply multiple directories
 juglans apply src/agents/ src/prompts/
 
-# Apply 特定类型
+# Apply a specific type
 juglans apply src/ -r --type workflow
 ```
 
-**Glob 模式：**
+**Glob patterns:**
 
 ```bash
-# Apply 所有 workflow
+# Apply all workflows
 juglans apply "src/**/*.jg"
 
-# Apply 特定前缀的文件
+# Apply files with a specific prefix
 juglans apply "src/agents/prod_*.jgagent"
 ```
 
-**Dry-run 模式：**
+**Dry-run mode:**
 
 ```bash
-# 预览将要 apply 的文件
+# Preview files that will be applied
 juglans apply --dry-run
 
-# 预览特定目录
+# Preview a specific directory
 juglans apply src/workflows/ --dry-run
 ```
 
-输出：
+Output:
 
 ```
 📦 Scanning workspace: src/
@@ -370,64 +370,64 @@ Run without --dry-run to apply.
 
 ---
 
-### pull - 拉取资源
+### pull - Pull Resources
 
-从 Jug0 后端拉取资源：
+Pull resources from the Jug0 backend:
 
 ```bash
 juglans pull <SLUG> [OPTIONS]
 ```
 
-**选项：**
+**Options:**
 
-| 选项 | 说明 |
+| Option | Description |
 |------|------|
-| `--type <TYPE>` | 资源类型 (prompt, agent, workflow) |
-| `--output <DIR>` | 输出目录 |
+| `--type <TYPE>` | Resource type (prompt, agent, workflow) |
+| `--output <DIR>` | Output directory |
 
-**示例：**
+**Examples:**
 
 ```bash
-# 拉取 Prompt
+# Pull a Prompt
 juglans pull my-prompt --type prompt
 
-# 拉取到指定目录
+# Pull to a specific directory
 juglans pull my-agent --type agent --output ./src/agents/
 ```
 
 ---
 
-### list - 列出远程资源
+### list - List Remote Resources
 
-列出 Jug0 后端的资源。
+List resources on the Jug0 backend.
 
 ```bash
 juglans list [OPTIONS]
 ```
 
-**选项：**
+**Options:**
 
-| 选项 | 说明 |
+| Option | Description |
 |------|------|
-| `--type <TYPE>`, `-t` | 过滤资源类型 (prompt, agent, workflow)，可选 |
+| `--type <TYPE>`, `-t` | Filter resource type (prompt, agent, workflow), optional |
 
-**示例：**
+**Examples:**
 
 ```bash
-# 列出所有资源
+# List all resources
 juglans list
 
-# 只列出 Prompts
+# List only Prompts
 juglans list --type prompt
 
-# 只列出 Agents（短选项）
+# List only Agents (short option)
 juglans list -t agent
 
-# 只列出 Workflows
+# List only Workflows
 juglans list --type workflow
 ```
 
-**输出格式：**
+**Output format:**
 
 ```
 greeting-prompt (prompt)
@@ -437,70 +437,70 @@ simple-chat (workflow)
 data-pipeline (workflow)
 ```
 
-输出格式为：`slug (resource_type)`，每行一个资源。
+Output format is: `slug (resource_type)`, one resource per line.
 
-**空结果：**
+**Empty results:**
 
-如果没有找到资源，会显示：
+If no resources are found, the following is displayed:
 ```
 No resources found.
 ```
 
-**使用场景：**
+**Use cases:**
 
-- 查看服务器上已有的资源
-- 确认资源是否已成功 apply
-- 在 pull 之前确认资源存在
+- View resources already on the server
+- Confirm whether resources have been successfully applied
+- Confirm resource existence before pulling
 
-**注意事项：**
+**Notes:**
 
-- 需要配置有效的 API key
-- 只显示当前账户可访问的资源
-- 按资源类型和名称排序
+- Requires a valid API key to be configured
+- Only displays resources accessible by the current account
+- Sorted by resource type and name
 
 ---
 
-### check - 验证文件语法
+### check - Validate File Syntax
 
-验证 `.jg`、`.jgagent`、`.jgprompt` 文件的语法正确性（类似 `cargo check`）。
+Validate the syntax correctness of `.jg`, `.jgagent`, `.jgprompt` files (similar to `cargo check`).
 
 ```bash
 juglans check [PATH] [OPTIONS]
 ```
 
-**参数：**
+**Arguments:**
 
-| 参数 | 说明 |
+| Argument | Description |
 |------|------|
-| `PATH` | 要检查的文件或目录路径（可选，默认为当前目录） |
+| `PATH` | File or directory path to check (optional, defaults to current directory) |
 
-**选项：**
+**Options:**
 
-| 选项 | 说明 |
+| Option | Description |
 |------|------|
-| `--all` | 显示所有问题包括警告 |
-| `--format <FORMAT>` | 输出格式 (text, json)，默认 text |
+| `--all` | Show all issues including warnings |
+| `--format <FORMAT>` | Output format (text, json), default text |
 
-**示例：**
+**Examples:**
 
 ```bash
-# 检查当前目录所有文件
+# Check all files in current directory
 juglans check
 
-# 检查特定目录
+# Check a specific directory
 juglans check ./src/
 
-# 检查单个文件
+# Check a single file
 juglans check workflow.jg
 
-# 显示所有警告
+# Show all warnings
 juglans check --all
 
-# JSON 格式输出
+# JSON format output
 juglans check --format json
 ```
 
-**输出示例（text 格式）：**
+**Output example (text format):**
 
 ```
     Checking juglans files in "."
@@ -516,7 +516,7 @@ juglans check --format json
 error: could not validate 1 file(s) due to 1 previous error(s)
 ```
 
-**输出示例（JSON 格式）：**
+**Output example (JSON format):**
 
 ```json
 {
@@ -544,99 +544,99 @@ error: could not validate 1 file(s) due to 1 previous error(s)
 }
 ```
 
-**退出码：**
+**Exit codes:**
 
-- `0` - 所有文件验证通过
-- `1` - 存在语法错误
+- `0` - All files validated successfully
+- `1` - Syntax errors found
 
-**使用场景：**
+**Use cases:**
 
-- CI/CD 流水线中的语法验证
-- 提交前的本地检查
-- 批量验证项目中所有工作流文件
+- Syntax validation in CI/CD pipelines
+- Local checks before committing
+- Batch validation of all workflow files in a project
 
 ---
 
-### delete - 删除远程资源
+### delete - Delete Remote Resources
 
-从 Jug0 后端删除资源。
+Delete resources from the Jug0 backend.
 
 ```bash
 juglans delete <SLUG> --type <TYPE>
 ```
 
-**参数：**
+**Arguments:**
 
-| 参数 | 说明 |
+| Argument | Description |
 |------|------|
-| `SLUG` | 要删除的资源 slug |
+| `SLUG` | Resource slug to delete |
 
-**选项：**
+**Options:**
 
-| 选项 | 说明 |
+| Option | Description |
 |------|------|
-| `--type <TYPE>`, `-t` | 资源类型 (prompt, agent, workflow) |
+| `--type <TYPE>`, `-t` | Resource type (prompt, agent, workflow) |
 
-**示例：**
+**Examples:**
 
 ```bash
-# 删除 Prompt
+# Delete a Prompt
 juglans delete my-prompt --type prompt
 
-# 删除 Agent（短选项）
+# Delete an Agent (short option)
 juglans delete my-agent -t agent
 
-# 删除 Workflow
+# Delete a Workflow
 juglans delete chat-flow --type workflow
 ```
 
-**注意事项：**
+**Notes:**
 
-- 需要配置有效的 API key（通过 `juglans.toml` 或环境变量）
-- 删除操作不可逆，请谨慎使用
-- 只能删除当前账户拥有的资源
-- 删除成功后会显示确认消息：`✅ Deleted <slug> (<type>)`
+- Requires a valid API key (via `juglans.toml` or environment variable)
+- Deletion is irreversible, use with caution
+- Can only delete resources owned by the current account
+- A confirmation message is displayed on successful deletion: `Deleted <slug> (<type>)`
 
-**错误处理：**
+**Error Handling:**
 
-- 如果资源不存在，会返回错误
-- 如果没有权限删除，会返回认证错误
-- 网络错误会显示相应的错误信息
+- If the resource does not exist, an error is returned
+- If there is no permission to delete, an authentication error is returned
+- Network errors display corresponding error messages
 
 ---
 
-### whoami - 显示账号信息
+### whoami - Show Account Information
 
-显示当前用户和工作空间配置信息。
+Display current user and workspace configuration information.
 
 ```bash
 juglans whoami [OPTIONS]
 ```
 
-**选项：**
+**Options:**
 
-| 选项 | 说明 |
+| Option | Description |
 |------|------|
-| `--verbose`, `-v` | 显示详细信息 |
-| `--check-connection` | 测试与 Jug0 服务器的连接 |
+| `--verbose`, `-v` | Show detailed information |
+| `--check-connection` | Test connection to the Jug0 server |
 
-**基本用法：**
+**Basic Usage:**
 
 ```bash
-# 显示账号信息
+# Show account information
 juglans whoami
 
-# 显示详细信息
+# Show detailed information
 juglans whoami --verbose
 
-# 测试连接
+# Test connection
 juglans whoami --check-connection
 
-# 详细模式 + 连接测试
+# Verbose mode + connection test
 juglans whoami -v --check-connection
 ```
 
-**输出示例（基本）：**
+**Output example (basic):**
 
 ```
 📋 Account Information
@@ -654,7 +654,7 @@ Jug0 Server:   http://localhost:3000
 Config:        ./juglans.toml
 ```
 
-**输出示例（详细模式）：**
+**Output example (verbose mode):**
 
 ```
 📋 Account Information
@@ -687,77 +687,77 @@ MCP Servers:   2 configured
 Config:        ./juglans.toml
 ```
 
-**状态指示：**
+**Status Indicators:**
 
-- `✅ Connected` - 服务器连接正常
-- `⚠️ Server unreachable` - 无法连接服务器
-- `❌ Error: ...` - 连接错误
-- `⚠️ Not configured` - API Key 未配置
+- `Connected` - Server connection is normal
+- `Server unreachable` - Cannot connect to the server
+- `Error: ...` - Connection error
+- `Not configured` - API Key not configured
 
-**使用场景：**
+**Use cases:**
 
-- 确认当前使用的账号
-- 检查配置是否正确
-- 调试连接问题
-- 查看工作空间设置
-- 验证 API Key 是否已配置
+- Confirm the current account in use
+- Check if the configuration is correct
+- Debug connection issues
+- View workspace settings
+- Verify whether the API Key is configured
 
 ---
 
-## 开发服务器
+## Development Server
 
-### web - 启动 Web 服务器
+### web - Start Web Server
 
 ```bash
 juglans web [OPTIONS]
 ```
 
-**选项：**
+**Options:**
 
-| 选项 | 默认值 | 说明 |
+| Option | Default | Description |
 |------|--------|------|
-| `--host <HOST>` | 127.0.0.1 | 绑定地址 |
-| `--port <PORT>` | 8080 | 端口号 |
+| `--host <HOST>` | 127.0.0.1 | Bind address |
+| `--port <PORT>` | 8080 | Port number |
 
-**示例：**
+**Examples:**
 
 ```bash
-# 默认配置
+# Default configuration
 juglans web
 
-# 自定义端口
+# Custom port
 juglans web --port 3000
 
-# 允许外部访问
+# Allow external access
 juglans web --host 0.0.0.0 --port 8080
 ```
 
-**API 端点：**
+**API Endpoints:**
 
-| 端点 | 方法 | 说明 |
+| Endpoint | Method | Description |
 |------|------|------|
-| `/api/agents` | GET | 列出 Agents |
-| `/api/agents/:slug` | GET | 获取 Agent |
-| `/api/prompts` | GET | 列出 Prompts |
-| `/api/prompts/:slug` | GET | 获取 Prompt |
-| `/api/prompts/:slug/render` | POST | 渲染 Prompt |
-| `/api/workflows` | GET | 列出 Workflows |
-| `/api/workflows/:slug/execute` | POST | 执行 Workflow |
+| `/api/agents` | GET | List Agents |
+| `/api/agents/:slug` | GET | Get Agent |
+| `/api/prompts` | GET | List Prompts |
+| `/api/prompts/:slug` | GET | Get Prompt |
+| `/api/prompts/:slug/render` | POST | Render Prompt |
+| `/api/workflows` | GET | List Workflows |
+| `/api/workflows/:slug/execute` | POST | Execute Workflow |
 | `/api/chat` | POST | Chat (SSE) |
 
 ---
 
-## 配置
+## Configuration
 
-### 配置文件位置
+### Configuration File Location
 
-按优先级查找：
+Searched in order of priority:
 
-1. `./juglans.toml` (当前目录)
-2. `~/.config/juglans/juglans.toml` (用户配置)
-3. `/etc/juglans/juglans.toml` (系统配置)
+1. `./juglans.toml` (current directory)
+2. `~/.config/juglans/juglans.toml` (user configuration)
+3. `/etc/juglans/juglans.toml` (system configuration)
 
-### 配置文件格式
+### Configuration File Format
 
 ```toml
 # juglans.toml
@@ -779,26 +779,26 @@ args = ["-y", "@anthropic/mcp-filesystem"]
 env = { ROOT_DIR = "/workspace" }
 ```
 
-### 环境变量
+### Environment Variables
 
-| 变量 | 说明 |
+| Variable | Description |
 |------|------|
-| `JUGLANS_API_KEY` | API 密钥 (覆盖配置文件) |
-| `JUGLANS_CONFIG` | 配置文件路径 |
-| `JUGLANS_LOG_LEVEL` | 日志级别 (debug, info, warn, error) |
+| `JUGLANS_API_KEY` | API key (overrides configuration file) |
+| `JUGLANS_CONFIG` | Configuration file path |
+| `JUGLANS_LOG_LEVEL` | Log level (debug, info, warn, error) |
 
 ---
 
-## 输出格式
+## Output Formats
 
-### 默认输出
+### Default Output
 
 ```
 [node_id] Status message...
 [node_id] Result: ...
 ```
 
-### 详细模式 (-v)
+### Verbose Mode (-v)
 
 ```
 [DEBUG] Loading workflow: main.jg
@@ -811,7 +811,7 @@ env = { ROOT_DIR = "/workspace" }
 ...
 ```
 
-### JSON 输出
+### JSON Output
 
 ```bash
 juglans workflow.jg --output-format json
@@ -828,45 +828,45 @@ juglans workflow.jg --output-format json
 
 ---
 
-## 退出码
+## Exit Codes
 
-| 码 | 说明 |
+| Code | Description |
 |----|------|
-| 0 | 成功 |
-| 1 | 一般错误 |
-| 2 | 解析错误 |
-| 3 | 执行错误 |
-| 4 | 配置错误 |
-| 5 | 网络错误 |
+| 0 | Success |
+| 1 | General error |
+| 2 | Parse error |
+| 3 | Execution error |
+| 4 | Configuration error |
+| 5 | Network error |
 
 ---
 
-## 故障排除
+## Troubleshooting
 
-### 常见问题
+### Common Issues
 
-**Q: 找不到配置文件**
+**Q: Configuration file not found**
 ```bash
 juglans --config /path/to/juglans.toml workflow.jg
 ```
 
-**Q: API 连接失败**
+**Q: API connection failed**
 ```bash
-# 检查连接
+# Check connection
 curl http://localhost:3000/health
 
-# 查看详细日志
+# View detailed logs
 JUGLANS_LOG_LEVEL=debug juglans workflow.jg
 ```
 
-**Q: MCP 工具不可用**
+**Q: MCP tools unavailable**
 ```bash
-# 重新安装
+# Reinstall
 juglans install --force
 ```
 
-**Q: 内存不足**
+**Q: Out of memory**
 ```bash
-# 对于大型工作流，增加栈大小
+# For large workflows, increase stack size
 RUST_MIN_STACK=8388608 juglans workflow.jg
 ```

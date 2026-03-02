@@ -1,22 +1,22 @@
-# 上下文变量参考
+# Context Variable Reference
 
-工作流执行时维护一个上下文对象，用于存储和传递数据。
+During workflow execution, a context object is maintained for storing and passing data.
 
-## 变量类型
+## Variable Types
 
-| 前缀 | 说明 | 可写 |
+| Prefix | Description | Writable |
 |------|------|------|
-| `$input` | 工作流输入 | 否 |
-| `$output` | 当前节点输出 | 否 |
-| `$ctx` | 自定义上下文 | 是 |
-| `$reply` | AI 回复元数据 | 否 |
-| `$alias.node.field` | 子工作流节点输出（由 `flows:` 导入产生） | 否 |
+| `$input` | Workflow input | No |
+| `$output` | Current node output | No |
+| `$ctx` | Custom context | Yes |
+| `$reply` | AI reply metadata | No |
+| `$alias.node.field` | Subworkflow node output (produced by `flows:` imports) | No |
 
-## $input - 输入变量
+## $input - Input Variables
 
-工作流启动时传入的数据。
+Data passed in when the workflow starts.
 
-### 来源
+### Sources
 
 ```bash
 # CLI
@@ -27,16 +27,16 @@ POST /api/workflows/my-flow/execute
 {"query": "hello", "count": 5}
 ```
 
-### 访问
+### Access
 
 ```yaml
-$input              # 整个输入对象
-$input.query        # 字符串: "hello"
-$input.count        # 数字: 5
-$input.nested.field # 嵌套访问
+$input              # Entire input object
+$input.query        # String: "hello"
+$input.count        # Number: 5
+$input.nested.field # Nested access
 ```
 
-### 示例
+### Examples
 
 ```yaml
 [process]: chat(
@@ -51,39 +51,39 @@ $input.nested.field # 嵌套访问
 
 ---
 
-## $output - 节点输出
+## $output - Node Output
 
-最近一个节点的执行结果。
+The execution result of the most recent node.
 
-### 特点
+### Characteristics
 
-- 每个节点执行后更新
-- 仅在当前执行链中有效
-- 类型取决于节点返回值
+- Updated after each node executes
+- Only valid within the current execution chain
+- Type depends on the node's return value
 
-### 不同工具的输出
+### Output from Different Tools
 
-| 工具 | 输出类型 |
+| Tool | Output Type |
 |------|----------|
-| `chat()` | string 或 object (format="json") |
+| `chat()` | string or object (format="json") |
 | `p()` | string |
 | `notify()` | null |
 | `set_context()` | null |
-| `fetch_url()` | string 或 object |
+| `fetch_url()` | string or object |
 | `timer()` | null |
 
-### 示例
+### Examples
 
 ```yaml
-# 字符串输出
+# String output
 [ask]: chat(agent="assistant", message="Hello")
 [log]: notify(status="Response: " + $output)
 
-# JSON 输出
+# JSON output
 [classify]: chat(agent="classifier", format="json")
 [route]: notify(status="Category: " + $output.category)
 
-# 链式使用
+# Chained usage
 [render]: p(slug="template", data=$input)
 [process]: chat(agent="processor", message=$output)
 [save]: set_context(result=$output)
@@ -91,54 +91,54 @@ $input.nested.field # 嵌套访问
 
 ---
 
-## $ctx - 自定义上下文
+## $ctx - Custom Context
 
-用户定义的变量存储，通过 `set_context()` 设置。
+User-defined variable storage, set via `set_context()`.
 
-### 设置变量
+### Setting Variables
 
 ```yaml
-# 简单值
+# Simple values
 [init]: set_context(count=0, status="ready")
 
-# 对象
+# Objects
 [init]: set_context(config={"timeout": 30, "retries": 3})
 
-# 数组
+# Arrays
 [init]: set_context(results=[], history=[])
 
-# 嵌套路径
+# Nested paths
 [update]: set_context(user.name="Alice", user.score=100)
 ```
 
-### 读取变量
+### Reading Variables
 
 ```yaml
-$ctx.count           # 数字
-$ctx.status          # 字符串
-$ctx.config.timeout  # 嵌套访问
-$ctx.results         # 数组
-$ctx.user.name       # 嵌套对象
+$ctx.count           # Number
+$ctx.status          # String
+$ctx.config.timeout  # Nested access
+$ctx.results         # Array
+$ctx.user.name       # Nested object
 ```
 
-### 更新变量
+### Updating Variables
 
 ```yaml
-# 递增
+# Increment
 [inc]: set_context(count=$ctx.count + 1)
 
-# 追加到数组
+# Append to array
 [add]: set_context(results=append($ctx.results, $output))
 
-# 条件更新
+# Conditional update
 [update]: set_context(
   status=if($ctx.count > 10, "complete", "running")
 )
 ```
 
-### 作用域
+### Scope
 
-`$ctx` 在整个工作流执行期间持久存在：
+`$ctx` persists throughout the entire workflow execution:
 
 ```yaml
 [init]: set_context(total=0)
@@ -149,20 +149,20 @@ $ctx.user.name       # 嵌套对象
 
 ---
 
-## $reply - 回复元数据
+## $reply - Reply Metadata
 
-AI 回复的元数据信息。
+Metadata information from AI replies.
 
-### 可用字段
+### Available Fields
 
-| 字段 | 类型 | 说明 |
+| Field | Type | Description |
 |------|------|------|
-| `$reply.content` | string | 回复内容 |
-| `$reply.tokens` | number | 使用的 token 数 |
-| `$reply.model` | string | 使用的模型 |
-| `$reply.finish_reason` | string | 结束原因 |
+| `$reply.content` | string | Reply content |
+| `$reply.tokens` | number | Number of tokens used |
+| `$reply.model` | string | Model used |
+| `$reply.finish_reason` | string | Finish reason |
 
-### 示例
+### Examples
 
 ```yaml
 [ask]: chat(agent="assistant", message=$input.query)
@@ -175,54 +175,54 @@ AI 回复的元数据信息。
 
 ---
 
-## 命名空间变量（Flow Imports）
+## Namespaced Variables (Flow Imports)
 
-当使用 `flows:` 导入子工作流时，子工作流内部的节点引用变量会自动添加命名空间前缀。
+When using `flows:` to import subworkflows, variable references to internal subworkflow nodes are automatically prefixed with the namespace.
 
-### 转换规则
+### Transformation Rules
 
-只有第一段匹配子工作流内部节点 ID 的变量才会加前缀。全局变量（`$ctx`、`$input`、`$output`）不受影响：
+Only variables whose first segment matches a subworkflow internal node ID get prefixed. Global variables (`$ctx`, `$input`, `$output`) are not affected:
 
 ```yaml
-# 假设 auth 子工作流内有 verify、extract 两个节点
+# Assume the auth subworkflow has two internal nodes: verify and extract
 
-# 子工作流内部写法           →  合并后实际变量
+# Syntax inside subworkflow           →  Actual variable after merging
 $verify.output              →  $auth.verify.output
 $extract.output.intent      →  $auth.extract.output.intent
-$ctx.some_var               →  $ctx.some_var          # 不变
-$input.message              →  $input.message          # 不变
-$output                     →  $output                 # 不变
+$ctx.some_var               →  $ctx.some_var          # Unchanged
+$input.message              →  $input.message          # Unchanged
+$output                     →  $output                 # Unchanged
 ```
 
-### 在父工作流中使用
+### Usage in the Parent Workflow
 
 ```yaml
 flows: {
   auth: "./auth.jg"
 }
 
-# 通过命名空间路径访问子工作流节点输出
+# Access subworkflow node output through namespace path
 [next]: chat(message=$auth.verify.output)
 
-# 条件中使用
+# Used in conditions
 [check] if $auth.extract.output.intent == "trade" -> [trade]
 ```
 
-详见[工作流组合指南](../guide/workflow-composition.md)。
+See [Workflow Composition Guide](../guide/workflow-composition.md) for details.
 
 ---
 
-## 循环上下文
+## Loop Context
 
-在 `foreach` 和 `while` 循环中可用：
+Available in `foreach` and `while` loops:
 
-| 变量 | 类型 | 说明 |
+| Variable | Type | Description |
 |------|------|------|
-| `loop.index` | number | 当前索引 (0-based) |
-| `loop.first` | boolean | 是否第一次迭代 |
-| `loop.last` | boolean | 是否最后一次迭代 |
+| `loop.index` | number | Current index (0-based) |
+| `loop.first` | boolean | Whether this is the first iteration |
+| `loop.last` | boolean | Whether this is the last iteration |
 
-### 示例
+### Examples
 
 ```yaml
 [process]: foreach($item in $input.items) {
@@ -245,30 +245,30 @@ flows: {
 
 ---
 
-## 表达式语法
+## Expression Syntax
 
-### 算术运算
-
-```yaml
-$ctx.a + $ctx.b      # 加法
-$ctx.a - $ctx.b      # 减法
-$ctx.a * $ctx.b      # 乘法
-$ctx.a / $ctx.b      # 除法
-$ctx.a % $ctx.b      # 取模
-```
-
-### 比较运算
+### Arithmetic Operations
 
 ```yaml
-$ctx.a == $ctx.b     # 等于
-$ctx.a != $ctx.b     # 不等于
-$ctx.a > $ctx.b      # 大于
-$ctx.a < $ctx.b      # 小于
-$ctx.a >= $ctx.b     # 大于等于
-$ctx.a <= $ctx.b     # 小于等于
+$ctx.a + $ctx.b      # Addition
+$ctx.a - $ctx.b      # Subtraction
+$ctx.a * $ctx.b      # Multiplication
+$ctx.a / $ctx.b      # Division
+$ctx.a % $ctx.b      # Modulo
 ```
 
-### 逻辑运算
+### Comparison Operations
+
+```yaml
+$ctx.a == $ctx.b     # Equal to
+$ctx.a != $ctx.b     # Not equal to
+$ctx.a > $ctx.b      # Greater than
+$ctx.a < $ctx.b      # Less than
+$ctx.a >= $ctx.b     # Greater than or equal to
+$ctx.a <= $ctx.b     # Less than or equal to
+```
+
+### Logical Operations
 
 ```yaml
 $ctx.a && $ctx.b     # AND
@@ -276,25 +276,25 @@ $ctx.a || $ctx.b     # OR
 !$ctx.a              # NOT
 ```
 
-### 字符串操作
+### String Operations
 
 ```yaml
-"Hello, " + $input.name              # 拼接
+"Hello, " + $input.name              # Concatenation
 $input.text + " (length: " + len($input.text) + ")"
 ```
 
-### 内置函数
+### Built-in Functions
 
-| 函数 | 说明 | 示例 |
+| Function | Description | Example |
 |------|------|------|
-| `len(x)` | 长度 | `len($ctx.items)` |
-| `json(x)` | 转 JSON | `json($ctx.data)` |
-| `append(arr, item)` | 追加 | `append($ctx.list, $output)` |
-| `if(cond, a, b)` | 条件 | `if($ctx.ok, "yes", "no")` |
+| `len(x)` | Length | `len($ctx.items)` |
+| `json(x)` | Convert to JSON | `json($ctx.data)` |
+| `append(arr, item)` | Append | `append($ctx.list, $output)` |
+| `if(cond, a, b)` | Conditional | `if($ctx.ok, "yes", "no")` |
 
 ---
 
-## 完整示例
+## Complete Example
 
 ```yaml
 name: "Context Demo"
@@ -303,7 +303,7 @@ version: "0.1.0"
 entry: [init]
 exit: [summary]
 
-# 初始化上下文
+# Initialize context
 [init]: set_context(
   processed=0,
   successes=0,
@@ -311,7 +311,7 @@ exit: [summary]
   results=[]
 )
 
-# 处理输入项
+# Process input items
 [process]: foreach($item in $input.items) {
   [log_start]: notify(
     status="[" + (loop.index + 1) + "/" + len($input.items) + "] Processing: " + $item.name
@@ -323,7 +323,7 @@ exit: [summary]
     format="json"
   )
 
-  # 根据结果更新计数
+  # Update counts based on results
   [update]: set_context(
     processed=$ctx.processed + 1,
     successes=$ctx.successes + if($output.success, 1, 0),
@@ -337,7 +337,7 @@ exit: [summary]
   [log_start] -> [analyze] -> [update]
 }
 
-# 汇总
+# Summary
 [summary]: notify(
   status="Complete! Processed: " + $ctx.processed +
          ", Successes: " + $ctx.successes +
@@ -349,21 +349,21 @@ exit: [summary]
 
 ---
 
-## 调试技巧
+## Debugging Tips
 
-### 打印上下文
+### Print Context
 
 ```yaml
 [debug]: notify(status="Context: " + json($ctx))
 ```
 
-### 检查变量类型
+### Check Variable Type
 
 ```yaml
 [check]: notify(status="Type: " + type($ctx.value))
 ```
 
-### 条件断点
+### Conditional Breakpoint
 
 ```yaml
 [breakpoint] if $ctx.count > 100 -> [error_handler]

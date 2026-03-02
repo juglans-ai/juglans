@@ -96,15 +96,15 @@ With `serve()`, the routing topology of your HTTP API and the execution topology
 - **Jug0 Backend** — Seamless integration with Jug0 AI platform
 - **Cross-Platform** — Native + WebAssembly
 
-## 安装
+## Installation
 
-### 快速安装 (macOS & Linux)
+### Quick Install (macOS & Linux)
 
 ```bash
 curl -fsSL https://juglans.ai/get-sdk | sh
 ```
 
-或使用 GitHub 直链：
+Or use the GitHub direct link:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/juglans-ai/juglans/main/install.sh | sh
@@ -113,23 +113,23 @@ curl -fsSL https://raw.githubusercontent.com/juglans-ai/juglans/main/install.sh 
 ### macOS (Homebrew)
 
 ```bash
-# 添加 tap
+# Add tap
 brew tap juglans-ai/tap
 
-# 安装
+# Install
 brew install juglans
 
-# 验证安装
+# Verify installation
 juglans --version
 ```
 
 ### Linux
 
 ```bash
-# 使用安装脚本（推荐）
+# Use install script (recommended)
 curl -fsSL https://juglans.ai/get-sdk | sh
 
-# 或从 Releases 下载
+# Or download from Releases
 wget https://github.com/juglans-ai/juglans/releases/latest/download/juglans-linux-x64.tar.gz
 tar -xzf juglans-linux-x64.tar.gz
 sudo mv juglans /usr/local/bin/
@@ -138,27 +138,27 @@ sudo mv juglans /usr/local/bin/
 ### Windows
 
 ```powershell
-# PowerShell 安装
+# PowerShell install
 irm https://juglans.ai/get-sdk.ps1 | iex
 
-# 或手动下载
+# Or download manually
 # https://github.com/juglans-ai/juglans/releases/latest
 ```
 
-### 从源码构建
+### Build from Source
 
 ```bash
-# 前置要求: Rust 1.70+
+# Prerequisites: Rust 1.70+
 git clone https://github.com/juglans-ai/juglans.git
 cd juglans
 cargo build --release
 
-# 二进制文件位置: target/release/juglans
+# Binary location: target/release/juglans
 ```
 
-## 快速开始
+## Quick Start
 
-### 创建第一个 Agent
+### Create Your First Agent
 
 ```yaml
 # my-agent.jgagent
@@ -169,25 +169,25 @@ temperature: 0.7
 system_prompt: "You are a helpful assistant."
 ```
 
-运行：
+Run:
 ```bash
 juglans my-agent.jgagent
 ```
 
-### 从源码构建
+### Build from Source
 
 ```bash
-# 前置要求: Rust 1.70+
+# Prerequisites: Rust 1.70+
 git clone https://github.com/juglans-ai/juglans.git
 cd juglans
 cargo build --release
 
-# 二进制文件位置: target/release/juglans
+# Binary location: target/release/juglans
 ```
 
-## 快速开始
+## Quick Start
 
-### 创建 Prompt 模板
+### Create a Prompt Template
 
 ```yaml
 # greeting.jgprompt
@@ -199,7 +199,7 @@ inputs: {name: "World"}
 Hello, {{ name }}! How can I help you today?
 ```
 
-### 创建工作流
+### Create a Workflow
 
 ```yaml
 # chat-flow.jg
@@ -219,20 +219,20 @@ exit: [end]
 [start] -> [chat] -> [end]
 ```
 
-运行：
+Run:
 ```bash
 juglans chat-flow.jg --input '{"question": "What is Juglans?"}'
 ```
 
-## 文档
+## Documentation
 
-- [快速入门](./getting-started/quickstart.md) - 5 分钟上手教程
-- [核心概念](./guide/concepts.md) - Agent、Prompt、Workflow 介绍
-- [DSL 语法](./guide/workflow-syntax.md) - 完整语法参考
-- [CLI 参考](./reference/cli.md) - 命令行工具
-- [内置工具](./reference/builtins.md) - chat、p、notify 等
+- [Quick Start](./getting-started/quickstart.md) - 5-minute getting started tutorial
+- [Core Concepts](./guide/concepts.md) - Introduction to Agent, Prompt, and Workflow
+- [DSL Syntax](./guide/workflow-syntax.md) - Complete syntax reference
+- [CLI Reference](./reference/cli.md) - Command-line tools
+- [Built-in Tools](./reference/builtins.md) - chat, p, notify, and more
 
-## 架构
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -258,49 +258,49 @@ juglans chat-flow.jg --input '{"question": "What is Juglans?"}'
 └─────────────────────────────────────────────────────────┘
 ```
 
-## 文件格式
+## File Formats
 
-| 扩展名 | 用途 | 说明 |
-|--------|------|------|
-| `.jg` | 工作流 | 定义节点、边、执行逻辑 |
-| `.jgprompt` | Prompt 模板 | 可复用的提示词模板 |
-| `.jgagent` | Agent 配置 | 模型、温度、系统提示 |
-| `juglans.toml` | 项目配置 | API 密钥、服务器设置 |
+| Extension | Purpose | Description |
+|-----------|---------|-------------|
+| `.jg` | Workflow | Defines nodes, edges, and execution logic |
+| `.jgprompt` | Prompt Template | Reusable prompt templates |
+| `.jgagent` | Agent Configuration | Model, temperature, system prompt |
+| `juglans.toml` | Project Configuration | API keys, server settings |
 
-## 配置文件
+## Configuration File
 
-创建 `juglans.toml` 来配置项目：
+Create `juglans.toml` to configure your project:
 
 ```toml
-# 账户配置
+# Account configuration
 [account]
 id = "user_123"
 name = "Your Name"
 role = "admin"
 api_key = "jug0_sk_your_api_key_here"
 
-# 工作空间配置（可选）
+# Workspace configuration (optional)
 [workspace]
 id = "workspace_456"
 name = "My Workspace"
 members = ["user_123"]
 
-# Jug0 后端配置
+# Jug0 backend configuration
 [jug0]
-base_url = "http://localhost:3000"  # 本地开发
-# base_url = "https://api.jug0.com"  # 生产环境
+base_url = "http://localhost:3000"  # Local development
+# base_url = "https://api.jug0.com"  # Production
 
-# Web 服务器配置
+# Web server configuration
 [server]
 host = "127.0.0.1"
 port = 8080
 
-# 环境变量（可选）
+# Environment variables (optional)
 [env]
 DATABASE_URL = "postgresql://localhost/mydb"
 API_KEY = "your_api_key"
 
-# MCP 服务器配置（可选）
+# MCP server configuration (optional)
 [mcp.filesystem]
 command = "npx"
 args = ["-y", "@anthropic/mcp-filesystem"]
@@ -311,24 +311,24 @@ url = "http://localhost:3001/mcp"
 api_key = "mcp_key_..."
 ```
 
-详细配置说明请参考 [配置文件参考](./reference/config.md)。
+For detailed configuration instructions, see [Configuration Reference](./reference/config.md).
 
-## 示例
+## Examples
 
-查看 [examples/](../examples/) 目录获取更多示例：
+See the [examples/](../examples/) directory for more examples:
 
-- `examples/prompts/` - Prompt 模板示例
-- `examples/agents/` - Agent 配置示例
-- `examples/workflows/` - 工作流示例
+- `examples/prompts/` - Prompt template examples
+- `examples/agents/` - Agent configuration examples
+- `examples/workflows/` - Workflow examples
 
-## 技术栈
+## Tech Stack
 
-- **解析器**: Pest (PEG 语法)
-- **脚本引擎**: Rhai (表达式求值)
-- **图结构**: Petgraph (DAG)
-- **异步运行时**: Tokio
-- **Web 框架**: Axum
-- **序列化**: Serde
+- **Parser**: Pest (PEG grammar)
+- **Script Engine**: Rhai (expression evaluation)
+- **Graph Structure**: Petgraph (DAG)
+- **Async Runtime**: Tokio
+- **Web Framework**: Axum
+- **Serialization**: Serde
 
 ## License
 

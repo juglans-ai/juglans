@@ -1,8 +1,8 @@
-# Agent 配置语法 (.jgagent)
+# Agent Configuration Syntax (.jgagent)
 
-`.jgagent` 文件定义 AI Agent 的配置，包括模型、行为和能力。
+`.jgagent` files define AI Agent configuration, including model, behavior, and capabilities.
 
-## 基本结构
+## Basic Structure
 
 ```yaml
 slug: "agent_identifier"
@@ -13,24 +13,24 @@ temperature: 0.7
 system_prompt: "You are a helpful assistant."
 ```
 
-## 配置字段
+## Configuration Fields
 
-| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| Field | Type | Required | Default | Description |
 |------|------|------|--------|------|
-| `slug` | string | 是 | - | 唯一标识符 |
-| `name` | string | 否 | - | 显示名称 |
-| `description` | string | 否 | - | Agent 描述 |
-| `model` | string | 否 | gpt-4o | 模型名称 |
-| `temperature` | float | 否 | 0.7 | 温度参数 (0-2) |
-| `system_prompt` | string | 否 | - | 系统提示词（内联或引用） |
-| `tools` | array/string | 否 | - | 默认工具配置（JSON 数组或字符串） |
-| `mcp` | array | 否 | [] | MCP 服务器列表 |
-| `skills` | array | 否 | [] | 技能列表 |
-| `workflow` | string | 否 | - | 关联的工作流文件路径 |
+| `slug` | string | Yes | - | Unique identifier |
+| `name` | string | No | - | Display name |
+| `description` | string | No | - | Agent description |
+| `model` | string | No | gpt-4o | Model name |
+| `temperature` | float | No | 0.7 | Temperature parameter (0-2) |
+| `system_prompt` | string | No | - | System prompt (inline or referenced) |
+| `tools` | array/string | No | - | Default tool configuration (JSON array or string) |
+| `mcp` | array | No | [] | MCP server list |
+| `skills` | array | No | [] | Skills list |
+| `workflow` | string | No | - | Associated workflow file path |
 
-## 模型配置
+## Model Configuration
 
-### 支持的模型
+### Supported Models
 
 ```yaml
 # DeepSeek
@@ -47,29 +47,29 @@ model: "claude-3-opus"
 model: "claude-3-sonnet"
 model: "claude-3-haiku"
 
-# 本地模型 (Ollama)
+# Local models (Ollama)
 model: "llama3"
 model: "codellama"
 model: "mistral"
 ```
 
-### 温度参数
+### Temperature Parameter
 
 ```yaml
-temperature: 0.0    # 确定性输出
-temperature: 0.7    # 平衡创造性（推荐）
-temperature: 1.0    # 更多随机性
-temperature: 2.0    # 高度随机
+temperature: 0.0    # Deterministic output
+temperature: 0.7    # Balanced creativity (recommended)
+temperature: 1.0    # More randomness
+temperature: 2.0    # Highly random
 ```
 
-## 系统提示词
+## System Prompt
 
-### 内联方式
+### Inline Method
 
 ```yaml
 system_prompt: "You are a helpful assistant."
 
-# 多行提示词
+# Multi-line prompt
 system_prompt: |
   You are a professional data analyst.
 
@@ -79,21 +79,21 @@ system_prompt: |
   - Use proper formatting
 ```
 
-### 引用 Prompt 文件
+### Referencing a Prompt File
 
 ```yaml
 system_prompt: p(slug="system-analyst")
 ```
 
-这会从已加载的 Prompt 中查找 `slug="system-analyst"` 的模板作为系统提示词。
+This looks up the template with `slug="system-analyst"` from the loaded Prompts and uses it as the system prompt.
 
-## 工具配置
+## Tool Configuration
 
-Agent 可以配置默认的工具集，这些工具在调用 `chat()` 时会自动附加到请求中（除非工作流中显式指定了 `tools` 参数）。
+Agents can be configured with a default tool set. These tools are automatically attached to requests when calling `chat()` (unless the `tools` parameter is explicitly specified in the workflow).
 
-### JSON 数组格式
+### JSON Array Format
 
-直接使用 JSON 数组定义工具，无需转义：
+Define tools directly using a JSON array, no escaping needed:
 
 ```yaml
 slug: "web-agent"
@@ -103,11 +103,11 @@ tools: [
     "type": "function",
     "function": {
       "name": "fetch_url",
-      "description": "获取网页内容",
+      "description": "Fetch web page content",
       "parameters": {
         "type": "object",
         "properties": {
-          "url": {"type": "string", "description": "目标 URL"},
+          "url": {"type": "string", "description": "Target URL"},
           "method": {"type": "string", "enum": ["GET", "POST"]}
         },
         "required": ["url"]
@@ -118,12 +118,12 @@ tools: [
     "type": "function",
     "function": {
       "name": "parse_html",
-      "description": "解析 HTML 内容",
+      "description": "Parse HTML content",
       "parameters": {
         "type": "object",
         "properties": {
-          "html": {"type": "string", "description": "HTML 源码"},
-          "selector": {"type": "string", "description": "CSS 选择器"}
+          "html": {"type": "string", "description": "HTML source code"},
+          "selector": {"type": "string", "description": "CSS selector"}
         },
         "required": ["html"]
       }
@@ -132,72 +132,72 @@ tools: [
 ]
 ```
 
-### 字符串格式
+### String Format
 
-也可以使用 JSON 字符串：
+You can also use a JSON string:
 
 ```yaml
 slug: "tool-agent"
 model: "deepseek-chat"
-tools: "[{\"type\":\"function\",\"function\":{\"name\":\"calculator\",\"description\":\"执行数学计算\"}}]"
+tools: "[{\"type\":\"function\",\"function\":{\"name\":\"calculator\",\"description\":\"Perform mathematical calculations\"}}]"
 ```
 
-### Slug 引用格式（推荐）
+### Slug Reference Format (Recommended)
 
-引用已注册的工具集，支持组合多个 toolbox：
+Reference registered tool sets, with support for combining multiple toolboxes:
 
 ```yaml
 slug: "code-agent"
 model: "deepseek-chat"
 
-# 使用内置开发者工具
+# Use built-in developer tools
 tools: ["devtools"]
 
-# 或组合多个工具集
+# Or combine multiple tool sets
 # tools: ["devtools", "web-tools", "data-tools"]
 ```
 
-其中：
-- `"devtools"` — 内置的 6 个开发者工具（read_file, write_file, edit_file, glob, grep, bash），自动可用
-- 其他 slug（如 `"web-tools"`）— 来自 `tools/*.json` 文件，需要在 workflow 中通过 `tools: ["./tools/*.json"]` 导入
+Where:
+- `"devtools"` — 6 built-in developer tools (read_file, write_file, edit_file, glob, grep, bash), automatically available
+- Other slugs (e.g., `"web-tools"`) — from `tools/*.json` files, need to be imported in the workflow via `tools: ["./tools/*.json"]`
 
-### 工具优先级
+### Tool Priority
 
-当工作流中的 `chat()` 调用同时指定了 `tools` 参数时，工作流中的配置优先：
+When a `chat()` call in a workflow also specifies the `tools` parameter, the workflow configuration takes priority:
 
 ```yaml
-# Agent 配置
+# Agent configuration
 slug: "my-agent"
 tools: [{"type": "function", "function": {"name": "default_tool"}}]
 
-# 工作流中使用
+# Usage in workflow
 [step]: chat(
   agent="my-agent",
   message=$input,
-  tools=[{"type": "function", "function": {"name": "override_tool"}}]  # 这个会被使用
+  tools=[{"type": "function", "function": {"name": "override_tool"}}]  # This one will be used
 )
 
-# 不指定 tools 时使用 Agent 的默认配置
+# When tools is not specified, the Agent's default configuration is used
 [step2]: chat(
   agent="my-agent",
-  message=$input  # 会使用 Agent 配置的 default_tool
+  message=$input  # Will use the Agent's configured default_tool
 )
 ```
 
-## MCP 工具集成
+## MCP Tool Integration
 
-配置 Model Context Protocol 服务器以扩展 Agent 能力：
+Configure Model Context Protocol servers to extend Agent capabilities:
 
 ```yaml
 slug: "tool-agent"
 model: "gpt-4o"
 mcp:
-  - "filesystem"     # 文件系统操作
-  - "github"         # GitHub 操作
-  - "database"       # 数据库操作
+  - "filesystem"     # File system operations
+  - "github"         # GitHub operations
+  - "database"       # Database operations
 ```
 
-MCP 服务器需要在 `juglans.toml` 中配置（HTTP 连接方式）：
+MCP servers need to be configured in `juglans.toml` (HTTP connection method):
 
 ```toml
 [[mcp_servers]]
@@ -210,11 +210,11 @@ base_url = "http://localhost:3001/mcp/github"
 token = "${GITHUB_TOKEN}"
 ```
 
-**注意：** Juglans 使用 HTTP/JSON-RPC 连接 MCP 服务器，需要先启动 MCP 服务。详见 [MCP 集成指南](../integrations/mcp.md)。
+**Note:** Juglans connects to MCP servers via HTTP/JSON-RPC. The MCP service must be started first. See the [MCP Integration Guide](../integrations/mcp.md) for details.
 
-## 技能系统
+## Skills System
 
-为 Agent 添加预定义技能：
+Add predefined skills to an Agent:
 
 ```yaml
 slug: "skilled-agent"
@@ -225,9 +225,9 @@ skills:
   - "testing"
 ```
 
-## 关联工作流
+## Associated Workflow
 
-将 Agent 与特定工作流绑定：
+Bind an Agent to a specific workflow:
 
 ```yaml
 slug: "workflow-agent"
@@ -235,11 +235,11 @@ model: "gpt-4o"
 workflow: "../complex-task.jg"
 ```
 
-当用户与此 Agent 对话时，可以触发关联的工作流执行。
+When a user interacts with this Agent, it can trigger the associated workflow execution.
 
-## 完整示例
+## Complete Examples
 
-### 通用助手
+### General Assistant
 
 ```yaml
 slug: "assistant"
@@ -255,7 +255,7 @@ system_prompt: |
   - Ask clarifying questions when needed
 ```
 
-### 代码专家
+### Code Expert
 
 ```yaml
 slug: "code-expert"
@@ -280,7 +280,7 @@ skills:
   - "refactoring"
 ```
 
-### 数据分析师
+### Data Analyst
 
 ```yaml
 slug: "data-analyst"
@@ -296,7 +296,7 @@ skills:
   - "statistical_analysis"
 ```
 
-### 创意写作
+### Creative Writing
 
 ```yaml
 slug: "creative-writer"
@@ -314,7 +314,7 @@ system_prompt: |
   Adapt your style to match the requested genre or tone.
 ```
 
-### 路由 Agent
+### Router Agent
 
 ```yaml
 slug: "router"
@@ -334,7 +334,7 @@ system_prompt: |
   {"category": "...", "confidence": 0.0-1.0}
 ```
 
-### 多步骤工作流 Agent
+### Multi-Step Workflow Agent
 
 ```yaml
 slug: "research-agent"
@@ -353,15 +353,15 @@ mcp:
   - "document-reader"
 ```
 
-## 在工作流中使用
+## Usage in Workflows
 
-### 基本调用
+### Basic Call
 
 ```yaml
 [chat]: chat(agent="assistant", message=$input.question)
 ```
 
-### 指定输出格式
+### Specifying Output Format
 
 ```yaml
 [classify]: chat(
@@ -371,47 +371,47 @@ mcp:
 )
 ```
 
-### 无状态调用
+### Stateless Call
 
 ```yaml
 [analyze]: chat(
   agent="analyst",
   message=$input.data,
-  stateless="true"    # 不保存到对话历史
+  stateless="true"    # Not saved to conversation history
 )
 ```
 
-## 交互式使用
+## Interactive Usage
 
-直接与 Agent 对话：
+Chat directly with an Agent:
 
 ```bash
 juglans src/agents/assistant.jgagent
 ```
 
-传入初始消息：
+Pass an initial message:
 
 ```bash
 juglans src/agents/assistant.jgagent --message "Hello, how are you?"
 ```
 
-## 最佳实践
+## Best Practices
 
-1. **明确角色** - 在 system_prompt 中清晰定义 Agent 的角色和能力
-2. **适当温度** - 根据任务类型选择温度（分析任务低，创意任务高）
-3. **模块化** - 一个 Agent 专注一个领域
-4. **可组合** - 设计可以协作的多个 Agent
-5. **测试验证** - 用多种输入测试 Agent 行为
+1. **Define roles clearly** - Clearly define the Agent's role and capabilities in the system_prompt
+2. **Appropriate temperature** - Choose temperature based on task type (low for analytical tasks, high for creative tasks)
+3. **Modular design** - One Agent focuses on one domain
+4. **Composable** - Design multiple Agents that can collaborate
+5. **Test and validate** - Test Agent behavior with various inputs
 
-## 调试
+## Debugging
 
-### 查看 Agent 配置
+### View Agent Configuration
 
 ```bash
 juglans src/agents/my-agent.jgagent --info
 ```
 
-### 详细日志
+### Verbose Logging
 
 ```bash
 juglans src/agents/my-agent.jgagent --verbose

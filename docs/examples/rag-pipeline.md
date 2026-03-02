@@ -1,8 +1,8 @@
-# RAG 检索增强生成
+# RAG Retrieval-Augmented Generation
 
-检索相关文档并基于上下文生成回答的工作流。
+A workflow that retrieves relevant documents and generates answers based on context.
 
-## 概述
+## Overview
 
 ```
 ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐
@@ -17,7 +17,7 @@
                             └─────────┘
 ```
 
-## 工作流文件
+## Workflow File
 
 ### rag-pipeline.jg
 
@@ -31,13 +31,13 @@ agents: ["./agents/*.jgagent"]
 entry: [embed_query]
 exit: [respond]
 
-# 1. 将查询转换为向量
+# 1. Convert query to vector
 [embed_query]: embed(
   text=$input.query,
   model="text-embedding-3-small"
 )
 
-# 2. 向量搜索
+# 2. Vector search
 [search]: vector_search(
   embedding=$output,
   collection=$input.collection || "documents",
@@ -45,7 +45,7 @@ exit: [respond]
   threshold=$input.threshold || 0.7
 )
 
-# 3. 检查是否找到相关文档
+# 3. Check if relevant documents were found
 [check_results]: set_context(
   has_results=len($output) > 0,
   documents=$output
@@ -54,12 +54,12 @@ exit: [respond]
 [check_results] if !$ctx.has_results -> [no_context_response]
 [check_results] -> [build_context]
 
-# 4. 构建上下文
+# 4. Build context
 [build_context]: set_context(
   context=join(map($ctx.documents, d => d.content), "\n\n---\n\n")
 )
 
-# 5. 生成回答
+# 5. Generate answer
 [generate]: chat(
   agent="rag-responder",
   message=p(
@@ -69,14 +69,14 @@ exit: [respond]
   )
 )
 
-# 无上下文时的回答
+# Response when no context is available
 [no_context_response]: chat(
   agent="assistant",
   message="I don't have specific information about that in my knowledge base. " +
           "Here's what I can tell you generally:\n\n" + $input.query
 )
 
-# 汇总响应
+# Aggregate response
 [respond]: set_context(
   response=$output,
   sources=map($ctx.documents, d => {"id": d.id, "score": d.score})
@@ -86,7 +86,7 @@ exit: [respond]
 [no_context_response] -> [respond]
 ```
 
-## Prompt 模板
+## Prompt Template
 
 ### src/prompts/rag-prompt.jgprompt
 
@@ -110,7 +110,7 @@ template: |
   - Be concise but thorough
 ```
 
-## Agent 定义
+## Agent Definition
 
 ### src/agents/rag-responder.jgagent
 
@@ -133,11 +133,11 @@ system_prompt: |
   5. Be accurate and helpful
 ```
 
-## 高级版本
+## Advanced Version
 
 ### rag-with-rerank.jg
 
-带重排序的 RAG：
+RAG with reranking:
 
 ```yaml
 name: "RAG with Reranking"
@@ -145,17 +145,17 @@ name: "RAG with Reranking"
 entry: [embed_query]
 exit: [respond]
 
-# 嵌入查询
+# Embed query
 [embed_query]: embed(text=$input.query)
 
-# 初次检索（取更多结果）
+# Initial retrieval (get more results)
 [search]: vector_search(
   embedding=$output,
   collection="documents",
   top_k=20
 )
 
-# 重排序
+# Reranking
 [rerank]: chat(
   agent="reranker",
   message=json({
@@ -165,17 +165,17 @@ exit: [respond]
   format="json"
 )
 
-# 取 top 5
+# Take top 5
 [select_top]: set_context(
   documents=slice($output.ranked_documents, 0, 5)
 )
 
-# 构建上下文
+# Build context
 [build_context]: set_context(
   context=join(map($ctx.documents, d => d.content), "\n\n---\n\n")
 )
 
-# 生成
+# Generate
 [generate]: chat(
   agent="rag-responder",
   message=p(slug="rag-prompt", query=$input.query, context=$ctx.context)
@@ -215,7 +215,7 @@ system_prompt: |
 
 ### rag-with-hyde.jg
 
-使用 HyDE（假设文档嵌入）：
+Using HyDE (Hypothetical Document Embedding):
 
 ```yaml
 name: "RAG with HyDE"
@@ -223,23 +223,23 @@ name: "RAG with HyDE"
 entry: [generate_hypothetical]
 exit: [respond]
 
-# 生成假设性答案
+# Generate hypothetical answer
 [generate_hypothetical]: chat(
   agent="hyde-generator",
   message=$input.query
 )
 
-# 嵌入假设答案（而非原始查询）
+# Embed the hypothetical answer (instead of the raw query)
 [embed_hyde]: embed(text=$output)
 
-# 搜索
+# Search
 [search]: vector_search(
   embedding=$output,
   collection="documents",
   top_k=5
 )
 
-# 后续同标准 RAG...
+# The rest follows standard RAG...
 [build_context]: set_context(
   context=join(map($output, d => d.content), "\n\n---\n\n")
 )
@@ -271,7 +271,7 @@ system_prompt: |
   Keep it to 2-3 paragraphs.
 ```
 
-## 多源 RAG
+## Multi-source RAG
 
 ### multi-source-rag.jg
 
@@ -283,31 +283,31 @@ exit: [respond]
 
 [embed_query]: embed(text=$input.query)
 
-# 并行搜索多个源（使用上下文保存嵌入）
+# Parallel search across multiple sources (save embedding using context)
 [save_embedding]: set_context(query_embedding=$output)
 
-# 搜索文档库
+# Search document library
 [search_docs]: vector_search(
   embedding=$ctx.query_embedding,
   collection="documents",
   top_k=3
 )
 
-# 搜索 FAQ
+# Search FAQ
 [search_faq]: vector_search(
   embedding=$ctx.query_embedding,
   collection="faq",
   top_k=2
 )
 
-# 搜索历史对话
+# Search conversation history
 [search_history]: vector_search(
   embedding=$ctx.query_embedding,
   collection="chat_history",
   top_k=2
 )
 
-# 合并结果
+# Merge results
 [merge_results]: set_context(
   all_sources={
     "documents": $ctx.doc_results,
@@ -316,14 +316,14 @@ exit: [respond]
   }
 )
 
-# 构建分类上下文
+# Build categorized context
 [build_context]: set_context(
   context="## Documents\n" + join(map($ctx.all_sources.documents, d => d.content), "\n") +
           "\n\n## FAQ\n" + join(map($ctx.all_sources.faq, d => d.content), "\n") +
           "\n\n## Related Conversations\n" + join(map($ctx.all_sources.history, d => d.content), "\n")
 )
 
-# 生成
+# Generate
 [generate]: chat(
   agent="rag-responder",
   message=p(slug="rag-prompt", query=$input.query, context=$ctx.context)
@@ -346,27 +346,27 @@ exit: [respond]
 [merge_results] -> [build_context] -> [generate] -> [respond]
 ```
 
-## 运行示例
+## Running Examples
 
 ```bash
-# 基本 RAG
+# Basic RAG
 juglans rag-pipeline.jg --input '{
   "query": "How do I reset my password?",
   "collection": "help_docs"
 }'
 
-# 带重排序
+# With reranking
 juglans rag-with-rerank.jg --input '{
   "query": "What are the pricing plans?"
 }'
 
-# 多源 RAG
+# Multi-source RAG
 juglans multi-source-rag.jg --input '{
   "query": "How to configure API authentication?"
 }'
 ```
 
-## 目录结构
+## Directory Structure
 
 ```
 rag-pipeline/

@@ -1,21 +1,21 @@
-# 循环结构
+# Loop Structures
 
-本指南介绍 Juglans 工作流中的循环机制。
+This guide introduces the loop mechanisms in Juglans workflows.
 
-## 循环类型
+## Loop Types
 
-Juglans 支持两种循环结构：
+Juglans supports two loop structures:
 
-| 类型 | 用途 | 语法 |
+| Type | Purpose | Syntax |
 |------|------|------|
-| `foreach` | 遍历集合 | `foreach($item in $collection)` |
-| `while` | 条件循环 | `while($condition)` |
+| `foreach` | Iterate over a collection | `foreach($item in $collection)` |
+| `while` | Conditional loop | `while($condition)` |
 
-## Foreach 循环
+## Foreach Loop
 
-遍历数组或集合中的每个元素。
+Iterates over each element in an array or collection.
 
-### 基本语法
+### Basic Syntax
 
 ```yaml
 [loop_node]: foreach($item in $input.items) {
@@ -24,7 +24,7 @@ Juglans 支持两种循环结构：
 }
 ```
 
-### 完整示例
+### Complete Example
 
 ```yaml
 name: "Batch Processing"
@@ -35,14 +35,14 @@ exit: [summary]
 [init]: set_context(results=[])
 
 [process_all]: foreach($item in $input.documents) {
-  # 处理每个文档
+  # Process each document
   [analyze]: chat(
     agent="analyzer",
     message="Analyze: " + $item.content,
     format="json"
   )
 
-  # 收集结果
+  # Collect results
   [collect]: set_context(
     results=append($ctx.results, {
       "id": $item.id,
@@ -61,17 +61,17 @@ exit: [summary]
 [init] -> [process_all] -> [summary]
 ```
 
-### 循环变量
+### Loop Variables
 
-在循环体内可用：
+Available within the loop body:
 
-| 变量 | 类型 | 说明 |
+| Variable | Type | Description |
 |------|------|------|
-| `$item` | any | 当前元素（名称可自定义） |
-| `loop.index` | number | 当前索引 (1-based，从 1 开始) |
-| `loop.index0` | number | 当前索引 (0-based，从 0 开始) |
-| `loop.first` | boolean | 是否第一次迭代 |
-| `loop.last` | boolean | 是否最后一次迭代 |
+| `$item` | any | Current element (name is customizable) |
+| `loop.index` | number | Current index (1-based, starting from 1) |
+| `loop.index0` | number | Current index (0-based, starting from 0) |
+| `loop.first` | boolean | Whether this is the first iteration |
+| `loop.last` | boolean | Whether this is the last iteration |
 
 ```yaml
 [process]: foreach($doc in $input.docs) {
@@ -87,7 +87,7 @@ exit: [summary]
 }
 ```
 
-### 嵌套循环
+### Nested Loops
 
 ```yaml
 [outer]: foreach($category in $input.categories) {
@@ -102,11 +102,11 @@ exit: [summary]
 }
 ```
 
-## While 循环
+## While Loop
 
-基于条件的循环。
+A condition-based loop.
 
-### 基本语法
+### Basic Syntax
 
 ```yaml
 [loop_node]: while($ctx.count < $ctx.max) {
@@ -116,7 +116,7 @@ exit: [summary]
 }
 ```
 
-### 完整示例
+### Complete Example
 
 ```yaml
 name: "Iterative Refinement"
@@ -134,21 +134,21 @@ exit: [final]
 [generate]: chat(agent="writer", message=$input.topic)
 
 [refine_loop]: while($ctx.current_quality < $ctx.quality_threshold && $ctx.iteration < $ctx.max_iterations) {
-  # 评估质量
+  # Evaluate quality
   [evaluate]: chat(
     agent="critic",
     message="Rate this (1-10): " + $ctx.content,
     format="json"
   )
 
-  # 更新状态
+  # Update state
   [update_state]: set_context(
     current_quality=$output.score,
     feedback=$output.feedback,
     iteration=$ctx.iteration + 1
   )
 
-  # 如果质量不够，改进
+  # If quality is insufficient, improve
   [improve]: chat(
     agent="writer",
     message="Improve based on feedback: " + $ctx.feedback + "\n\nOriginal:\n" + $ctx.content
@@ -167,18 +167,18 @@ exit: [final]
 [init] -> [generate] -> [refine_loop] -> [final]
 ```
 
-### 避免无限循环
+### Avoiding Infinite Loops
 
-始终确保循环条件会变为 false：
+Always ensure the loop condition will eventually become false:
 
 ```yaml
-# 好：有明确的终止条件
+# Good: has a clear termination condition
 [loop]: while($ctx.count < 10) {
   [inc]: set_context(count=$ctx.count + 1)
   [inc]
 }
 
-# 好：有最大迭代限制
+# Good: has a maximum iteration limit
 [loop]: while($ctx.not_done && $ctx.attempts < 100) {
   [try]: some_operation()
   [update]: set_context(
@@ -189,9 +189,9 @@ exit: [final]
 }
 ```
 
-## 常见模式
+## Common Patterns
 
-### 批量 API 调用
+### Batch API Calls
 
 ```yaml
 name: "Batch API Calls"
@@ -235,7 +235,7 @@ exit: [done]
 [init] -> [batch] -> [done]
 ```
 
-### 分页获取
+### Paginated Fetching
 
 ```yaml
 name: "Paginated Fetch"
@@ -270,7 +270,7 @@ exit: [done]
 [init] -> [fetch_pages] -> [done]
 ```
 
-### 递归处理
+### Recursive Processing
 
 ```yaml
 name: "Tree Processing"
@@ -284,19 +284,19 @@ exit: [done]
 )
 
 [process_queue]: while(len($ctx.queue) > 0) {
-  # 取出第一个
+  # Dequeue the first element
   [dequeue]: set_context(
     current=first($ctx.queue),
     queue=rest($ctx.queue)
   )
 
-  # 处理当前节点
+  # Process the current node
   [handle]: chat(
     agent="processor",
     message="Process: " + json($ctx.current)
   )
 
-  # 保存结果，添加子节点到队列
+  # Save result, add child nodes to the queue
   [update]: set_context(
     processed=append($ctx.processed, {
       "node": $ctx.current,
@@ -313,7 +313,7 @@ exit: [done]
 [process_root] -> [process_queue] -> [done]
 ```
 
-### 收敛迭代
+### Convergence Iteration
 
 ```yaml
 name: "Convergence Loop"
@@ -358,7 +358,7 @@ exit: [converged]
 [init] -> [iterate] -> [converged]
 ```
 
-### 带进度的批处理
+### Batch Processing with Progress Tracking
 
 ```yaml
 name: "Progress Tracking"
@@ -373,16 +373,16 @@ exit: [complete]
 )
 
 [process]: foreach($item in $input.items) {
-  # 显示进度
+  # Display progress
   [progress]: notify(
     status="Processing " + ($ctx.completed + 1) + "/" + $ctx.total +
            " (" + round(($ctx.completed / $ctx.total) * 100) + "%)"
   )
 
-  # 处理
+  # Process
   [handle]: chat(agent="processor", message=$item)
 
-  # 更新计数
+  # Update count
   [update]: set_context(
     completed=$ctx.completed + 1,
     results=append($ctx.results, $output)
@@ -396,46 +396,46 @@ exit: [complete]
 [init] -> [process] -> [complete]
 ```
 
-## 性能考虑
+## Performance Considerations
 
-### 并行 vs 串行
+### Parallel vs Sequential
 
-默认循环是串行的。对于独立操作，考虑：
+Loops are sequential by default. For independent operations, consider:
 
 ```yaml
-# 串行（默认）- 适合有依赖的操作
+# Sequential (default) - suitable for operations with dependencies
 [process]: foreach($item in $input.items) {
   [handle]: chat(agent="processor", message=$item)
   [handle]
 }
 
-# 如需并行，考虑拆分为多个独立工作流
+# For parallel execution, consider splitting into multiple independent workflows
 ```
 
-### 内存管理
+### Memory Management
 
-大循环中避免无限累积：
+Avoid unbounded accumulation in large loops:
 
 ```yaml
-# 好：定期清理
+# Good: periodic cleanup
 [process]: foreach($item in $input.large_list) {
   [handle]: chat(agent="processor", message=$item)
 
-  # 每 100 条保存一次，清理内存
+  # Save every 100 items and clear memory
   [maybe_flush] if loop.index % 100 == 99 -> [flush]
   [handle] -> [maybe_flush]
 
   [flush]: set_context(
-    batch_results=[],  # 清空
+    batch_results=[],  # Clear
     total_processed=$ctx.total_processed + 100
   )
 }
 ```
 
-## 最佳实践
+## Best Practices
 
-1. **明确终止条件** - while 循环必须有终止条件
-2. **设置最大迭代** - 防止意外的无限循环
-3. **进度追踪** - 长循环中显示进度
-4. **错误处理** - 循环体内处理单项错误，避免整体失败
-5. **状态更新** - 确保循环变量正确更新
+1. **Clear termination conditions** - While loops must have a termination condition
+2. **Set maximum iterations** - Prevent accidental infinite loops
+3. **Progress tracking** - Display progress in long-running loops
+4. **Error handling** - Handle individual item errors within the loop body to avoid overall failure
+5. **State updates** - Ensure loop variables are updated correctly

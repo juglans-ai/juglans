@@ -1,63 +1,63 @@
-# 内置工具参考
+# Builtin Tools Reference
 
-Juglans 提供多个内置工具，用于工作流中的各种操作。
+Juglans provides multiple builtin tools for various operations within workflows.
 
-## AI 工具
+## AI Tools
 
 ### chat()
 
-与 AI Agent 进行对话。
+Conduct a conversation with an AI Agent.
 
-**参数：**
+**Parameters:**
 
-| 参数 | 类型 | 必填 | 说明 |
+| Parameter | Type | Required | Description |
 |------|------|------|------|
-| `agent` | string | 是 | Agent 的 slug |
-| `message` | string | 是 | 发送的消息 |
-| `format` | string | 否 | 输出格式 ("text", "json") |
-| `state` | string | 否 | 消息状态控制（见下表） |
-| `stateless` | string | 否 | ⚠️ 已弃用，使用 `state="silent"` 替代 |
-| `chat_id` | string | 否 | 对话 ID，用于复用会话上下文 |
-| `tools` | array | 否 | 自定义工具定义（覆盖 Agent 默认配置） |
+| `agent` | string | Yes | Agent slug |
+| `message` | string | Yes | Message to send |
+| `format` | string | No | Output format ("text", "json") |
+| `state` | string | No | Message state control (see table below) |
+| `stateless` | string | No | Deprecated, use `state="silent"` instead |
+| `chat_id` | string | No | Conversation ID for reusing session context |
+| `tools` | array | No | Custom tool definitions (overrides Agent default configuration) |
 
-**示例：**
+**Examples:**
 
 ```yaml
-# 基本对话
+# Basic conversation
 [chat]: chat(agent="assistant", message="Hello!")
 
-# 使用变量
+# Using variables
 [chat]: chat(agent="assistant", message=$input.question)
 
-# JSON 输出
+# JSON output
 [classify]: chat(
   agent="classifier",
   message=$input.text,
   format="json"
 )
 
-# 无状态调用（已弃用，使用 state 替代）
+# Stateless call (deprecated, use state instead)
 [analyze]: chat(
   agent="analyst",
   message=$input.data,
   stateless="true"
 )
 
-# 使用 state 参数
+# Using the state parameter
 [hidden]: chat(
   agent="analyst",
   message=$input.data,
   state="context_hidden"
 )
 
-# 复用对话上下文
+# Reusing conversation context
 [reply]: chat(
   agent="assistant",
   chat_id=$reply.chat_id,
   message=$input.followup
 )
 
-# 附加工具
+# With tools
 [solver]: chat(
   agent="assistant",
   message=$input.question,
@@ -66,11 +66,11 @@ Juglans 提供多个内置工具，用于工作流中的各种操作。
       "type": "function",
       "function": {
         "name": "search_web",
-        "description": "搜索互联网内容",
+        "description": "Search internet content",
         "parameters": {
           "type": "object",
           "properties": {
-            "query": {"type": "string", "description": "搜索关键词"}
+            "query": {"type": "string", "description": "Search keywords"}
           },
           "required": ["query"]
         }
@@ -80,40 +80,40 @@ Juglans 提供多个内置工具，用于工作流中的各种操作。
 )
 ```
 
-**输出：**
+**Output:**
 
-返回 AI 的响应文本。如果 `format="json"`，返回解析后的 JSON 对象。
+Returns the AI response text. If `format="json"`, returns a parsed JSON object.
 
-**`state` 参数说明：**
+**`state` Parameter Description:**
 
-控制 `chat()` 输出的可见性和持久性：
+Controls the visibility and persistence of `chat()` output:
 
-| state | 写入上下文 | SSE 输出 | 说明 |
+| state | Writes to Context | SSE Output | Description |
 |-------|-----------|---------|------|
-| `context_visible` | ✅ | ✅ | 默认值，正常消息 |
-| `context_hidden` | ✅ | ❌ | AI 后续可见，不推送给用户 |
-| `display_only` | ❌ | ✅ | 推送给用户，AI 后续不可见 |
-| `silent` | ❌ | ❌ | 两者都不 |
+| `context_visible` | Yes | Yes | Default value, normal message |
+| `context_hidden` | Yes | No | Visible to AI in subsequent turns, not pushed to user |
+| `display_only` | No | Yes | Pushed to user, not visible to AI in subsequent turns |
+| `silent` | No | No | Neither |
 
-- **写入上下文**: 结果是否存入 `$reply.output`，影响后续节点是否能读取
-- **SSE 输出**: 生成的 token 是否通过 SSE 流式推送给前端
+- **Writes to Context**: Whether the result is stored in `$reply.output`, affecting whether subsequent nodes can read it
+- **SSE Output**: Whether generated tokens are streamed to the frontend via SSE
 
 ```yaml
-# 后台分析，不显示给用户，但结果供后续节点使用
+# Background analysis, not displayed to user, but results available to subsequent nodes
 [bg_analyze]: chat(
   agent="analyst",
   message=$input.data,
   state="context_hidden"
 )
 
-# 展示给用户看，但不影响后续 AI 上下文
+# Displayed to user, but does not affect subsequent AI context
 [greeting]: chat(
   agent="greeter",
   message="Welcome!",
   state="display_only"
 )
 
-# 完全静默
+# Completely silent
 [silent_check]: chat(
   agent="validator",
   message=$input.data,
@@ -121,35 +121,35 @@ Juglans 提供多个内置工具，用于工作流中的各种操作。
 )
 ```
 
-**工具配置说明：**
+**Tool Configuration Notes:**
 
-- 如果工作流中指定了 `tools` 参数，使用工作流中的配置
-- 否则，如果 Agent 配置中有 `tools` 字段，使用 Agent 的默认工具
-- 工具配置遵循 OpenAI Function Calling 格式
+- If `tools` parameter is specified in the workflow, the workflow configuration is used
+- Otherwise, if the Agent configuration has a `tools` field, the Agent's default tools are used
+- Tool configuration follows the OpenAI Function Calling format
 
 ---
 
 ### p()
 
-渲染 Prompt 模板。
+Render a Prompt template.
 
-**参数：**
+**Parameters:**
 
-| 参数 | 类型 | 必填 | 说明 |
+| Parameter | Type | Required | Description |
 |------|------|------|------|
-| `slug` | string | 是 | Prompt 的 slug |
-| `...` | any | 否 | 模板变量 |
+| `slug` | string | Yes | Prompt slug |
+| `...` | any | No | Template variables |
 
-**示例：**
+**Examples:**
 
 ```yaml
-# 基本渲染
+# Basic rendering
 [prompt]: p(slug="greeting")
 
-# 传递变量
+# Passing variables
 [prompt]: p(slug="greeting", name="Alice", language="Chinese")
 
-# 使用输入变量
+# Using input variables
 [prompt]: p(
   slug="analysis",
   topic=$input.topic,
@@ -157,25 +157,25 @@ Juglans 提供多个内置工具，用于工作流中的各种操作。
 )
 ```
 
-**输出：**
+**Output:**
 
-返回渲染后的 Prompt 文本。
+Returns the rendered Prompt text.
 
 ---
 
 ### memory_search()
 
-在记忆存储中搜索相关内容（RAG）。
+Search for relevant content in memory storage (RAG).
 
-**参数：**
+**Parameters:**
 
-| 参数 | 类型 | 必填 | 说明 |
+| Parameter | Type | Required | Description |
 |------|------|------|------|
-| `query` | string | 是 | 搜索查询 |
-| `limit` | number | 否 | 返回数量限制 |
-| `threshold` | number | 否 | 相似度阈值 |
+| `query` | string | Yes | Search query |
+| `limit` | number | No | Result count limit |
+| `threshold` | number | No | Similarity threshold |
 
-**示例：**
+**Examples:**
 
 ```yaml
 [search]: memory_search(
@@ -185,25 +185,25 @@ Juglans 提供多个内置工具，用于工作流中的各种操作。
 )
 ```
 
-**输出：**
+**Output:**
 
-返回匹配的记忆条目数组。
+Returns an array of matching memory entries.
 
 ---
 
-## 系统工具
+## System Tools
 
 ### notify()
 
-发送状态通知。
+Send a status notification.
 
-**参数：**
+**Parameters:**
 
-| 参数 | 类型 | 必填 | 说明 |
+| Parameter | Type | Required | Description |
 |------|------|------|------|
-| `status` | string | 是 | 通知消息 |
+| `status` | string | Yes | Notification message |
 
-**示例：**
+**Examples:**
 
 ```yaml
 [start]: notify(status="Starting workflow...")
@@ -211,99 +211,99 @@ Juglans 提供多个内置工具，用于工作流中的各种操作。
 [done]: notify(status="Completed!")
 ```
 
-**输出：**
+**Output:**
 
-无返回值。消息会显示在控制台或 UI 中。
+No return value. The message is displayed in the console or UI.
 
 ---
 
 ### set_context()
 
-设置上下文变量。
+Set context variables.
 
-**参数：**
+**Parameters:**
 
-任意键值对，支持嵌套路径。
+Any key-value pairs, supports nested paths.
 
-**示例：**
+**Examples:**
 
 ```yaml
-# 简单设置
+# Simple assignment
 [init]: set_context(count=0)
 
-# 多个变量
+# Multiple variables
 [setup]: set_context(
   status="running",
   items=[],
   config={"timeout": 30}
 )
 
-# 嵌套路径
+# Nested paths
 [update]: set_context(user.name="Alice", user.score=100)
 
-# 使用表达式
+# Using expressions
 [increment]: set_context(count=$ctx.count + 1)
 
-# 追加到数组
+# Append to array
 [collect]: set_context(
   results=append($ctx.results, $output)
 )
 ```
 
-**输出：**
+**Output:**
 
-无返回值。变量可通过 `$ctx.*` 访问。
+No return value. Variables are accessible via `$ctx.*`.
 
 ---
 
 ### timer()
 
-延迟执行。
+Delay execution.
 
-**参数：**
+**Parameters:**
 
-| 参数 | 类型 | 必填 | 说明 |
+| Parameter | Type | Required | Description |
 |------|------|------|------|
-| `ms` | number | 是 | 延迟毫秒数 |
+| `ms` | number | Yes | Delay in milliseconds |
 
-**示例：**
+**Examples:**
 
 ```yaml
-# 等待 1 秒
+# Wait 1 second
 [wait]: timer(ms=1000)
 
-# 动态延迟
+# Dynamic delay
 [delay]: timer(ms=$ctx.delay_time)
 ```
 
-**输出：**
+**Output:**
 
-无返回值。执行会暂停指定时间。
+No return value. Execution pauses for the specified duration.
 
 ---
 
 ### sh()
 
-> ⚠️ **已弃用** — `sh()` 现在是 `bash()` 的别名，保持向后兼容。推荐使用 `bash()` 替代。参见[开发者工具 > bash()](#bash)。
+> **Deprecated** — `sh()` is now an alias for `bash()`, maintained for backward compatibility. Use `bash()` instead. See [Developer Tools > bash()](#bash).
 
-**旧语法仍然有效：**
+**Old syntax still works:**
 
 ```yaml
-[files]: sh(cmd="ls -la")    # 等同于 bash(command="ls -la")
+[files]: sh(cmd="ls -la")    # Equivalent to bash(command="ls -la")
 ```
 
 ---
 
-## 开发者工具
+## Developer Tools
 
-Claude Code 风格的代码操作工具集，注册为 `"devtools"` slug。可在 .jg 中直接调用，也可通过 .jgagent 的 `tools: ["devtools"]` 被 LLM 自动使用。
+A Claude Code-style set of code operation tools, registered under the `"devtools"` slug. Can be called directly in .jg files, or used automatically by LLMs via `tools: ["devtools"]` in .jgagent.
 
 ```yaml
-# Agent 中启用
+# Enable in an Agent
 slug: "code-agent"
 tools: ["devtools"]
 
-# 也可与其他工具集组合
+# Can also be combined with other tool sets
 tools: ["devtools", "web-tools"]
 ```
 
@@ -311,27 +311,27 @@ tools: ["devtools", "web-tools"]
 
 ### read_file()
 
-读取文件内容，返回带行号的格式。
+Read file contents, returned with line numbers.
 
-**参数：**
+**Parameters:**
 
-| 参数 | 类型 | 必填 | 说明 |
+| Parameter | Type | Required | Description |
 |------|------|------|------|
-| `file_path` | string | 是 | 文件路径（绝对或相对） |
-| `offset` | integer | 否 | 起始行号，1-based（默认 1） |
-| `limit` | integer | 否 | 最大返回行数（默认 2000） |
+| `file_path` | string | Yes | File path (absolute or relative) |
+| `offset` | integer | No | Starting line number, 1-based (default 1) |
+| `limit` | integer | No | Maximum number of lines to return (default 2000) |
 
-**示例：**
+**Examples:**
 
 ```yaml
-# 读取整个文件
+# Read entire file
 [read]: read_file(file_path="./src/main.rs")
 
-# 读取指定范围
+# Read a specific range
 [read]: read_file(file_path="./src/main.rs", offset=50, limit=100)
 ```
 
-**输出：**
+**Output:**
 
 ```json
 {
@@ -342,33 +342,33 @@ tools: ["devtools", "web-tools"]
 }
 ```
 
-| 字段 | 类型 | 说明 |
+| Field | Type | Description |
 |------|------|------|
-| `content` | string | 带行号的文件内容（cat -n 格式，单行最长 2000 字符） |
-| `total_lines` | number | 文件总行数 |
-| `lines_returned` | number | 实际返回行数 |
-| `offset` | number | 起始行号 |
+| `content` | string | File content with line numbers (cat -n format, max 2000 characters per line) |
+| `total_lines` | number | Total number of lines in the file |
+| `lines_returned` | number | Actual number of lines returned |
+| `offset` | number | Starting line number |
 
 ---
 
 ### write_file()
 
-写入文件（覆盖），自动创建父目录。
+Write to a file (overwrite), automatically creates parent directories.
 
-**参数：**
+**Parameters:**
 
-| 参数 | 类型 | 必填 | 说明 |
+| Parameter | Type | Required | Description |
 |------|------|------|------|
-| `file_path` | string | 是 | 文件路径 |
-| `content` | string | 是 | 文件内容 |
+| `file_path` | string | Yes | File path |
+| `content` | string | Yes | File content |
 
-**示例：**
+**Examples:**
 
 ```yaml
 [write]: write_file(file_path="./output/result.json", content=$ctx.result)
 ```
 
-**输出：**
+**Output:**
 
 ```json
 {
@@ -383,28 +383,28 @@ tools: ["devtools", "web-tools"]
 
 ### edit_file()
 
-精确字符串替换。`old_string` 必须在文件中唯一，否则需要 `replace_all=true`。
+Exact string replacement. `old_string` must be unique in the file, otherwise `replace_all=true` is required.
 
-**参数：**
+**Parameters:**
 
-| 参数 | 类型 | 必填 | 说明 |
+| Parameter | Type | Required | Description |
 |------|------|------|------|
-| `file_path` | string | 是 | 文件路径 |
-| `old_string` | string | 是 | 要替换的文本（必须唯一） |
-| `new_string` | string | 是 | 替换后的文本 |
-| `replace_all` | boolean | 否 | 替换所有匹配（默认 false） |
+| `file_path` | string | Yes | File path |
+| `old_string` | string | Yes | Text to replace (must be unique) |
+| `new_string` | string | Yes | Replacement text |
+| `replace_all` | boolean | No | Replace all matches (default false) |
 
-**示例：**
+**Examples:**
 
 ```yaml
-# 精确替换
+# Exact replacement
 [edit]: edit_file(
   file_path="./src/config.rs",
   old_string="version = \"1.0\"",
   new_string="version = \"2.0\""
 )
 
-# 全局替换
+# Global replacement
 [rename]: edit_file(
   file_path="./src/main.rs",
   old_string="old_name",
@@ -413,7 +413,7 @@ tools: ["devtools", "web-tools"]
 )
 ```
 
-**输出：**
+**Output:**
 
 ```json
 {
@@ -423,31 +423,31 @@ tools: ["devtools", "web-tools"]
 }
 ```
 
-**错误情况：**
-- `old_string` 未找到 → 报错
-- `old_string` 出现多次且 `replace_all=false` → 报错（要求提供更多上下文使匹配唯一）
+**Error cases:**
+- `old_string` not found -> error
+- `old_string` appears multiple times and `replace_all=false` -> error (requires more context to make the match unique)
 
 ---
 
 ### glob()
 
-文件模式匹配，返回匹配路径列表。
+File pattern matching, returns a list of matching paths.
 
-**参数：**
+**Parameters:**
 
-| 参数 | 类型 | 必填 | 说明 |
+| Parameter | Type | Required | Description |
 |------|------|------|------|
-| `pattern` | string | 是 | Glob 模式（如 `**/*.rs`, `src/**/*.json`） |
-| `path` | string | 否 | 搜索目录（默认当前目录） |
+| `pattern` | string | Yes | Glob pattern (e.g., `**/*.rs`, `src/**/*.json`) |
+| `path` | string | No | Search directory (defaults to current directory) |
 
-**示例：**
+**Examples:**
 
 ```yaml
 [find]: glob(pattern="**/*.rs")
 [find_src]: glob(pattern="*.ts", path="./src")
 ```
 
-**输出：**
+**Output:**
 
 ```json
 {
@@ -461,29 +461,29 @@ tools: ["devtools", "web-tools"]
 
 ### grep()
 
-正则搜索文件内容。递归搜索目录中的文件，返回匹配行和上下文。
+Regex search of file contents. Recursively searches files in a directory and returns matching lines with context.
 
-**参数：**
+**Parameters:**
 
-| 参数 | 类型 | 必填 | 说明 |
+| Parameter | Type | Required | Description |
 |------|------|------|------|
-| `pattern` | string | 是 | 正则表达式 |
-| `path` | string | 否 | 搜索路径（文件或目录，默认当前目录） |
-| `include` | string | 否 | 文件过滤 glob（如 `*.rs`, `*.{ts,tsx}`） |
-| `context_lines` | integer | 否 | 匹配行前后的上下文行数（默认 0） |
-| `max_matches` | integer | 否 | 最大匹配数（默认 50） |
+| `pattern` | string | Yes | Regular expression |
+| `path` | string | No | Search path (file or directory, defaults to current directory) |
+| `include` | string | No | File filter glob (e.g., `*.rs`, `*.{ts,tsx}`) |
+| `context_lines` | integer | No | Number of context lines before and after matches (default 0) |
+| `max_matches` | integer | No | Maximum number of matches (default 50) |
 
-**示例：**
+**Examples:**
 
 ```yaml
-# 搜索 TODO
+# Search for TODOs
 [todos]: grep(pattern="TODO|FIXME", path="./src")
 
-# 搜索特定文件类型
+# Search specific file types
 [search]: grep(pattern="fn main", include="*.rs", context_lines=2)
 ```
 
-**输出：**
+**Output:**
 
 ```json
 {
@@ -505,60 +505,60 @@ tools: ["devtools", "web-tools"]
 
 ### bash()
 
-执行 Shell 命令，带超时控制和输出截断。替代旧 `sh()` 工具。
+Execute a shell command with timeout control and output truncation. Replaces the old `sh()` tool.
 
-**参数：**
+**Parameters:**
 
-| 参数 | 类型 | 必填 | 说明 |
+| Parameter | Type | Required | Description |
 |------|------|------|------|
-| `command` | string | 是 | 要执行的命令（也接受 `cmd` 参数，向后兼容） |
-| `timeout` | integer | 否 | 超时毫秒（默认 120000，最大 600000） |
-| `description` | string | 否 | 命令描述（用于日志） |
+| `command` | string | Yes | Command to execute (also accepts `cmd` parameter for backward compatibility) |
+| `timeout` | integer | No | Timeout in milliseconds (default 120000, max 600000) |
+| `description` | string | No | Command description (for logging) |
 
-**示例：**
+**Examples:**
 
 ```yaml
-# 执行命令
+# Execute a command
 [build]: bash(command="cargo build --release")
 
-# 带超时
+# With timeout
 [test]: bash(command="cargo test", timeout=300000)
 
-# 向后兼容旧语法
+# Backward-compatible old syntax
 [files]: bash(cmd="ls -la")
 ```
 
-**输出：**
+**Output:**
 
 ```json
 {
-  "stdout": "命令标准输出...",
-  "stderr": "错误输出（如有）...",
+  "stdout": "Command standard output...",
+  "stderr": "Error output (if any)...",
   "exit_code": 0,
   "ok": true
 }
 ```
 
-| 字段 | 类型 | 说明 |
+| Field | Type | Description |
 |------|------|------|
-| `stdout` | string | 标准输出（超过 30000 字符会截断） |
-| `stderr` | string | 标准错误输出 |
-| `exit_code` | number | 退出码（0 表示成功） |
-| `ok` | boolean | 命令是否成功执行 |
+| `stdout` | string | Standard output (truncated beyond 30000 characters) |
+| `stderr` | string | Standard error output |
+| `exit_code` | number | Exit code (0 means success) |
+| `ok` | boolean | Whether the command executed successfully |
 
-**安全提示：**
+**Security Note:**
 
-避免直接执行用户输入的命令，防止命令注入攻击：
+Avoid directly executing user-provided commands to prevent command injection attacks:
 
 ```yaml
-# 危险：不要这样做
+# Dangerous: do not do this
 [bad]: bash(command=$input.user_command)
 
-# 安全：使用固定命令，参数验证
+# Safe: use fixed commands with parameter validation
 [safe]: bash(command="ls " + sanitize($input.directory))
 ```
 
-> **注意**：`sh()` 是 `bash()` 的别名，`sh(cmd="ls")` 等同于 `bash(command="ls")`。
+> **Note**: `sh()` is an alias for `bash()`. `sh(cmd="ls")` is equivalent to `bash(command="ls")`.
 
 ---
 
@@ -643,37 +643,37 @@ Sets the HTTP response for a `serve()` workflow. Writes to `$response.*` which t
 
 ### fetch()
 
-HTTP 请求工具（推荐使用）。
+HTTP request tool (recommended).
 
-**参数：**
+**Parameters:**
 
-| 参数 | 类型 | 必填 | 说明 |
+| Parameter | Type | Required | Description |
 |------|------|------|------|
-| `url` | string | 是 | 目标 URL |
-| `method` | string | 否 | HTTP 方法 (默认 "GET") |
-| `body` | object/string | 否 | 请求体（自动 JSON 序列化） |
-| `headers` | object | 否 | 自定义请求头 |
+| `url` | string | Yes | Target URL |
+| `method` | string | No | HTTP method (default "GET") |
+| `body` | object/string | No | Request body (automatically JSON-serialized) |
+| `headers` | object | No | Custom request headers |
 
-**示例：**
+**Examples:**
 
 ```yaml
-# GET 请求
+# GET request
 [get]: fetch(url="https://api.example.com/data")
 
-# POST 请求
+# POST request
 [post]: fetch(
   url="https://api.example.com/submit",
   method="POST",
   body=$input.data
 )
 
-# 带请求头
+# With headers
 [auth_get]: fetch(
   url="https://api.example.com/protected",
   headers={"Authorization": "Bearer " + $ctx.token}
 )
 
-# PUT 请求
+# PUT request
 [update]: fetch(
   url="https://api.example.com/items/1",
   method="PUT",
@@ -681,7 +681,7 @@ HTTP 请求工具（推荐使用）。
 )
 ```
 
-**输出：**
+**Output:**
 
 ```json
 {
@@ -691,44 +691,44 @@ HTTP 请求工具（推荐使用）。
 }
 ```
 
-| 字段 | 类型 | 说明 |
+| Field | Type | Description |
 |------|------|------|
-| `status` | number | HTTP 状态码 |
-| `ok` | boolean | 状态码在 200-299 范围内为 true |
-| `data` | any | 响应内容（自动解析 JSON，否则返回字符串） |
+| `status` | number | HTTP status code |
+| `ok` | boolean | True if status code is in the 200-299 range |
+| `data` | any | Response content (automatically parsed as JSON, otherwise returned as string) |
 
-**错误处理：**
+**Error Handling:**
 
 ```yaml
 [api]: fetch(url=$input.api_url)
 [api] -> [process]
 [api] on error -> [handle_error]
 
-[handle_error]: notify(message="API 请求失败: " + $error.message)
+[handle_error]: notify(message="API request failed: " + $error.message)
 ```
 
 ---
 
 ### fetch_url()
 
-获取 URL 内容（兼容旧版，推荐使用 `fetch()`）。
+Fetch URL content (legacy compatible, `fetch()` is recommended).
 
-**参数：**
+**Parameters:**
 
-| 参数 | 类型 | 必填 | 说明 |
+| Parameter | Type | Required | Description |
 |------|------|------|------|
-| `url` | string | 是 | 目标 URL |
-| `method` | string | 否 | HTTP 方法 (默认 "GET") |
-| `headers` | object | 否 | 请求头 |
-| `body` | string | 否 | 请求体 |
+| `url` | string | Yes | Target URL |
+| `method` | string | No | HTTP method (default "GET") |
+| `headers` | object | No | Request headers |
+| `body` | string | No | Request body |
 
-**示例：**
+**Examples:**
 
 ```yaml
-# GET 请求
+# GET request
 [fetch]: fetch_url(url="https://api.example.com/data")
 
-# POST 请求
+# POST request
 [post]: fetch_url(
   url="https://api.example.com/submit",
   method="POST",
@@ -736,55 +736,55 @@ HTTP 请求工具（推荐使用）。
   body=json($input.data)
 )
 
-# 带认证
+# With authentication
 [api]: fetch_url(
   url="https://api.example.com/protected",
   headers={"Authorization": "Bearer " + $ctx.token}
 )
 ```
 
-**输出：**
+**Output:**
 
-返回响应内容。如果是 JSON，自动解析为对象。
+Returns the response content. If it is JSON, it is automatically parsed into an object.
 
 ---
 
-## 工具函数
+## Utility Functions
 
-在参数中可以使用以下函数：
+The following functions can be used in parameters:
 
-### 数据转换
-
-```yaml
-# JSON 序列化
-json($ctx.data)              # 对象 -> JSON 字符串
-
-# 字符串拼接
-"Hello, " + $input.name      # 拼接字符串
-
-# 数组追加
-append($ctx.list, $item)     # 追加元素到数组
-```
-
-### 数学运算
+### Data Transformation
 
 ```yaml
-$ctx.count + 1               # 加法
-$ctx.total - $ctx.used       # 减法
-$ctx.price * $ctx.quantity   # 乘法
-$ctx.total / $ctx.count      # 除法
+# JSON serialization
+json($ctx.data)              # Object -> JSON string
+
+# String concatenation
+"Hello, " + $input.name      # Concatenate strings
+
+# Array append
+append($ctx.list, $item)     # Append element to array
 ```
 
-### 比较运算
+### Arithmetic Operations
 
 ```yaml
-$ctx.score > 80              # 大于
-$ctx.count <= 10             # 小于等于
-$ctx.status == "done"        # 等于
-$ctx.value != null           # 不等于
+$ctx.count + 1               # Addition
+$ctx.total - $ctx.used       # Subtraction
+$ctx.price * $ctx.quantity   # Multiplication
+$ctx.total / $ctx.count      # Division
 ```
 
-### 逻辑运算
+### Comparison Operations
+
+```yaml
+$ctx.score > 80              # Greater than
+$ctx.count <= 10             # Less than or equal
+$ctx.status == "done"        # Equal to
+$ctx.value != null           # Not equal to
+```
+
+### Logical Operations
 
 ```yaml
 $ctx.a && $ctx.b             # AND
@@ -794,9 +794,9 @@ $ctx.a || $ctx.b             # OR
 
 ---
 
-## 在工作流中组合使用
+## Combining Tools in Workflows
 
-### 完整示例
+### Complete Example
 
 ```yaml
 name: "Data Processing"
@@ -808,52 +808,52 @@ agents: ["./agents/*.jgagent"]
 entry: [init]
 exit: [done]
 
-# 初始化
+# Initialization
 [init]: set_context(results=[], processed=0)
 [start_notify]: notify(status="Starting data processing...")
 
-# 获取数据
+# Fetch data
 [fetch_data]: fetch_url(url=$input.data_url)
 
-# 处理每条数据
+# Process each data item
 [process]: foreach($item in $output.items) {
-  # 渲染分析 Prompt
+  # Render analysis Prompt
   [render]: p(slug="analyze-item", item=$item)
 
-  # 调用 AI 分析
+  # Call AI for analysis
   [analyze]: chat(
     agent="analyst",
     message=$output,
     format="json"
   )
 
-  # 收集结果
+  # Collect results
   [collect]: set_context(
     results=append($ctx.results, $output),
     processed=$ctx.processed + 1
   )
 
-  # 进度通知
+  # Progress notification
   [progress]: notify(status="Processed: " + $ctx.processed)
 
   [render] -> [analyze] -> [collect] -> [progress]
 }
 
-# 汇总
+# Summarize
 [summarize]: chat(
   agent="summarizer",
   message="Summarize: " + json($ctx.results)
 )
 
-# 完成
+# Complete
 [done]: notify(status="Done! Processed " + $ctx.processed + " items")
 
-# 执行流程
+# Execution flow
 [init] -> [start_notify] -> [fetch_data] -> [process] -> [summarize] -> [done]
 ```
 
 ---
 
-## 自定义工具
+## Custom Tools
 
-通过 MCP 集成可以添加自定义工具。参见 [MCP 集成指南](../integrations/mcp.md)。
+Custom tools can be added through MCP integration. See the [MCP Integration Guide](../integrations/mcp.md).

@@ -1,63 +1,65 @@
-# Python 生态集成
+# Python Ecosystem Integration
 
-Juglans 2.0 支持直接调用 Python 生态系统，无需在 DSL 中重新实现数据处理、机器学习等功能。
+Juglans 2.0 supports directly calling the Python ecosystem, eliminating the need to reimplement data processing, machine learning, and other functionality in the DSL.
 
-## 设计理念
+## Design Philosophy
 
 ```
 ┌─────────────────────────────────────────┐
-│            .jg (编排层)              │
-│  - 图结构、控制流、AI 原语               │
-│  - 不关心节点"怎么实现"                  │
+│        .jg (Orchestration Layer)        │
+│  - Graph structure, control flow,       │
+│    AI primitives                        │
+│  - Doesn't care "how" a node is        │
+│    implemented                          │
 └────────────────┬────────────────────────┘
                  ▼
 ┌─────────────────────────────────────────┐
-│           Python 生态                    │
+│           Python Ecosystem              │
 │  pandas, sklearn, matplotlib...         │
-│  直接调用，无需适配                       │
+│  Direct calls, no adapters needed       │
 └─────────────────────────────────────────┘
 ```
 
-## 快速开始
+## Quick Start
 
-### 1. 导入模块
+### 1. Import Modules
 
-在工作流头部声明需要使用的 Python 模块：
+Declare the Python modules you need in the workflow header:
 
 ```yaml
 name: "Data Analysis"
 
-# Python 模块导入
+# Python module imports
 python: [
-    "pandas",                    # 系统模块
-    "sklearn.ensemble",          # 子模块
-    "./utils.py",                # 本地 .py 文件
-    "./lib/*.py"                 # glob 模式
+    "pandas",                    # System module
+    "sklearn.ensemble",          # Submodule
+    "./utils.py",                # Local .py file
+    "./lib/*.py"                 # Glob pattern
 ]
 
 entry: [load]
 exit: [done]
 ```
 
-### 2. 透明调用
+### 2. Transparent Calls
 
-导入后，可以直接调用模块函数：
+After importing, you can call module functions directly:
 
 ```yaml
-# 调用 pandas.read_csv
+# Call pandas.read_csv
 [load]: pandas.read_csv("data.csv")
 
-# 调用返回对象的方法
+# Call methods on returned objects
 [stats]: $load.describe()
 
-# 链式调用
+# Chained calls
 [clean]: $load.dropna().reset_index()
 
-# 本地模块调用
+# Local module calls
 [result]: utils.process($clean)
 ```
 
-### 3. 完整示例
+### 3. Complete Example
 
 ```yaml
 name: "Sales Analysis"
@@ -68,56 +70,56 @@ agents: ["./agents/analyst.jgagent"]
 entry: [load]
 exit: [report]
 
-# 加载 CSV 数据
+# Load CSV data
 [load]: pandas.read_csv("sales.csv")
 
-# 数据预处理
+# Data preprocessing
 [clean]: $load.dropna()
 [summary]: $clean.describe()
 
-# AI 分析
+# AI analysis
 [analysis]: chat(
     agent="analyst",
-    message="分析这份销售数据摘要",
+    message="Analyze this sales data summary",
     format="json"
 )
 
-# 生成报告
-[report]: notify(message="分析完成: " + $analysis.output)
+# Generate report
+[report]: notify(message="Analysis complete: " + $analysis.output)
 
 [load] -> [clean] -> [summary] -> [analysis] -> [report]
 ```
 
-## 导入语法
+## Import Syntax
 
-### 系统模块
+### System Modules
 
 ```yaml
 python: ["pandas", "numpy", "json"]
 ```
 
-### 子模块
+### Submodules
 
 ```yaml
 python: ["sklearn.ensemble", "sklearn.preprocessing"]
 ```
 
-使用时：
+Usage:
 ```yaml
 [model]: sklearn.ensemble.RandomForestClassifier(n_estimators=100)
 ```
 
-### 本地 .py 文件
+### Local .py Files
 
 ```yaml
 python: [
-    "./utils.py",           # 相对于 .jg 文件
-    "./lib/helpers.py",     # 子目录
-    "/absolute/path.py"     # 绝对路径
+    "./utils.py",           # Relative to the .jg file
+    "./lib/helpers.py",     # Subdirectory
+    "/absolute/path.py"     # Absolute path
 ]
 ```
 
-文件中的函数可直接调用：
+Functions in the file can be called directly:
 
 ```python
 # ./utils.py
@@ -129,60 +131,60 @@ def process_data(df, threshold=0.5):
 [result]: utils.process_data($input, threshold=0.8)
 ```
 
-### Glob 模式
+### Glob Patterns
 
 ```yaml
-python: ["./processors/*.py"]  # 导入目录下所有 .py 文件
+python: ["./processors/*.py"]  # Import all .py files in the directory
 ```
 
-## 对象引用系统
+## Object Reference System
 
-### 问题
+### Problem
 
-Python 对象（如 DataFrame、Model）无法直接序列化传递给 Juglans。
+Python objects (such as DataFrames, Models) cannot be directly serialized and passed to Juglans.
 
-### 解决方案
+### Solution
 
-Juglans 使用对象引用系统：
+Juglans uses an object reference system:
 
 ```
 ┌─────────────┐                  ┌─────────────┐
 │   Juglans   │  ref:obj:12345   │   Python    │
 │   (Rust)    │ ◄──────────────► │   Worker    │
-│             │                  │  (实际对象)  │
+│             │                  │ (actual obj) │
 └─────────────┘                  └─────────────┘
 ```
 
-- 大对象保留在 Python 进程内存
-- Juglans 持有引用 ID（如 `ref:obj:12345`）
-- 方法调用通过引用 ID 路由到 Python
+- Large objects remain in the Python process memory
+- Juglans holds a reference ID (e.g., `ref:obj:12345`)
+- Method calls are routed to Python via the reference ID
 
-### 示例
+### Example
 
 ```yaml
 [df]: pandas.read_csv("large_file.csv")
-# Python 返回: {"ref": "ref:obj:001", "type": "DataFrame"}
-# Juglans 存储: $df = Ref("ref:obj:001")
+# Python returns: {"ref": "ref:obj:001", "type": "DataFrame"}
+# Juglans stores: $df = Ref("ref:obj:001")
 
 [filtered]: $df.query("score > 0.5")
-# Juglans 发送: {"target": "ref:obj:001", "method": "query", "args": ["score > 0.5"]}
-# Python 返回: {"ref": "ref:obj:002"}
+# Juglans sends: {"target": "ref:obj:001", "method": "query", "args": ["score > 0.5"]}
+# Python returns: {"ref": "ref:obj:002"}
 
 [result]: $filtered.to_dict()
-# 返回实际 JSON 数据，不再需要引用
+# Returns actual JSON data, no longer needs a reference
 ```
 
-### 生命周期
+### Lifecycle
 
-- 工作流执行期间，引用保持有效
-- 工作流结束时，自动发送 GC 消息释放所有引用
-- 同一工作流内可自由传递引用
+- References remain valid during workflow execution
+- When the workflow ends, a GC message is automatically sent to release all references
+- References can be freely passed within the same workflow
 
-## 运行时架构
+## Runtime Architecture
 
-### Worker 进程
+### Worker Process
 
-Juglans 启动 Python Worker 子进程处理调用：
+Juglans starts a Python Worker subprocess to handle calls:
 
 ```
                     Juglans (Rust)
@@ -195,9 +197,9 @@ Juglans 启动 Python Worker 子进程处理调用：
                   (subprocess)
 ```
 
-### 通信协议
+### Communication Protocol
 
-**请求格式**：
+**Request format**:
 ```json
 {
     "id": "req-001",
@@ -209,7 +211,7 @@ Juglans 启动 Python Worker 子进程处理调用：
 }
 ```
 
-**响应格式**：
+**Response format**:
 ```json
 {
     "id": "req-001",
@@ -219,20 +221,20 @@ Juglans 启动 Python Worker 子进程处理调用：
 }
 ```
 
-### Worker 池（可选）
+### Worker Pool (Optional)
 
-对于高并发场景，可配置多个 Worker：
+For high-concurrency scenarios, you can configure multiple Workers:
 
 ```toml
 # juglans.toml
 [python]
-workers = 4          # Worker 数量
-timeout = 30000      # 超时时间 (ms)
+workers = 4          # Number of workers
+timeout = 30000      # Timeout (ms)
 ```
 
-## 错误处理
+## Error Handling
 
-Python 异常会被捕获并转换为工作流错误：
+Python exceptions are caught and converted to workflow errors:
 
 ```yaml
 python: ["risky_module"]
@@ -244,7 +246,7 @@ python: ["risky_module"]
 [handle]: notify(message="Python error: " + $error.message)
 ```
 
-错误对象包含：
+The error object contains:
 ```json
 {
     "type": "PythonError",
@@ -253,38 +255,38 @@ python: ["risky_module"]
 }
 ```
 
-## 与内置函数的区别
+## Differences from Built-in Functions
 
-| 调用方式 | 来源 | 说明 |
-|---------|------|------|
-| `chat()`, `sh()`, `fetch()` | 内置 | 无需导入 |
-| `pandas.read_csv()` | Python | 需要 `python: ["pandas"]` |
-| `mcp_tool()` | MCP | 需要配置 MCP 服务器 |
+| Call Method | Source | Description |
+|-------------|--------|-------------|
+| `chat()`, `sh()`, `fetch()` | Built-in | No import needed |
+| `pandas.read_csv()` | Python | Requires `python: ["pandas"]` |
+| `mcp_tool()` | MCP | Requires MCP server configuration |
 
-**解析顺序**：
-1. 检查是否内置函数
-2. 检查是否在 `python:` 列表中声明
-3. 检查是否 MCP 工具
-4. 报错 "Unknown function"
+**Resolution order**:
+1. Check if it is a built-in function
+2. Check if it is declared in the `python:` list
+3. Check if it is an MCP tool
+4. Report "Unknown function" error
 
-## 最佳实践
+## Best Practices
 
-### 1. 只导入需要的模块
+### 1. Only Import Modules You Need
 
 ```yaml
-# 好：明确导入
+# Good: Explicit imports
 python: ["pandas", "json"]
 
-# 避免：导入过多
+# Avoid: Too many imports
 python: ["pandas", "numpy", "scipy", "sklearn", ...]
 ```
 
-### 2. 本地模块封装复杂逻辑
+### 2. Encapsulate Complex Logic in Local Modules
 
 ```python
 # ./processors/data.py
 def preprocess(df):
-    """封装复杂的数据预处理逻辑"""
+    """Encapsulate complex data preprocessing logic"""
     df = df.dropna()
     df = df.reset_index()
     df['normalized'] = (df['value'] - df['value'].mean()) / df['value'].std()
@@ -294,54 +296,54 @@ def preprocess(df):
 ```yaml
 python: ["./processors/data.py"]
 
-[clean]: data.preprocess($raw)  # 简洁调用
+[clean]: data.preprocess($raw)  # Concise call
 ```
 
-### 3. 避免在循环中频繁调用
+### 3. Avoid Frequent Calls in Loops
 
 ```yaml
-# 不好：每次迭代都调用 Python
+# Bad: Calls Python on every iteration
 [process]: foreach($item in $input.items) {
-    [call]: utils.process($item)  # 多次进程通信
+    [call]: utils.process($item)  # Multiple inter-process communications
 }
 
-# 好：批量处理
-[batch]: utils.process_batch($input.items)  # 单次调用
+# Good: Batch processing
+[batch]: utils.process_batch($input.items)  # Single call
 ```
 
-### 4. 使用类型提示（本地模块）
+### 4. Use Type Hints (Local Modules)
 
 ```python
 # ./utils.py
 from typing import List, Dict
 
 def analyze(data: List[Dict]) -> Dict:
-    """类型提示帮助调试"""
+    """Type hints help with debugging"""
     ...
 ```
 
-## 限制与注意事项
+## Limitations and Caveats
 
-1. **进程开销**：Python 调用涉及进程间通信，比内置函数慢
-2. **序列化限制**：只能传递 JSON 可序列化的数据（或使用对象引用）
-3. **依赖管理**：确保 Python 环境已安装所需模块
-4. **内存管理**：大对象引用会占用 Python 进程内存
-5. **并发限制**：单 Worker 模式下调用是串行的
+1. **Process overhead**: Python calls involve inter-process communication, which is slower than built-in functions
+2. **Serialization limitations**: Only JSON-serializable data can be passed (or use object references)
+3. **Dependency management**: Ensure the Python environment has the required modules installed
+4. **Memory management**: Large object references occupy Python process memory
+5. **Concurrency limitations**: Calls are serial in single Worker mode
 
-## 调试技巧
+## Debugging Tips
 
-### 查看 Python 调用日志
+### View Python Call Logs
 
 ```bash
 RUST_LOG=juglans::runtime::python=debug juglans workflow.jg
 ```
 
-### 测试 Python 模块
+### Test Python Modules
 
 ```bash
-# 验证模块可导入
+# Verify module can be imported
 python -c "import pandas; print(pandas.__version__)"
 
-# 验证本地模块
+# Verify local module
 python -c "import sys; sys.path.insert(0, '.'); import utils"
 ```

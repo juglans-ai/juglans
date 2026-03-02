@@ -1,12 +1,12 @@
-# 工作流组合（Flow Imports）
+# Workflow Composition (Flow Imports)
 
-通过 `flows:` 声明，可以将多个 `.jg` 文件组合成一张统一的执行图。子工作流的节点以命名空间前缀合并到父 DAG 中，实现跨文件的自由分支设计。
+Through `flows:` declarations, you can compose multiple `.jg` files into a unified execution graph. Subworkflow nodes are merged into the parent DAG with namespace prefixes, enabling free cross-file branching design.
 
-## 基本语法
+## Basic Syntax
 
-### 声明导入
+### Declaring Imports
 
-在元数据区使用 `flows:` 对象映射声明要导入的子工作流：
+Use the `flows:` object mapping in the metadata section to declare subworkflows to import:
 
 ```yaml
 flows: {
@@ -15,21 +15,21 @@ flows: {
 }
 ```
 
-键为别名（alias），值为相对路径（相对于当前 `.jg` 文件所在目录）。
+Keys are aliases, and values are relative paths (relative to the directory of the current `.jg` file).
 
-### 引用子工作流节点
+### Referencing Subworkflow Nodes
 
-使用 `[alias.node_id]` 格式引用子工作流中的节点：
+Use the `[alias.node_id]` format to reference nodes in subworkflows:
 
 ```yaml
-# 从父节点跳转到子工作流
+# Jump from a parent node to a subworkflow
 [route] if $ctx.need_auth -> [auth.start]
 
-# 从子工作流跳回父节点
+# Jump back from a subworkflow to a parent node
 [auth.done] -> [next_step]
 ```
 
-### 最小完整示例
+### Minimal Complete Example
 
 ```yaml
 name: "Main Router"
@@ -55,74 +55,74 @@ flows: {
 
 ---
 
-## 变量命名空间
+## Variable Namespacing
 
-子工作流内部的变量引用会自动加命名空间前缀。规则是：**只有第一段匹配子工作流内部节点 ID 的变量才加前缀**，其他变量（`$ctx`、`$input`、`$output` 等）保持不变。
+Variable references inside subworkflows are automatically prefixed with the namespace. The rule is: **only variables whose first segment matches a subworkflow internal node ID get prefixed**; other variables (`$ctx`, `$input`, `$output`, etc.) remain unchanged.
 
-### 转换规则
+### Transformation Rules
 
-假设 `auth` 子工作流内部有 `verify`、`extract` 两个节点：
+Assume the `auth` subworkflow has two internal nodes, `verify` and `extract`:
 
-| 原始变量（子工作流内部） | 合并后变量 | 说明 |
+| Original Variable (inside subworkflow) | Variable After Merging | Description |
 |--------------------------|-----------|------|
-| `$verify.output` | `$auth.verify.output` | `verify` 是子流节点，加前缀 |
-| `$extract.output.intent` | `$auth.extract.output.intent` | `extract` 是子流节点，加前缀 |
-| `$ctx.some_var` | `$ctx.some_var` | `ctx` 不是节点，不变 |
-| `$input.message` | `$input.message` | `input` 不是节点，不变 |
-| `$output` | `$output` | 不变 |
+| `$verify.output` | `$auth.verify.output` | `verify` is a subflow node, prefix added |
+| `$extract.output.intent` | `$auth.extract.output.intent` | `extract` is a subflow node, prefix added |
+| `$ctx.some_var` | `$ctx.some_var` | `ctx` is not a node, unchanged |
+| `$input.message` | `$input.message` | `input` is not a node, unchanged |
+| `$output` | `$output` | Unchanged |
 
-### 在父工作流中引用
+### Referencing from the Parent Workflow
 
-父工作流可以通过命名空间路径访问子工作流节点的输出：
+The parent workflow can access subworkflow node outputs through namespace paths:
 
 ```yaml
-# 子工作流 auth 中 verify 节点的输出
+# Output of the verify node in the auth subworkflow
 [next]: chat(message=$auth.verify.output)
 
-# 条件中使用
+# Used in conditions
 [check] if $auth.extract.output.intent == "trade" -> [trade]
 ```
 
 ---
 
-## 执行模型
+## Execution Model
 
-### 编译时合并
+### Compile-Time Merging
 
-`flows:` 导入在**编译时**（parse 后、execute 前）处理。子工作流的所有节点和边以命名空间前缀合并到父图中，形成一张统一的 DAG。
+`flows:` imports are processed at **compile time** (after parsing, before execution). All nodes and edges of subworkflows are merged into the parent graph with namespace prefixes, forming a unified DAG.
 
 ```
-解析阶段：
-  parent.jg  →  WorkflowGraph (含 pending edges)
+Parse phase:
+  parent.jg  →  WorkflowGraph (with pending edges)
   trading.jg →  WorkflowGraph
   events.jg  →  WorkflowGraph
 
-合并阶段：
-  parent + trading.* + events.* → 统一 DAG
+Merge phase:
+  parent + trading.* + events.* → Unified DAG
 
-执行阶段：
-  executor 按拓扑序执行全部节点（不感知节点来源）
+Execution phase:
+  executor runs all nodes in topological order (unaware of node origin)
 ```
 
-### 共享上下文
+### Shared Context
 
-合并后的所有节点共享同一个 `WorkflowContext`：
+All nodes after merging share the same `WorkflowContext`:
 
-- `$ctx` 在整个合并图中共享
-- `$input` 是父工作流的输入
-- 各节点的 `$output` 按正常拓扑顺序更新
+- `$ctx` is shared across the entire merged graph
+- `$input` is the parent workflow's input
+- Each node's `$output` is updated in normal topological order
 
-### 执行流程
+### Execution Flow
 
-当父工作流的边指向子工作流节点（如 `[route] -> [trading.start]`），执行器会从 `[trading.start]` 开始，沿子工作流内部的边继续执行，直到遇到跳回父工作流的边（如 `[trading.done] -> [done]`）。
+When a parent workflow edge points to a subworkflow node (e.g., `[route] -> [trading.start]`), the executor starts from `[trading.start]` and continues along the subworkflow's internal edges until it encounters an edge leading back to the parent workflow (e.g., `[trading.done] -> [done]`).
 
-中间的所有子工作流节点（含内部的条件分支、switch 路由等）都会正常执行。
+All intermediate subworkflow nodes (including internal conditional branches, switch routing, etc.) execute normally.
 
 ---
 
-## 递归导入
+## Recursive Imports
 
-子工作流可以有自己的 `flows:` 声明，实现多层组合：
+Subworkflows can have their own `flows:` declarations, enabling multi-level composition:
 
 ```yaml
 # main.jg
@@ -136,7 +136,7 @@ flows: {
 }
 ```
 
-合并后，`payment` 子工作流的节点会以 `order.payment.` 为前缀出现在最终 DAG 中：
+After merging, the `payment` subworkflow's nodes appear in the final DAG with the `order.payment.` prefix:
 
 ```
 order.start → order.validate → order.payment.charge → order.payment.confirm → order.done
@@ -144,9 +144,9 @@ order.start → order.validate → order.payment.charge → order.payment.confir
 
 ---
 
-## 循环导入检测
+## Circular Import Detection
 
-如果出现循环导入（A 导入 B，B 又导入 A），编译器会报错：
+If a circular import occurs (A imports B, B imports A), the compiler will report an error:
 
 ```
 Error: Circular flow import detected: 'auth' (/path/to/auth.jg)
@@ -155,23 +155,23 @@ Import chain: ["/path/to/main.jg", "/path/to/auth.jg"]
 
 ---
 
-## 资源合并
+## Resource Merging
 
-子工作流声明的资源导入（prompts、agents、tools）会自动合并到父工作流，路径相对于子工作流文件所在目录解析：
+Resource imports declared in subworkflows (prompts, agents, tools) are automatically merged into the parent workflow, with paths resolved relative to the subworkflow file's directory:
 
 ```yaml
 # src/trading.jg
-prompts: ["./prompts/*.jgprompt"]    # 相对于 .jg 文件所在目录（src/）
+prompts: ["./prompts/*.jgprompt"]    # Relative to the .jg file's directory (src/)
 agents: ["./pure-agents/*.jgagent"]
 ```
 
-合并后，父工作流可以使用子工作流引入的 prompts 和 agents。Python 模块导入也会自动合并（去重）。
+After merging, the parent workflow can use prompts and agents introduced by the subworkflow. Python module imports are also automatically merged (with deduplication).
 
 ---
 
-## 完整示例
+## Complete Example
 
-### 项目结构
+### Project Structure
 
 ```
 my-project/
@@ -187,7 +187,7 @@ my-project/
         └── event-handler.jgagent
 ```
 
-### 主工作流 — `src/main.jg`
+### Main Workflow — `src/main.jg`
 
 ```yaml
 name: "Event Router"
@@ -214,17 +214,17 @@ exit: [done]
 
 [start] -> [route]
 
-# 根据路由结果跳转到不同子工作流
+# Route to different subworkflows based on routing result
 [route] if $output.type == "event" -> [events.start]
 [route] if $output.type == "trade" -> [trading.start]
 [route] -> [done]
 
-# 子工作流完成后汇聚
+# Converge after subworkflow completion
 [events.respond] -> [done]
 [trading.done] -> [done]
 ```
 
-### 子工作流 — `src/trading.jg`
+### Subworkflow — `src/trading.jg`
 
 ```yaml
 name: "Trading Flow"
@@ -249,7 +249,7 @@ exit: [done]
 [extract] on error -> [done]
 ```
 
-### 合并后的等效 DAG
+### Equivalent DAG After Merging
 
 ```
 [start] → [route] ─── if "event" ──→ [events.start] → ... → [events.respond] ─┐
@@ -261,10 +261,10 @@ exit: [done]
 
 ---
 
-## 最佳实践
+## Best Practices
 
-1. **命名清晰** — 别名应反映子工作流的职责，如 `auth`、`trading`、`notification`
-2. **显式连接** — 必须显式写出父子工作流之间的边（`[route] -> [auth.start]`、`[auth.done] -> [next]`），不支持隐式入口
-3. **单一职责** — 每个子工作流专注于一个功能领域，通过组合实现复杂逻辑
-4. **避免深层嵌套** — 递归导入虽然支持，但建议控制在 2-3 层以内
-5. **上下文协议** — 在子工作流的注释中说明它期望的 `$ctx` 变量和输出格式，方便其他工作流正确对接
+1. **Clear naming** — Aliases should reflect the subworkflow's responsibility, such as `auth`, `trading`, `notification`
+2. **Explicit connections** — Edges between parent and subworkflows must be explicitly written (`[route] -> [auth.start]`, `[auth.done] -> [next]`); implicit entry points are not supported
+3. **Single responsibility** — Each subworkflow should focus on one functional area; complex logic is achieved through composition
+4. **Avoid deep nesting** — Although recursive imports are supported, it is recommended to keep them within 2-3 levels
+5. **Context protocol** — Document the expected `$ctx` variables and output format in subworkflow comments, making it easier for other workflows to integrate correctly

@@ -1,28 +1,28 @@
-# 错误处理
+# Error Handling
 
-本指南介绍 Juglans 工作流中的错误处理机制。
+This guide introduces the error handling mechanisms in Juglans workflows.
 
-## 错误类型
+## Error Types
 
-| 类型 | 说明 | 示例 |
+| Type | Description | Example |
 |------|------|------|
-| 执行错误 | 工具执行失败 | API 超时、网络错误 |
-| 验证错误 | 输入/输出不符合预期 | 缺少必填字段 |
-| 逻辑错误 | 业务规则不满足 | 余额不足、权限不够 |
-| 系统错误 | 运行时异常 | 内存不足、服务不可用 |
+| Execution error | Tool execution failure | API timeout, network error |
+| Validation error | Input/output does not match expectations | Missing required field |
+| Logic error | Business rule not satisfied | Insufficient balance, insufficient permissions |
+| System error | Runtime exception | Out of memory, service unavailable |
 
-## on error 路径
+## on error Path
 
-### 基本语法
+### Basic Syntax
 
 ```yaml
 [node] -> [success_path]
 [node] on error -> [error_handler]
 ```
 
-当 `[node]` 执行失败时，流程跳转到 `[error_handler]`。
+When `[node]` execution fails, the flow jumps to `[error_handler]`.
 
-### 简单示例
+### Simple Example
 
 ```yaml
 name: "Error Handling Demo"
@@ -43,11 +43,11 @@ exit: [done]
 [done]: notify(status="Complete")
 ```
 
-## 错误信息访问
+## Accessing Error Information
 
-### $error 变量
+### The $error Variable
 
-在错误处理节点中，可通过 `$error` 访问错误信息：
+In error handling nodes, you can access error information via `$error`:
 
 ```yaml
 [api_call]: fetch_url(url=$input.url)
@@ -58,20 +58,20 @@ exit: [done]
 )
 ```
 
-### 错误对象结构
+### Error Object Structure
 
 ```yaml
 $error = {
-  "code": "NETWORK_ERROR",      # 错误代码
-  "message": "Connection refused",  # 错误消息
-  "node": "api_call",           # 发生错误的节点
-  "details": { ... }            # 额外详情
+  "code": "NETWORK_ERROR",      # Error code
+  "message": "Connection refused",  # Error message
+  "node": "api_call",           # Node where the error occurred
+  "details": { ... }            # Additional details
 }
 ```
 
-## 常见错误处理模式
+## Common Error Handling Patterns
 
-### 重试模式
+### Retry Pattern
 
 ```yaml
 name: "Retry Pattern"
@@ -93,7 +93,7 @@ exit: [success, give_up]
 [check_retry] if $ctx.attempt < $ctx.max_attempts -> [wait]
 [check_retry] -> [give_up]
 
-# 指数退避
+# Exponential backoff
 [wait]: timer(ms=$ctx.backoff_ms * $ctx.attempt)
 [wait] -> [try]
 
@@ -103,9 +103,9 @@ exit: [success, give_up]
 [init] -> [try]
 ```
 
-### 回退模式
+### Fallback Pattern
 
-主服务失败时使用备用服务：
+Use a backup service when the primary service fails:
 
 ```yaml
 name: "Fallback Pattern"
@@ -113,17 +113,17 @@ name: "Fallback Pattern"
 entry: [primary]
 exit: [done]
 
-# 主服务
+# Primary service
 [primary]: fetch_url(url=$input.primary_api)
 [primary] -> [process]
 [primary] on error -> [fallback]
 
-# 备用服务
+# Backup service
 [fallback]: fetch_url(url=$input.fallback_api)
 [fallback] -> [process]
 [fallback] on error -> [use_cache]
 
-# 使用缓存
+# Use cache
 [use_cache]: set_context(data=$ctx.cached_data)
 [use_cache] -> [process]
 
@@ -133,9 +133,9 @@ exit: [done]
 [done]: notify(status="Complete")
 ```
 
-### 熔断模式
+### Circuit Breaker Pattern
 
-连续失败后暂停调用：
+Pause calls after consecutive failures:
 
 ```yaml
 name: "Circuit Breaker"
@@ -148,11 +148,11 @@ exit: [done]
   now=timestamp()
 )
 
-# 熔断器打开，检查是否可以半开
+# Circuit breaker is open, check if it can be half-open
 [check_circuit] if $ctx.circuit_open -> [check_half_open]
 [check_circuit] -> [call_api]
 
-[check_half_open] if $ctx.now - $ctx.last_failure > 30000 -> [call_api]  # 30秒后尝试
+[check_half_open] if $ctx.now - $ctx.last_failure > 30000 -> [call_api]  # Retry after 30 seconds
 [check_half_open] -> [circuit_open_response]
 
 [circuit_open_response]: set_context(
@@ -182,9 +182,9 @@ exit: [done]
 [done]: notify(status="Complete")
 ```
 
-### 补偿模式
+### Compensation Pattern
 
-失败时撤销已完成的操作：
+Undo completed operations upon failure:
 
 ```yaml
 name: "Compensation Pattern"
@@ -192,22 +192,22 @@ name: "Compensation Pattern"
 entry: [step1]
 exit: [success, compensated]
 
-# 步骤 1
+# Step 1
 [step1]: create_order(data=$input.order)
 [step1] -> [step2]
 [step1] on error -> [fail_early]
 
-# 步骤 2
+# Step 2
 [step2]: reserve_inventory(order_id=$output.order_id)
 [step2] -> [step3]
 [step2] on error -> [compensate_step1]
 
-# 步骤 3
+# Step 3
 [step3]: charge_payment(order_id=$ctx.order_id, amount=$ctx.amount)
 [step3] -> [success]
 [step3] on error -> [compensate_step2]
 
-# 补偿操作
+# Compensation operations
 [compensate_step2]: release_inventory(order_id=$ctx.order_id)
 [compensate_step2] -> [compensate_step1]
 
@@ -221,9 +221,9 @@ exit: [success, compensated]
 [compensated]: notify(status="Transaction rolled back")
 ```
 
-### 部分成功模式
+### Partial Success Pattern
 
-批量操作中记录单项失败：
+Record individual failures in batch operations:
 
 ```yaml
 name: "Partial Success"
@@ -264,9 +264,9 @@ exit: [summary]
 [init] -> [process_batch] -> [summary]
 ```
 
-## 验证与守卫
+## Validation and Guards
 
-### 输入验证
+### Input Validation
 
 ```yaml
 name: "Input Validation"
@@ -299,7 +299,7 @@ exit: [result, error]
 [error]: set_context(response=$ctx.error)
 ```
 
-### 条件守卫
+### Conditional Guards
 
 ```yaml
 [check_permission]: set_context(
@@ -314,9 +314,9 @@ exit: [result, error]
 )
 ```
 
-## 错误传播
+## Error Propagation
 
-### 显式传播
+### Explicit Propagation
 
 ```yaml
 [inner_call]: some_tool(...)
@@ -329,25 +329,25 @@ exit: [result, error]
     "cause": $error
   }
 )
-[propagate] on error -> [outer_handler]  # 向上传播
+[propagate] on error -> [outer_handler]  # Propagate upward
 ```
 
-### 错误聚合
+### Error Aggregation
 
 ```yaml
 [collect_errors]: set_context(
   all_errors=concat($ctx.all_errors, [$error])
 )
 
-# 最后汇总
+# Summarize at the end
 [report]: notify(
   status="Errors: " + json($ctx.all_errors)
 )
 ```
 
-## 日志与监控
+## Logging and Monitoring
 
-### 错误日志
+### Error Logging
 
 ```yaml
 [handle_error]: notify(
@@ -357,7 +357,7 @@ exit: [result, error]
 )
 ```
 
-### 告警通知
+### Alert Notifications
 
 ```yaml
 [critical_error]: chat(
@@ -365,22 +365,22 @@ exit: [result, error]
   message="Critical error in workflow: " + json($error)
 )
 
-# 或发送到外部服务
+# Or send to an external service
 [alert]: mcp_slack_send_message(
   channel="#alerts",
   text="Workflow error: " + $error.message
 )
 ```
 
-## 调试技巧
+## Debugging Tips
 
-### 详细日志模式
+### Verbose Logging Mode
 
 ```bash
 juglans src/my-flow.jg --verbose
 ```
 
-### 错误断点
+### Error Breakpoints
 
 ```yaml
 [debug_error]: notify(
@@ -388,12 +388,12 @@ juglans src/my-flow.jg --verbose
          "Input: " + json($ctx.last_input) + "\n" +
          "Error: " + json($error)
 )
-# 可以在这里暂停查看状态
+# You can pause here to inspect the state
 ```
 
-### 模拟错误
+### Simulating Errors
 
-测试错误处理逻辑：
+Test error handling logic:
 
 ```yaml
 [simulate_error]: set_context(
@@ -406,55 +406,55 @@ juglans src/my-flow.jg --verbose
 [force_error]: fail(message="Simulated error for testing")
 ```
 
-## 最佳实践
+## Best Practices
 
-### 1. 总是处理错误
+### 1. Always Handle Errors
 
 ```yaml
-# 好：显式处理错误
+# Good: explicitly handle errors
 [api] -> [success]
 [api] on error -> [handle]
 
-# 不好：忽略错误
+# Bad: ignore errors
 [api] -> [next]
 ```
 
-### 2. 提供有意义的错误信息
+### 2. Provide Meaningful Error Messages
 
 ```yaml
-# 好
+# Good
 [error]: set_context(error={
   "code": "PAYMENT_FAILED",
   "message": "Payment processing failed: insufficient funds",
   "details": {"balance": $ctx.balance, "required": $input.amount}
 })
 
-# 不好
+# Bad
 [error]: set_context(error="Error")
 ```
 
-### 3. 使用错误代码
+### 3. Use Error Codes
 
 ```yaml
-# 定义标准错误代码
-# VALIDATION_ERROR - 输入验证失败
-# AUTH_ERROR - 认证/授权失败
-# NOT_FOUND - 资源不存在
-# RATE_LIMITED - 请求过多
-# INTERNAL_ERROR - 内部错误
+# Define standard error codes
+# VALIDATION_ERROR - Input validation failed
+# AUTH_ERROR - Authentication/authorization failed
+# NOT_FOUND - Resource does not exist
+# RATE_LIMITED - Too many requests
+# INTERNAL_ERROR - Internal error
 ```
 
-### 4. 限制重试次数
+### 4. Limit Retry Attempts
 
 ```yaml
-# 好：有限制
+# Good: has a limit
 [retry] if $ctx.attempts < 3 -> [try_again]
 
-# 不好：无限重试
+# Bad: infinite retries
 [retry] -> [try_again]
 ```
 
-### 5. 记录错误上下文
+### 5. Record Error Context
 
 ```yaml
 [log_error]: set_context(

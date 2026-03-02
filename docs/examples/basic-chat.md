@@ -1,8 +1,8 @@
-# 基础对话工作流
+# Basic Chat Workflow
 
-最简单的对话工作流示例。
+The simplest chat workflow example.
 
-## 工作流文件
+## Workflow File
 
 ### chat.jg
 
@@ -37,20 +37,20 @@ system_prompt: |
   You are a helpful AI assistant. Be concise and friendly.
 ```
 
-## 运行
+## Running
 
 ```bash
-# 基本运行
+# Basic run
 juglans chat.jg --input '{"message": "Hello!"}'
 
-# 输出
+# Output
 # > Hello! How can I help you today?
 
-# 更复杂的问题
+# A more complex question
 juglans chat.jg --input '{"message": "Explain quantum computing in simple terms"}'
 ```
 
-## 变体：带系统提示
+## Variant: With System Prompt
 
 ### chat-with-persona.jg
 
@@ -81,7 +81,7 @@ juglans chat-with-persona.jg --input '{
 # > To improve his arrrticulation! Har har har!
 ```
 
-## 变体：带格式化输出
+## Variant: With Formatted Output
 
 ### chat-json.jg
 
@@ -130,7 +130,7 @@ juglans chat-json.jg --input '{
 # }
 ```
 
-## 变体：多轮对话
+## Variant: Multi-turn Chat
 
 ### multi-turn.jg
 
@@ -140,23 +140,23 @@ name: "Multi-turn Chat"
 entry: [load_history]
 exit: [save_and_respond]
 
-# 加载对话历史
+# Load conversation history
 [load_history]: set_context(
   history=$input.history || []
 )
 
-# 构建消息（包含历史）
+# Build messages (including history)
 [build_messages]: set_context(
   full_context=concat($ctx.history, [{"role": "user", "content": $input.message}])
 )
 
-# 调用 AI
+# Call AI
 [chat]: chat(
   agent="assistant",
   messages=$ctx.full_context
 )
 
-# 保存新消息到历史
+# Save new message to history
 [save_and_respond]: set_context(
   response=$output,
   updated_history=concat($ctx.full_context, [{"role": "assistant", "content": $output}])
@@ -166,13 +166,13 @@ exit: [save_and_respond]
 ```
 
 ```bash
-# 第一轮
+# First turn
 juglans multi-turn.jg --input '{
   "message": "My name is Alice",
   "history": []
 }'
 
-# 第二轮（带历史）
+# Second turn (with history)
 juglans multi-turn.jg --input '{
   "message": "What is my name?",
   "history": [
@@ -184,7 +184,7 @@ juglans multi-turn.jg --input '{
 # > Your name is Alice!
 ```
 
-## 目录结构
+## Directory Structure
 
 ```
 basic-chat/

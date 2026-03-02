@@ -1,57 +1,57 @@
-# 条件分支与路由
+# Conditional Branching and Routing
 
-本指南详细介绍 Juglans 工作流中的条件分支和路由机制。
+This guide provides a detailed introduction to conditional branching and routing mechanisms in Juglans workflows.
 
-## 基本条件语法
+## Basic Conditional Syntax
 
 ```yaml
 [node] if <expression> -> [target]
 ```
 
-条件为真时，执行流程从 `[node]` 跳转到 `[target]`。
+When the condition is true, execution flow jumps from `[node]` to `[target]`.
 
-## 条件表达式
+## Conditional Expressions
 
-### 比较运算
+### Comparison Operations
 
 ```yaml
-# 等于
+# Equal to
 [router] if $ctx.type == "admin" -> [admin_panel]
 
-# 不等于
+# Not equal to
 [check] if $output.status != "success" -> [error_handler]
 
-# 数值比较
+# Numeric comparison
 [score] if $output.score > 80 -> [high_tier]
 [score] if $output.score >= 60 -> [mid_tier]
 [score] if $output.score < 60 -> [low_tier]
 ```
 
-### 字符串比较
+### String Comparison
 
 ```yaml
-# 完全匹配
+# Exact match
 [lang] if $input.language == "zh" -> [chinese_handler]
 [lang] if $input.language == "en" -> [english_handler]
 
-# 包含检查（使用 chat 分类）
+# Contains check (using chat classification)
 [classify]: chat(agent="classifier", format="json")
 [classify] if $output.contains_code == true -> [code_handler]
 ```
 
-### 布尔值
+### Boolean Values
 
 ```yaml
 # true/false
 [validate] if $output.is_valid -> [proceed]
 [validate] if !$output.is_valid -> [reject]
 
-# 非空检查
+# Non-empty check
 [check] if $ctx.data -> [process]
 [check] if !$ctx.data -> [fetch_data]
 ```
 
-### 逻辑运算
+### Logical Operations
 
 ```yaml
 # AND
@@ -63,13 +63,13 @@
 # NOT
 [check] if !$ctx.banned -> [allow]
 
-# 组合
+# Combined
 [auth] if ($ctx.logged_in && $ctx.verified) || $ctx.is_admin -> [access]
 ```
 
-## 多路分支
+## Multi-Way Branching
 
-### 互斥分支
+### Mutually Exclusive Branches
 
 ```yaml
 name: "Multi-way Router"
@@ -83,11 +83,11 @@ exit: [done]
   format="json"
 )
 
-# 多个互斥条件
+# Multiple mutually exclusive conditions
 [classify] if $output.intent == "question" -> [qa_handler]
 [classify] if $output.intent == "task" -> [task_handler]
 [classify] if $output.intent == "chat" -> [chat_handler]
-[classify] -> [fallback]  # 默认路径
+[classify] -> [fallback]  # Default path
 
 [qa_handler]: chat(agent="qa-expert", message=$input.query)
 [task_handler]: chat(agent="task-executor", message=$input.query)
@@ -102,15 +102,15 @@ exit: [done]
 [fallback] -> [done]
 ```
 
-### 分支汇聚语义
+### Branch Convergence Semantics
 
-**重要：** 当多个条件分支汇聚到同一个节点时，执行引擎使用 **OR 语义**，即：
+**Important:** When multiple conditional branches converge to the same node, the execution engine uses **OR semantics**, meaning:
 
-- 只要**任意一个**前驱节点完成，汇聚节点就会执行
-- **不会**等待所有前驱节点都完成（不是 AND 语义）
+- The convergence node executes as soon as **any one** predecessor node completes
+- It does **not** wait for all predecessor nodes to complete (not AND semantics)
 
 ```yaml
-# 分支后汇聚
+# Branching then converging
 [router] if $ctx.type == "A" -> [handler_a]
 [router] if $ctx.type == "B" -> [handler_b]
 
@@ -119,39 +119,39 @@ exit: [done]
 
 [final]: notify(status="Done")
 
-# final 节点有两个前驱，但只有一个会执行
-# 执行引擎会自动检测未执行的分支，标记为不可达
+# final node has two predecessors, but only one will execute
+# The execution engine automatically detects unexecuted branches and marks them as unreachable
 [handler_a] -> [final]
 [handler_b] -> [final]
 ```
 
-这确保了条件分支的直觉行为：分支路径是互斥的，汇聚点不会等待未执行的分支。
+This ensures the intuitive behavior of conditional branches: branch paths are mutually exclusive, and the convergence point does not wait for unexecuted branches.
 
-### 优先级分支
+### Priority Branching
 
-条件按定义顺序评估，第一个为真的分支被执行：
+Conditions are evaluated in definition order; the first true branch is executed:
 
 ```yaml
-# 从高到低优先级
-[score] if $output.score >= 90 -> [excellent]   # 先检查
-[score] if $output.score >= 70 -> [good]        # 次检查
-[score] if $output.score >= 60 -> [pass]        # 再检查
-[score] -> [fail]                                # 默认
+# From high to low priority
+[score] if $output.score >= 90 -> [excellent]   # Checked first
+[score] if $output.score >= 70 -> [good]        # Checked second
+[score] if $output.score >= 60 -> [pass]        # Checked third
+[score] -> [fail]                                # Default
 ```
 
-### 默认路径
+### Default Path
 
-无条件的边作为默认路径：
+An unconditional edge serves as the default path:
 
 ```yaml
 [router] if $ctx.a -> [path_a]
 [router] if $ctx.b -> [path_b]
-[router] -> [default]  # 如果 a 和 b 都为 false
+[router] -> [default]  # If both a and b are false
 ```
 
-## 错误处理
+## Error Handling
 
-### on error 路径
+### on error Path
 
 ```yaml
 [risky_call] -> [success]
@@ -163,7 +163,7 @@ exit: [done]
 [error_handler] -> [fallback]
 ```
 
-### 条件 + 错误处理
+### Conditional + Error Handling
 
 ```yaml
 [api_call]: fetch_url(url=$input.api_url)
@@ -172,9 +172,9 @@ exit: [done]
 [api_call] on error -> [error_handler]
 ```
 
-## 常见模式
+## Common Patterns
 
-### 意图路由器
+### Intent Router
 
 ```yaml
 name: "Intent Router"
@@ -207,7 +207,7 @@ exit: [response]
 [other] -> [response]
 ```
 
-### 验证流程
+### Validation Pipeline
 
 ```yaml
 name: "Validation Pipeline"
@@ -233,11 +233,11 @@ exit: [success, failure]
 [failure]: notify(status="Validation failed: " + $ctx.error)
 
 [reject] -> [failure]
-[human_review] -> [success]  # 假设人工审核通过
+[human_review] -> [success]  # Assuming human review passes
 [process] -> [success]
 ```
 
-### 重试逻辑
+### Retry Logic
 
 ```yaml
 name: "Retry Pattern"
@@ -264,7 +264,7 @@ exit: [success, give_up]
 [init] -> [try]
 ```
 
-### 质量检查
+### Quality Check
 
 ```yaml
 name: "Quality Check"
@@ -294,7 +294,7 @@ exit: [output]
 [generate] -> [check_quality]
 ```
 
-### A/B 测试
+### A/B Testing
 
 ```yaml
 name: "A/B Test"
@@ -321,9 +321,9 @@ exit: [collect]
 [variant_b] -> [collect]
 ```
 
-## 调试条件
+## Debugging Conditions
 
-### 打印条件值
+### Printing Condition Values
 
 ```yaml
 [debug]: notify(status="Type: " + $ctx.type + ", Score: " + $ctx.score)
@@ -333,7 +333,7 @@ exit: [collect]
 ...
 ```
 
-### 记录路由决策
+### Logging Routing Decisions
 
 ```yaml
 [router]: chat(agent="classifier", format="json")
@@ -350,10 +350,10 @@ exit: [collect]
 ...
 ```
 
-## 最佳实践
+## Best Practices
 
-1. **明确默认路径** - 始终提供一个无条件的默认分支
-2. **互斥条件** - 确保分支条件互不重叠
-3. **优先级清晰** - 把更具体的条件放在前面
-4. **错误处理** - 为可能失败的节点添加 `on error`
-5. **日志记录** - 在复杂路由中记录决策过程
+1. **Define a clear default path** - Always provide an unconditional default branch
+2. **Mutually exclusive conditions** - Ensure branch conditions do not overlap
+3. **Clear priority order** - Place more specific conditions first
+4. **Error handling** - Add `on error` for nodes that may fail
+5. **Logging** - Log the decision process in complex routing scenarios

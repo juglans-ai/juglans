@@ -1,78 +1,78 @@
-# 安装指南
+# Installation Guide
 
-本指南介绍 Juglans 的多种安装方式。
+This guide covers the various ways to install Juglans.
 
-## 系统要求
+## System Requirements
 
-- **操作系统**: Linux, macOS, Windows
-- **Rust**: 1.70+ (从源码构建)
-- **内存**: 建议 4GB+
+- **Operating System**: Linux, macOS, Windows
+- **Rust**: 1.70+ (for building from source)
+- **Memory**: 4GB+ recommended
 
-## 从源码构建
+## Build from Source
 
-### 1. 安装 Rust
+### 1. Install Rust
 
 ```bash
-# 使用 rustup 安装
+# Install using rustup
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-# 验证安装
+# Verify installation
 rustc --version
 cargo --version
 ```
 
-### 2. 克隆仓库
+### 2. Clone the Repository
 
 ```bash
 git clone https://github.com/juglans-ai/juglans.git
 cd juglans
 ```
 
-### 3. 构建
+### 3. Build
 
 ```bash
-# Debug 构建（开发用）
+# Debug build (for development)
 cargo build
 
-# Release 构建（生产用）
+# Release build (for production)
 cargo build --release
 ```
 
-### 4. 安装
+### 4. Install
 
-**方式 A: 添加到 PATH**
+**Option A: Add to PATH**
 
 ```bash
-# 临时添加
+# Temporary
 export PATH="$PATH:$(pwd)/target/release"
 
-# 永久添加（写入 shell 配置）
+# Permanent (add to shell config)
 echo 'export PATH="$PATH:/path/to/juglans/target/release"' >> ~/.bashrc
 source ~/.bashrc
 ```
 
-**方式 B: 系统安装**
+**Option B: System install**
 
 ```bash
 cargo install --path .
 ```
 
-**方式 C: 复制二进制**
+**Option C: Copy the binary**
 
 ```bash
 sudo cp target/release/juglans /usr/local/bin/
 ```
 
-### 5. 验证
+### 5. Verify
 
 ```bash
 juglans --version
 juglans --help
 ```
 
-## 预编译二进制
+## Pre-built Binaries
 
-从 [Releases](https://github.com/juglans-ai/juglans/releases) 下载：
+Download from [Releases](https://github.com/juglans-ai/juglans/releases):
 
 ### macOS (Apple Silicon)
 
@@ -100,25 +100,25 @@ sudo mv juglans /usr/local/bin/
 
 ### Windows
 
-1. 下载 `juglans-windows-x64.zip`
-2. 解压到目标目录
-3. 添加目录到系统 PATH
+1. Download `juglans-windows-x64.zip`
+2. Extract to the target directory
+3. Add the directory to the system PATH
 
 ## Docker
 
-### 使用官方镜像
+### Using the Official Image
 
 ```bash
 docker pull juglans/juglans:latest
 
-# 运行
+# Run
 docker run -it --rm \
   -v $(pwd):/workspace \
   juglans/juglans:latest \
   /workspace/workflow.jg
 ```
 
-### 构建自定义镜像
+### Build a Custom Image
 
 ```dockerfile
 # Dockerfile
@@ -139,17 +139,17 @@ docker run -it --rm my-juglans --help
 
 ## WebAssembly
 
-用于浏览器环境：
+For browser environments:
 
 ```bash
-# 安装 wasm-pack
+# Install wasm-pack
 cargo install wasm-pack
 
-# 构建 WASM
+# Build WASM
 wasm-pack build --target web
 ```
 
-在 JavaScript 中使用：
+Using in JavaScript:
 
 ```javascript
 import init, { parse_workflow, render_prompt } from './juglans_wasm.js';
@@ -160,19 +160,19 @@ const workflow = parse_workflow(workflowSource);
 const rendered = render_prompt(promptSource, { name: "Alice" });
 ```
 
-## 开发环境设置
+## Development Environment Setup
 
 ### VS Code
 
-推荐扩展：
+Recommended extensions:
 
-- **rust-analyzer** - Rust 语言支持
-- **TOML Language Support** - TOML 语法高亮
-- **Better TOML** - TOML 增强
+- **rust-analyzer** - Rust language support
+- **TOML Language Support** - TOML syntax highlighting
+- **Better TOML** - Enhanced TOML support
 
-### 语法高亮
+### Syntax Highlighting
 
-为 `.jg`, `.jgprompt`, `.jgagent` 文件添加语法高亮：
+Add syntax highlighting for `.jg`, `.jgprompt`, `.jgagent` files:
 
 ```json
 // settings.json
@@ -185,41 +185,41 @@ const rendered = render_prompt(promptSource, { name: "Alice" });
 }
 ```
 
-## 依赖服务
+## Dependency Services
 
-### Jug0 后端
+### Jug0 Backend
 
-Juglans 需要 Jug0 后端进行 LLM 调用：
+Juglans requires the Jug0 backend for LLM calls:
 
 ```bash
-# 本地开发
+# Local development
 git clone https://github.com/juglans-ai/jug0.git
 cd jug0
 cargo run
 
-# 或使用云服务
-# 在 juglans.toml 中配置 base_url
+# Or use the cloud service
+# Configure base_url in juglans.toml
 ```
 
-### MCP 服务器（可选）
+### MCP Server (Optional)
 
-安装 MCP 工具服务器：
+Install MCP tool servers:
 
 ```bash
-# Anthropic 官方 MCP
+# Anthropic official MCP
 npm install -g @anthropic/mcp-filesystem
 npm install -g @anthropic/mcp-github
 
-# 获取工具 schema
+# Fetch tool schemas
 juglans install
 ```
 
-## 配置
+## Configuration
 
-创建配置文件：
+Create a configuration file:
 
 ```bash
-# 用户配置
+# User configuration
 mkdir -p ~/.config/juglans
 cat > ~/.config/juglans/juglans.toml << 'EOF'
 [account]
@@ -231,9 +231,9 @@ base_url = "http://localhost:3000"
 EOF
 ```
 
-## 常见问题
+## FAQ
 
-### Q: 构建失败 - OpenSSL 错误
+### Q: Build fails — OpenSSL error
 
 **macOS:**
 ```bash
@@ -248,30 +248,30 @@ sudo apt install libssl-dev pkg-config
 cargo build --release
 ```
 
-### Q: 权限被拒绝
+### Q: Permission denied
 
 ```bash
 chmod +x /usr/local/bin/juglans
 ```
 
-### Q: 找不到命令
+### Q: Command not found
 
-确保 PATH 正确：
+Make sure PATH is correct:
 ```bash
 echo $PATH | grep -q juglans || echo "Juglans not in PATH"
 which juglans
 ```
 
-### Q: GLIBC 版本过低 (Linux)
+### Q: GLIBC version too old (Linux)
 
-使用静态链接构建：
+Use a statically linked build:
 ```bash
 RUSTFLAGS='-C target-feature=+crt-static' cargo build --release --target x86_64-unknown-linux-gnu
 ```
 
-## 更新
+## Updating
 
-### 从源码更新
+### Update from Source
 
 ```bash
 cd juglans
@@ -279,34 +279,34 @@ git pull
 cargo build --release
 ```
 
-### 使用 cargo
+### Using cargo
 
 ```bash
 cargo install --path . --force
 ```
 
-## 卸载
+## Uninstalling
 
-### 手动安装的
+### Manually installed
 
 ```bash
 sudo rm /usr/local/bin/juglans
 ```
 
-### cargo 安装的
+### Installed via cargo
 
 ```bash
 cargo uninstall juglans
 ```
 
-### 清理配置
+### Clean up configuration
 
 ```bash
 rm -rf ~/.config/juglans
 rm -f ./juglans.toml
 ```
 
-## 下一步
+## Next Steps
 
-- [快速入门](./quickstart.md) - 创建第一个工作流
-- [核心概念](../guide/concepts.md) - 了解 Juglans 架构
+- [Quick Start](./quickstart.md) - Create your first workflow
+- [Core Concepts](../guide/concepts.md) - Understand the Juglans architecture

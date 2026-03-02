@@ -1,50 +1,50 @@
-# 快速入门
+# Quick Start
 
-本指南将帮助你在 5 分钟内创建并运行第一个 Juglans 工作流。
+This guide will help you create and run your first Juglans workflow in 5 minutes.
 
-## 前置要求
+## Prerequisites
 
-- Rust 1.70+ (用于编译)
-- 一个 LLM API Key (DeepSeek, OpenAI 等)
+- Rust 1.70+ (for compilation)
+- An LLM API Key (DeepSeek, OpenAI, etc.)
 
-## 1. 安装 Juglans
+## 1. Install Juglans
 
 ```bash
-# 克隆仓库
+# Clone the repository
 git clone https://github.com/juglans-ai/juglans.git
 cd juglans
 
-# 编译
+# Build
 cargo build --release
 
-# 添加到 PATH (可选)
+# Add to PATH (optional)
 export PATH="$PATH:$(pwd)/target/release"
 ```
 
-## 2. 初始化项目
+## 2. Initialize a Project
 
 ```bash
-# 创建新项目
+# Create a new project
 juglans init my-ai-project
 cd my-ai-project
 ```
 
-这会创建以下结构：
+This creates the following structure:
 ```
 my-ai-project/
-├── juglans.toml        # 配置文件
-└── src/                # 所有源文件
-    ├── prompts/        # Prompt 模板
-    ├── agents/         # Agent 配置（入口 agent，有 workflow 字段）
-    ├── pure-agents/    # 纯 Agent（无 workflow，被工作流调用）
-    ├── workflows/      # .jgflow 元数据清单
-    └── tools/          # 工具定义
+├── juglans.toml        # Configuration file
+└── src/                # All source files
+    ├── prompts/        # Prompt templates
+    ├── agents/         # Agent configurations (entry agents with workflow field)
+    ├── pure-agents/    # Pure agents (no workflow, called by workflows)
+    ├── workflows/      # .jgflow metadata manifests
+    └── tools/          # Tool definitions
 ```
-.jg 源文件直接放在 `src/` 根目录。
+.jg source files are placed directly in the `src/` root directory.
 
-## 3. 配置 API
+## 3. Configure the API
 
-编辑 `juglans.toml`：
+Edit `juglans.toml`:
 
 ```toml
 [account]
@@ -52,12 +52,12 @@ id = "your_user_id"
 api_key = "your_api_key"
 
 [jug0]
-base_url = "http://localhost:3000"  # 或你的 Jug0 服务地址
+base_url = "http://localhost:3000"  # Or your Jug0 service address
 ```
 
-## 4. 创建 Agent
+## 4. Create an Agent
 
-创建 `src/agents/assistant.jgagent`：
+Create `src/agents/assistant.jgagent`:
 
 ```yaml
 slug: "assistant"
@@ -69,15 +69,15 @@ system_prompt: |
   Be concise and accurate in your responses.
 ```
 
-## 5. 创建 Prompt 模板
+## 5. Create a Prompt Template
 
-创建 `src/prompts/analyze.jgprompt`：
+Create `src/prompts/analyze.jgprompt`:
 
 ```yaml
 ---
 slug: "analyze"
 name: "Analysis Prompt"
-description: "分析用户输入并提供结构化响应"
+description: "Analyze user input and provide a structured response"
 inputs:
   topic: ""
   style: "professional"
@@ -94,20 +94,20 @@ Feel free to use informal language.
 {% endif %}
 ```
 
-## 6. 创建工作流
+## 6. Create a Workflow
 
-创建 `src/main.jg`：
+Create `src/main.jg`:
 
 ```yaml
-# 导入资源
+# Import resources
 prompts: ["./prompts/*.jgprompt"]
 agents: ["./agents/*.jgagent"]
 
-# 入口和出口节点
+# Entry and exit nodes
 entry: [init]
 exit: [complete]
 
-# 节点定义
+# Node definitions
 [init]: notify(status="Starting analysis...")
 
 [render_prompt]: p(
@@ -123,21 +123,21 @@ exit: [complete]
 
 [complete]: notify(status="Analysis complete!")
 
-# 执行流程
+# Execution flow
 [init] -> [render_prompt] -> [analyze] -> [complete]
 ```
 
-## 7. 运行工作流
+## 7. Run the Workflow
 
 ```bash
-# 运行工作流
+# Run the workflow
 juglans src/main.jg --input '{
   "topic": "AI workflow orchestration",
   "style": "professional"
 }'
 ```
 
-输出示例：
+Example output:
 ```
 [init] Starting analysis...
 [render_prompt] Rendered prompt: analyze
@@ -146,15 +146,15 @@ juglans src/main.jg --input '{
 [complete] Analysis complete!
 ```
 
-## 8. 交互式 Agent
+## 8. Interactive Agent
 
-直接与 Agent 对话：
+Chat directly with an Agent:
 
 ```bash
 juglans src/agents/assistant.jgagent
 ```
 
-进入交互模式：
+Entering interactive mode:
 ```
 > What is Juglans?
 Juglans is a Rust-based AI workflow orchestration framework...
@@ -169,34 +169,34 @@ Juglans offers several key features:
 Goodbye!
 ```
 
-## 下一步
+## Next Steps
 
-- [核心概念](../guide/concepts.md) - 深入理解 Agent、Prompt、Workflow
-- [工作流语法](../guide/workflow-syntax.md) - 完整的 .jg 语法
-- [内置工具](../reference/builtins.md) - chat、p、notify 等工具详解
-- [条件与分支](../guide/conditionals.md) - 实现复杂逻辑
+- [Core Concepts](../guide/concepts.md) - Deep dive into Agent, Prompt, and Workflow
+- [Workflow Syntax](../guide/workflow-syntax.md) - Complete .jg syntax
+- [Built-in Tools](../reference/builtins.md) - Detailed guide to chat, p, notify, and other tools
+- [Conditionals and Branching](../guide/conditionals.md) - Implementing complex logic
 
-## 常见问题
+## FAQ
 
-### Q: 如何调试工作流？
+### Q: How do I debug a workflow?
 
-使用 `--verbose` 参数查看详细日志：
+Use the `--verbose` flag to see detailed logs:
 ```bash
 juglans src/main.jg --verbose
 ```
 
-### Q: 如何使用本地模型？
+### Q: How do I use a local model?
 
-在 `juglans.toml` 中配置本地端点：
+Configure a local endpoint in `juglans.toml`:
 ```toml
 [jug0]
-base_url = "http://localhost:11434/v1"  # Ollama 示例
+base_url = "http://localhost:11434/v1"  # Ollama example
 ```
 
-### Q: 支持哪些模型？
+### Q: Which models are supported?
 
-支持任何兼容 OpenAI API 的模型：
+Any model compatible with the OpenAI API is supported:
 - DeepSeek (deepseek-chat, deepseek-coder)
 - OpenAI (gpt-4o, gpt-4-turbo)
 - Anthropic (claude-3-opus, claude-3-sonnet)
-- 本地模型 (Ollama, vLLM)
+- Local models (Ollama, vLLM)

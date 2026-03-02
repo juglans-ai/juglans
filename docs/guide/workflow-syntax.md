@@ -1,75 +1,75 @@
-# 工作流语法 (.jg)
+# Workflow Syntax (.jg)
 
-`.jg` 文件定义了工作流的结构和执行逻辑。
+`.jg` files define the structure and execution logic of workflows.
 
-## 文件结构
+## File Structure
 
 ```yaml
-# 元数据
+# Metadata
 name: "Workflow Name"
 version: "0.1.0"
 author: "Author Name"
 description: "Workflow description"
 
-# 资源导入
+# Resource imports
 prompts: ["./prompts/*.jgprompt"]
 agents: ["./agents/*.jgagent"]
 
-# 入口和出口
+# Entry and exit
 entry: [start_node]
 exit: [end_node]
 
-# 节点定义
+# Node definitions
 [node_id]: tool_call(params...)
 
-# 边定义
+# Edge definitions
 [A] -> [B]
 ```
 
-## 元数据
+## Metadata
 
-| 字段 | 类型 | 必填 | 说明 |
+| Field | Type | Required | Description |
 |------|------|------|------|
-| `name` | string | 是 | 工作流名称 |
-| `version` | string | 否 | 版本号 |
-| `author` | string | 否 | 作者 |
-| `description` | string | 否 | 描述 |
-| `flows` | object | 否 | 工作流导入映射（见[工作流组合](./workflow-composition.md)） |
+| `name` | string | Yes | Workflow name |
+| `version` | string | No | Version number |
+| `author` | string | No | Author |
+| `description` | string | No | Description |
+| `flows` | object | No | Workflow import mapping (see [Workflow Composition](./workflow-composition.md)) |
 
-## 资源导入
+## Resource Imports
 
-工作流可以导入本地的 Prompt 和 Agent 文件，也可以引用远程资源。
+Workflows can import local Prompt and Agent files, and can also reference remote resources.
 
-### 本地资源导入
+### Local Resource Imports
 
-使用 glob 模式导入本地文件：
+Use glob patterns to import local files:
 
 ```yaml
-# 相对路径（相对于 .jg 文件所在目录）
+# Relative path (relative to the directory containing the .jg file)
 prompts: ["./prompts/*.jgprompt"]
 agents: ["./agents/*.jgagent"]
 
-# 多个路径
+# Multiple paths
 prompts: [
   "./local/*.jgprompt",
   "./shared/*.jgprompt"
 ]
 
-# 单个文件
+# Single file
 agents: ["./agents/main-agent.jgagent"]
 
-# 绝对路径
+# Absolute path
 prompts: ["/absolute/path/to/prompts/*.jgprompt"]
 ```
 
-**路径解析规则：**
-- 相对路径：相对于 `.jg` 文件所在目录
-- 绝对路径：以 `/` 开头的路径
-- Glob 通配符：`*` 匹配文件名，`**` 匹配子目录
+**Path resolution rules:**
+- Relative paths: relative to the directory containing the `.jg` file
+- Absolute paths: paths starting with `/`
+- Glob wildcards: `*` matches filenames, `**` matches subdirectories
 
-### 工作流导入
+### Workflow Imports
 
-使用 `flows:` 将其他 `.jg` 文件的节点合并到当前工作流中，实现跨文件分支：
+Use `flows:` to merge nodes from other `.jg` files into the current workflow, enabling cross-file branching:
 
 ```yaml
 flows: {
@@ -77,153 +77,153 @@ flows: {
   trading: "./trading.jg"
 }
 
-# 引用子工作流节点
+# Reference sub-workflow nodes
 [route] if $ctx.need_auth -> [auth.start]
 [auth.done] -> [next_step]
 ```
 
-子工作流的节点以别名为命名空间前缀合并到父 DAG（如 `auth.start`、`auth.verify`），变量引用自动转换。详见[工作流组合指南](./workflow-composition.md)。
+Sub-workflow nodes are merged into the parent DAG with the alias as a namespace prefix (e.g., `auth.start`, `auth.verify`), and variable references are automatically transformed. See the [Workflow Composition Guide](./workflow-composition.md) for details.
 
-### 本地 vs 远程资源
+### Local vs Remote Resources
 
-导入的本地资源可以通过 slug 引用：
+Imported local resources can be referenced by slug:
 
 ```yaml
-# 导入本地 Agent
+# Import local Agent
 agents: ["./agents/*.jgagent"]
 
-# 引用本地 Agent（通过 slug）
+# Reference local Agent (by slug)
 [chat]: chat(agent="my-local-agent", message=$input)
 ```
 
-如果需要引用远程（Jug0）资源，使用 `owner/slug` 格式：
+To reference remote (Jug0) resources, use the `owner/slug` format:
 
 ```yaml
-# 无需导入，直接引用远程资源
+# No import needed, directly reference remote resources
 [chat]: chat(agent="juglans/premium-agent", message=$input)
 [render]: p(slug="owner/shared-prompt", data=$input)
 ```
 
-### 混合使用
+### Mixed Usage
 
 ```yaml
-# 导入本地资源
+# Import local resources
 prompts: ["./prompts/*.jgprompt"]
 agents: ["./agents/*.jgagent"]
 
 entry: [start]
 exit: [end]
 
-# 使用本地 Agent
+# Use local Agent
 [local_chat]: chat(agent="my-agent", message=$input)
 
-# 使用远程 Agent
+# Use remote Agent
 [remote_chat]: chat(agent="juglans/cloud-agent", message=$output)
 
 [start] -> [local_chat] -> [remote_chat] -> [end]
 ```
 
-## 入口和出口
+## Entry and Exit
 
-定义工作流的起点和终点：
+Define the starting and ending points of a workflow:
 
 ```yaml
-entry: [start]           # 单一入口
-exit: [end]              # 单一出口
+entry: [start]           # Single entry
+exit: [end]              # Single exit
 
-# 多出口（用于分支结果）
+# Multiple exits (for branched results)
 exit: [success, failure]
 ```
 
-## 节点定义
+## Node Definitions
 
-### 基本语法
+### Basic Syntax
 
 ```yaml
 [node_id]: tool_name(param1=value1, param2=value2)
 ```
 
-### 节点 ID 规则
+### Node ID Rules
 
-- 使用字母、数字、下划线、连字符
-- 必须用方括号包围
-- 区分大小写
+- Use letters, numbers, underscores, and hyphens
+- Must be enclosed in square brackets
+- Case-sensitive
 
 ```yaml
-[start]              # 有效
-[process_data]       # 有效
-[step-1]             # 有效
-[MyNode]             # 有效
+[start]              # Valid
+[process_data]       # Valid
+[step-1]             # Valid
+[MyNode]             # Valid
 ```
 
-在边定义中，还可以使用命名空间格式引用导入的子工作流节点：
+In edge definitions, you can also use namespaced format to reference imported sub-workflow nodes:
 
 ```yaml
-[auth.start]         # 引用 auth 子工作流的 start 节点
-[trading.done]       # 引用 trading 子工作流的 done 节点
+[auth.start]         # Reference the start node of the auth sub-workflow
+[trading.done]       # Reference the done node of the trading sub-workflow
 ```
 
-命名空间节点由 `flows:` 导入产生，详见[工作流组合](./workflow-composition.md)。
+Namespaced nodes are produced by `flows:` imports. See [Workflow Composition](./workflow-composition.md) for details.
 
-### 工具调用
+### Tool Calls
 
 ```yaml
-# 字符串参数
+# String parameters
 [node]: notify(status="Processing...")
 
-# 变量引用
+# Variable references
 [node]: chat(message=$input.text)
 
-# 嵌套对象
+# Nested objects
 [node]: chat(
   agent="assistant",
   message=$input.question,
   format="json"
 )
 
-# 数组参数
+# Array parameters
 [node]: some_tool(items=["a", "b", "c"])
 ```
 
-### 字面量节点
+### Literal Nodes
 
 ```yaml
-# 字符串字面量
+# String literal
 [message]: "Hello, World!"
 
-# JSON 字面量
+# JSON literal
 [config]: {
   "model": "gpt-4",
   "temperature": 0.7
 }
 ```
 
-## 边定义
+## Edge Definitions
 
-### 简单连接
+### Simple Connections
 
 ```yaml
-[A] -> [B]              # A 完成后执行 B
-[A] -> [B] -> [C]       # 链式连接
+[A] -> [B]              # Execute B after A completes
+[A] -> [B] -> [C]       # Chained connection
 ```
 
-### 条件分支
+### Conditional Branches
 
 ```yaml
-# 基于表达式的条件
+# Expression-based conditions
 [router] if $ctx.type == "simple" -> [simple_handler]
 [router] if $ctx.type == "complex" -> [complex_handler]
 
-# 比较运算符
+# Comparison operators
 [node] if $output.score > 0.8 -> [high_score]
 [node] if $output.score <= 0.8 -> [low_score]
 
-# 布尔值
+# Boolean values
 [check] if $ctx.is_valid -> [proceed]
 [check] if !$ctx.is_valid -> [reject]
 ```
 
-**跨工作流分支：** 条件边的目标可以是子工作流节点：
+**Cross-workflow branching:** Conditional edge targets can be sub-workflow nodes:
 
 ```yaml
 [route] if $output.type == "auth" -> [auth.start]
@@ -232,16 +232,16 @@ exit: [success, failure]
 [trading.done] -> [done]
 ```
 
-**分支汇聚行为：** 当多个条件分支汇聚到同一节点时，使用 **OR 语义**（任意一个前驱完成即可执行），而非 AND 语义（等待所有前驱）。未执行的分支会被自动标记为不可达。详见[条件分支指南](./conditionals.md#分支汇聚语义)。
+**Branch convergence behavior:** When multiple conditional branches converge on the same node, **OR semantics** are used (the node executes as soon as any one predecessor completes), not AND semantics (waiting for all predecessors). Unexecuted branches are automatically marked as unreachable. See the [Conditionals Guide](./conditionals.md#branch-convergence-semantics) for details.
 
-### Switch 路由
+### Switch Routing
 
-多分支选择，只执行一个匹配的分支（与条件边不同）：
+Multi-branch selection that executes only one matching branch (unlike conditional edges):
 
 ```yaml
 [classify]: chat(agent="classifier", message=$input)
 
-# switch 块：只走一个分支
+# switch block: only one branch is taken
 [classify] -> switch $output.intent {
     "question": [answer]
     "task": [execute]
@@ -249,53 +249,53 @@ exit: [success, failure]
 }
 ```
 
-**语法说明**：
-- `switch $variable { ... }` - 基于变量值匹配
-- 每个 case 格式：`"value": [target_node]`
-- `default:` - 处理未匹配情况（可选但推荐）
+**Syntax notes**:
+- `switch $variable { ... }` - Match based on variable value
+- Each case format: `"value": [target_node]`
+- `default:` - Handles unmatched cases (optional but recommended)
 
-**与条件边的区别**：
+**Differences from conditional edges**:
 
-| 特性 | 条件边 (`if`) | Switch |
+| Feature | Conditional edges (`if`) | Switch |
 |------|--------------|--------|
-| 执行分支 | 可同时执行多个 | 只执行一个 |
-| 语法 | 多行 | 单块 |
-| 默认处理 | 需要额外边 | `default` 关键字 |
+| Branches executed | Can execute multiple simultaneously | Executes only one |
+| Syntax | Multiple lines | Single block |
+| Default handling | Requires an extra edge | `default` keyword |
 
 ```yaml
-# 条件边：可能同时执行多个
+# Conditional edges: may execute multiple simultaneously
 [node] if $ctx.a -> [path_a]
-[node] if $ctx.b -> [path_b]  # a 和 b 可能都执行
-[node] -> [default]            # 无条件边也会执行
+[node] if $ctx.b -> [path_b]  # Both a and b may execute
+[node] -> [default]            # Unconditional edge also executes
 
-# Switch：只执行第一个匹配
+# Switch: executes only the first match
 [node] -> switch $ctx.type {
     "a": [path_a]
     "b": [path_b]
-    default: [path_default]    # 只有这三个中的一个会执行
+    default: [path_default]    # Only one of these three will execute
 }
 ```
 
 ---
 
-### 错误处理
+### Error Handling
 
 ```yaml
-# 错误时跳转
+# Jump on error
 [risky_operation] on error -> [error_handler]
 
-# 组合使用
+# Combined usage
 [api_call] -> [process]
 [api_call] on error -> [fallback]
 ```
 
-### 默认路径
+### Default Path
 
 ```yaml
-# 条件都不满足时的默认路径
+# Default path when no conditions are met
 [router] if $ctx.a == 1 -> [path_a]
 [router] if $ctx.b == 1 -> [path_b]
-[router] -> [default_path]          # 默认
+[router] -> [default_path]          # Default
 ```
 
 ## Function Definitions
@@ -381,7 +381,7 @@ Steps can be separated by newlines or semicolons:
 }
 ```
 
-### Foreach 循环
+### Foreach Loop
 
 ```yaml
 [process_items]: foreach($item in $input.items) {
@@ -391,29 +391,29 @@ Steps can be separated by newlines or semicolons:
 }
 ```
 
-### 循环上下文变量
+### Loop Context Variables
 
-在循环内部可用：
+Available inside loops:
 
-| 变量 | 说明 |
+| Variable | Description |
 |------|------|
-| `loop.index` | 当前索引 (0-based) |
-| `loop.first` | 是否第一次迭代 |
-| `loop.last` | 是否最后一次迭代 |
+| `loop.index` | Current index (0-based) |
+| `loop.first` | Whether this is the first iteration |
+| `loop.last` | Whether this is the last iteration |
 
-## 变量引用
+## Variable References
 
-### 路径语法
+### Path Syntax
 
 ```yaml
-$input.field           # 输入变量
-$output                # 当前节点输出
-$output.nested.field   # 嵌套访问
-$ctx.variable          # 上下文变量
-$reply.content         # 最后回复内容
+$input.field           # Input variable
+$output                # Current node output
+$output.nested.field   # Nested access
+$ctx.variable          # Context variable
+$reply.content         # Last reply content
 ```
 
-### 在工具调用中使用
+### Usage in Tool Calls
 
 ```yaml
 [step1]: chat(message=$input.question)
@@ -421,9 +421,9 @@ $reply.content         # 最后回复内容
 [step3]: notify(status="Result: " + $output.summary)
 ```
 
-## 完整示例
+## Complete Examples
 
-### 简单对话
+### Simple Chat
 
 ```yaml
 name: "Simple Chat"
@@ -441,7 +441,7 @@ exit: [end]
 [start] -> [chat] -> [end]
 ```
 
-### 带路由的工作流
+### Workflow with Routing
 
 ```yaml
 name: "Smart Router"
@@ -453,22 +453,22 @@ agents: ["./agents/*.jgagent"]
 entry: [classify]
 exit: [done]
 
-# 分类节点
+# Classification node
 [classify]: chat(
   agent="classifier",
   message=$input.query,
   format="json"
 )
 
-# 处理分支
+# Processing branches
 [technical]: chat(agent="tech-expert", message=$input.query)
 [general]: chat(agent="general-assistant", message=$input.query)
 [creative]: chat(agent="creative-writer", message=$input.query)
 
-# 完成节点
+# Completion node
 [done]: notify(status="Query processed")
 
-# 路由逻辑
+# Routing logic
 [classify] if $output.category == "technical" -> [technical]
 [classify] if $output.category == "creative" -> [creative]
 [classify] -> [general]
@@ -478,7 +478,7 @@ exit: [done]
 [creative] -> [done]
 ```
 
-### 批量处理
+### Batch Processing
 
 ```yaml
 name: "Batch Processor"
@@ -513,7 +513,7 @@ exit: [summary]
 [init] -> [process] -> [summary]
 ```
 
-### 带错误处理
+### With Error Handling
 
 ```yaml
 name: "Robust Workflow"
@@ -538,10 +538,10 @@ exit: [success, failure]
 [risky_call] on error -> [failure]
 ```
 
-## 最佳实践
+## Best Practices
 
-1. **命名清晰** - 使用描述性的节点 ID
-2. **模块化** - 使用 `flows:` 将复杂逻辑拆分为多个工作流文件（见[工作流组合](./workflow-composition.md)）
-3. **错误处理** - 为关键节点添加 `on error` 路径
-4. **注释** - 使用 `#` 添加注释说明
-5. **版本控制** - 使用 `version` 字段跟踪变更
+1. **Clear naming** - Use descriptive node IDs
+2. **Modularize** - Use `flows:` to split complex logic into multiple workflow files (see [Workflow Composition](./workflow-composition.md))
+3. **Error handling** - Add `on error` paths for critical nodes
+4. **Comments** - Use `#` to add explanatory comments
+5. **Version control** - Use the `version` field to track changes
