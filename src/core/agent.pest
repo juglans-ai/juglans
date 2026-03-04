@@ -43,6 +43,8 @@ key_tools = { "tools" ~ ":" ~ (json_array | list | string) }
 key_username = { "username" ~ ":" ~ string }
 // Avatar image (local file path or URL)
 key_avatar = { "avatar" ~ ":" ~ string }
+// Visibility
+key_public = { "is_public" ~ ":" ~ boolean }
 
 // System Prompt can be a string, p(slug="..."), or multiline block scalar
 p_func = { "p" ~ "(" ~ "slug" ~ "=" ~ string ~ ")" }
@@ -51,6 +53,6 @@ key_system = { "system_prompt" ~ ":" ~ (multiline_string | string | p_func) }
 // Agent Definition
 agent_def = {
     SOI ~
-    (key_slug | key_name | key_desc | key_model | key_temp | key_mcp | key_skills | key_system | key_workflow | key_tools | key_username | key_avatar)+
+    (key_slug | key_name | key_desc | key_model | key_temp | key_mcp | key_skills | key_system | key_workflow | key_tools | key_username | key_avatar | key_public)+
     ~ EOI
 }

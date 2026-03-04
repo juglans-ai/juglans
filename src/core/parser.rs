@@ -1,6 +1,7 @@
 // src/core/parser.rs
 use crate::core::graph::{
-    Action, Edge, FunctionDef, Node, NodeType, SwitchCase, SwitchRoute, WorkflowGraph,
+    Action, ClassDef, ClassField, Edge, FunctionDef, Node, NodeType, SwitchCase, SwitchRoute,
+    WorkflowGraph,
 };
 use anyhow::{anyhow, Result};
 use pest::iterators::Pair;
@@ -165,6 +166,7 @@ impl GraphParser {
         for inner in pair.into_inner() {
             match inner.as_rule() {
                 Rule::metadata => Self::parse_metadata(inner, workflow)?,
+                Rule::class_def => Self::parse_class_def(inner, workflow)?,
                 Rule::node_def => Self::parse_node(inner, workflow)?,
                 Rule::chain_edge_def => Self::parse_chain_edge(inner, workflow)?,
                 Rule::complex_edge_def => Self::parse_complex_edge(inner, workflow)?,
@@ -197,6 +199,9 @@ impl GraphParser {
             "source" => workflow.source = Self::parse_text_value_raw(val_node),
             "author" => workflow.author = Self::parse_text_value_raw(val_node),
             "description" => workflow.description = Self::parse_text_value_raw(val_node),
+            "is_public" => {
+                workflow.is_public = Some(Self::parse_text_value_raw(val_node) == "true");
+            }
             "flows" => {
                 // 解析 flows: { alias: "path", ... } 对象映射
                 if val_node.as_rule() == Rule::meta_val_map {
@@ -359,7 +364,62 @@ impl GraphParser {
 
         // 常规节点（现有逻辑）
         let node_type_res = match content_node.as_rule() {
+            Rule::new_expr => {
+                let mut ne_inner = content_node.into_inner();
+                let class_name = ne_inner.next().unwrap().as_str().to_string();
+                let mut args = HashMap::new();
+                for p_pair in ne_inner {
+                    if p_pair.as_rule() == Rule::param_pair {
+                        let mut p_it = p_pair.into_inner();
+                        let pk = p_it.next().unwrap().as_str().to_string();
+                        let pv = p_it.next().unwrap().as_str().trim().to_string();
+                        args.insert(pk, pv);
+                    }
+                }
+                NodeType::NewInstance { class_name, args }
+            }
+            Rule::method_call_node => {
+                let mut mc_inner = content_node.into_inner();
+                let var_ref = mc_inner.next().unwrap().as_str();
+                // Strip "$" and split into instance_path + method_name
+                let clean = var_ref.trim_start_matches('$');
+                let (instance_path, method_name) = clean.rsplit_once('.').ok_or_else(|| {
+                    anyhow!(
+                        "Invalid method call '{}' in node [{}]: expected $instance.method",
+                        var_ref,
+                        node_id_str
+                    )
+                })?;
+                let mut args = HashMap::new();
+                for p_pair in mc_inner {
+                    if p_pair.as_rule() == Rule::param_pair {
+                        let mut p_it = p_pair.into_inner();
+                        let pk = p_it.next().unwrap().as_str().to_string();
+                        let pv = p_it.next().unwrap().as_str().trim().to_string();
+                        args.insert(pk, pv);
+                    }
+                }
+                NodeType::MethodCall {
+                    instance_path: instance_path.to_string(),
+                    method_name: method_name.to_string(),
+                    args,
+                }
+            }
             Rule::task_def => NodeType::Task(Self::parse_task_action(content_node, &node_id_str)?),
+            Rule::assignment_block => {
+                // Desugar: count = 0, name = input.user → set_context(count=0, name=input.user)
+                let mut params = HashMap::new();
+                for assignment in content_node.into_inner() {
+                    let mut parts = assignment.into_inner();
+                    let key = parts.next().unwrap().as_str().to_string();
+                    let value = parts.next().unwrap().as_str().trim().to_string();
+                    params.insert(key, value);
+                }
+                NodeType::Task(Action {
+                    name: "set_context".to_string(),
+                    params,
+                })
+            }
             Rule::while_def => {
                 let mut w_it = content_node.into_inner();
                 let cond_text = w_it.next().unwrap().as_str().trim().to_string();
@@ -429,13 +489,12 @@ impl GraphParser {
         Ok(())
     }
 
-    /// 解析函数节点定义，存入 workflow.functions
-    fn parse_function_def(
-        name: String,
+    /// 解析函数/方法体为 FunctionDef（共用逻辑）
+    fn parse_function_body(
+        name: &str,
         params: Vec<String>,
         content: Pair<Rule>,
-        workflow: &mut WorkflowGraph,
-    ) -> Result<()> {
+    ) -> Result<FunctionDef> {
         let mut body = WorkflowGraph::default();
 
         match content.as_rule() {
@@ -446,12 +505,27 @@ impl GraphParser {
 
                 for step in content.into_inner() {
                     if step.as_rule() == Rule::func_step {
-                        let task_pair = step.into_inner().next().unwrap();
+                        let inner_pair = step.into_inner().next().unwrap();
                         let step_id = format!("__{}", step_index);
-                        let action = Self::parse_task_action(
-                            task_pair,
-                            &format!("{}.__{}", name, step_index),
-                        )?;
+                        let action = match inner_pair.as_rule() {
+                            Rule::assignment_block => {
+                                let mut params = HashMap::new();
+                                for assignment in inner_pair.into_inner() {
+                                    let mut parts = assignment.into_inner();
+                                    let key = parts.next().unwrap().as_str().to_string();
+                                    let value = parts.next().unwrap().as_str().trim().to_string();
+                                    params.insert(key, value);
+                                }
+                                Action {
+                                    name: "set_context".to_string(),
+                                    params,
+                                }
+                            }
+                            _ => Self::parse_task_action(
+                                inner_pair,
+                                &format!("{}.__{}", name, step_index),
+                            )?,
+                        };
 
                         let node = Node {
                             id: step_id.clone(),
@@ -474,7 +548,7 @@ impl GraphParser {
             Rule::task_def => {
                 // 单步函数：包装为单节点子图
                 let step_id = "__0".to_string();
-                let action = Self::parse_task_action(content, &name)?;
+                let action = Self::parse_task_action(content, name)?;
 
                 let node = Node {
                     id: step_id.clone(),
@@ -484,22 +558,157 @@ impl GraphParser {
                 body.node_map.insert(step_id.clone(), idx);
                 body.entry_node = step_id;
             }
+            Rule::assignment_block => {
+                // 单步赋值：解糖为 set_context
+                let step_id = "__0".to_string();
+                let mut params = HashMap::new();
+                for assignment in content.into_inner() {
+                    let mut parts = assignment.into_inner();
+                    let key = parts.next().unwrap().as_str().to_string();
+                    let value = parts.next().unwrap().as_str().trim().to_string();
+                    params.insert(key, value);
+                }
+                let node = Node {
+                    id: step_id.clone(),
+                    node_type: NodeType::Task(Action {
+                        name: "set_context".to_string(),
+                        params,
+                    }),
+                };
+                let idx = body.graph.add_node(node);
+                body.node_map.insert(step_id.clone(), idx);
+                body.entry_node = "__0".to_string();
+            }
             _ => {
                 return Err(anyhow!(
-                    "Function '{}' body must be a task call or a {{ ... }} block",
+                    "Function '{}' body must be a task call, assignment, or a {{ ... }} block",
                     name
                 ));
             }
         }
 
-        workflow.functions.insert(
-            name,
-            FunctionDef {
-                params,
-                body: Box::new(body),
+        Ok(FunctionDef {
+            params,
+            body: Box::new(body),
+        })
+    }
+
+    /// 解析函数节点定义，存入 workflow.functions
+    fn parse_function_def(
+        name: String,
+        params: Vec<String>,
+        content: Pair<Rule>,
+        workflow: &mut WorkflowGraph,
+    ) -> Result<()> {
+        let func_def = Self::parse_function_body(&name, params, content)?;
+        workflow.functions.insert(name, func_def);
+        Ok(())
+    }
+
+    /// 解析 class 定义：class ClassName(field1=default1, field2) { [method]: body }
+    fn parse_class_def(pair: Pair<Rule>, workflow: &mut WorkflowGraph) -> Result<()> {
+        let mut inner = pair.into_inner();
+
+        let class_name = inner
+            .next()
+            .ok_or_else(|| anyhow!("Class definition missing name"))?
+            .as_str()
+            .to_string();
+
+        let next = inner
+            .next()
+            .ok_or_else(|| anyhow!("Class '{}' has no body", class_name))?;
+
+        // Optional: class_params
+        let (fields, body_pair) = if next.as_rule() == Rule::class_params {
+            let fields = Self::parse_class_fields(next)?;
+            let body = inner
+                .next()
+                .ok_or_else(|| anyhow!("Class '{}' has no body", class_name))?;
+            (fields, body)
+        } else {
+            (Vec::new(), next)
+        };
+
+        // Parse class body (field declarations + methods)
+        let mut body_fields = Vec::new();
+        let mut methods = HashMap::new();
+        for method_pair in body_pair.into_inner() {
+            if method_pair.as_rule() == Rule::class_field_decl {
+                let mut parts = method_pair.into_inner();
+                let name = parts.next().unwrap().as_str().to_string();
+                let type_hint = parts.next().unwrap().as_str().to_string();
+                let default = parts.next().map(|v| v.as_str().trim().to_string());
+                body_fields.push(ClassField {
+                    name,
+                    type_hint: Some(type_hint),
+                    default,
+                });
+            } else if method_pair.as_rule() == Rule::class_method {
+                let mut m_inner = method_pair.into_inner();
+                let method_name = m_inner.next().unwrap().as_str().to_string();
+
+                let m_next = m_inner.next().ok_or_else(|| {
+                    anyhow!(
+                        "Method '{}' in class '{}' has no body",
+                        method_name,
+                        class_name
+                    )
+                })?;
+
+                let (params, content) = if m_next.as_rule() == Rule::func_params {
+                    let params: Vec<String> = m_next
+                        .into_inner()
+                        .filter(|p| p.as_rule() == Rule::identifier)
+                        .map(|p| p.as_str().to_string())
+                        .collect();
+                    let content = m_inner.next().ok_or_else(|| {
+                        anyhow!(
+                            "Method '{}' in class '{}' has no body",
+                            method_name,
+                            class_name
+                        )
+                    })?;
+                    (params, content)
+                } else {
+                    (Vec::new(), m_next)
+                };
+
+                let full_name = format!("{}.{}", class_name, method_name);
+                let func_def = Self::parse_function_body(&full_name, params, content)?;
+                methods.insert(method_name, func_def);
+            }
+        }
+
+        // Merge body field declarations after constructor params
+        let mut all_fields = fields;
+        all_fields.extend(body_fields);
+
+        workflow.classes.insert(
+            class_name,
+            ClassDef {
+                fields: all_fields,
+                methods,
             },
         );
         Ok(())
+    }
+
+    fn parse_class_fields(pair: Pair<Rule>) -> Result<Vec<ClassField>> {
+        let mut fields = Vec::new();
+        for field_pair in pair.into_inner() {
+            if field_pair.as_rule() == Rule::class_field {
+                let mut parts = field_pair.into_inner();
+                let name = parts.next().unwrap().as_str().to_string();
+                let default = parts.next().map(|v| v.as_str().trim().to_string());
+                fields.push(ClassField {
+                    name,
+                    type_hint: None,
+                    default,
+                });
+            }
+        }
+        Ok(fields)
     }
 
     fn parse_chain_edge(pair: Pair<Rule>, workflow: &mut WorkflowGraph) -> Result<()> {
@@ -916,5 +1125,166 @@ entry: [start]
             "String concat should parse: {:?}",
             result.err()
         );
+    }
+
+    #[test]
+    fn test_foreach_without_dollar() {
+        let content = r#"
+name: "Foreach no $"
+entry: [loop]
+[loop]: foreach(item in input.items) {
+    [step]: notify(message="ok")
+}
+"#;
+        let graph = GraphParser::parse(content).unwrap();
+        let node = graph.node_map.get("loop").unwrap();
+        let node_data = &graph.graph[*node];
+        if let NodeType::Foreach { item, list, .. } = &node_data.node_type {
+            assert_eq!(item, "item");
+            assert_eq!(list, "input.items");
+        } else {
+            panic!("Expected Foreach node");
+        }
+    }
+
+    #[test]
+    fn test_assignment_block_parsing() {
+        let content = r#"
+name: "Assignment Test"
+entry: [init]
+[init]: count = 0, name = "Alice"
+[next]: notify(message="done")
+[init] -> [next]
+"#;
+        let graph = GraphParser::parse(content).unwrap();
+        let node = graph.node_map.get("init").unwrap();
+        let node_data = &graph.graph[*node];
+        if let NodeType::Task(action) = &node_data.node_type {
+            assert_eq!(action.name, "set_context");
+            assert_eq!(action.params.get("count").unwrap(), "0");
+            assert_eq!(action.params.get("name").unwrap(), "\"Alice\"");
+        } else {
+            panic!("Expected Task node, got {:?}", node_data.node_type);
+        }
+    }
+
+    #[test]
+    fn test_assignment_single() {
+        let content = r#"
+name: "Single Assign"
+entry: [init]
+[init]: result = $output.data
+"#;
+        let graph = GraphParser::parse(content).unwrap();
+        let node = graph.node_map.get("init").unwrap();
+        let node_data = &graph.graph[*node];
+        if let NodeType::Task(action) = &node_data.node_type {
+            assert_eq!(action.name, "set_context");
+            assert_eq!(action.params.get("result").unwrap(), "$output.data");
+        } else {
+            panic!("Expected Task node");
+        }
+    }
+
+    #[test]
+    fn test_class_definition_parsing() {
+        let content = r#"
+name: "Class Test"
+entry: [c]
+
+class Counter(count=0) {
+  [increment(n)]: count = $self.count + $n
+  [reset]: count = 0
+}
+
+[c]: new Counter(count=10)
+[r]: $c.increment(n=5)
+[c] -> [r]
+"#;
+        let graph = GraphParser::parse(content).unwrap();
+
+        // Verify class was parsed
+        assert!(graph.classes.contains_key("Counter"));
+        let class_def = graph.classes.get("Counter").unwrap();
+        assert_eq!(class_def.fields.len(), 1);
+        assert_eq!(class_def.fields[0].name, "count");
+        assert_eq!(class_def.fields[0].default, Some("0".to_string()));
+
+        // Verify methods
+        assert!(class_def.methods.contains_key("increment"));
+        assert!(class_def.methods.contains_key("reset"));
+        let increment = class_def.methods.get("increment").unwrap();
+        assert_eq!(increment.params, vec!["n"]);
+
+        // Verify NewInstance node
+        let c_idx = graph.node_map.get("c").unwrap();
+        let c_node = &graph.graph[*c_idx];
+        if let NodeType::NewInstance { class_name, args } = &c_node.node_type {
+            assert_eq!(class_name, "Counter");
+            assert_eq!(args.get("count"), Some(&"10".to_string()));
+        } else {
+            panic!("Expected NewInstance node, got {:?}", c_node.node_type);
+        }
+
+        // Verify MethodCall node
+        let r_idx = graph.node_map.get("r").unwrap();
+        let r_node = &graph.graph[*r_idx];
+        if let NodeType::MethodCall {
+            instance_path,
+            method_name,
+            args,
+        } = &r_node.node_type
+        {
+            assert_eq!(instance_path, "c");
+            assert_eq!(method_name, "increment");
+            assert_eq!(args.get("n"), Some(&"5".to_string()));
+        } else {
+            panic!("Expected MethodCall node, got {:?}", r_node.node_type);
+        }
+    }
+
+    #[test]
+    fn test_class_no_params() {
+        let content = r#"
+name: "Class No Params"
+entry: [c]
+
+class Logger {
+  [log(msg)]: notify(message=$msg)
+}
+
+[c]: new Logger()
+"#;
+        let graph = GraphParser::parse(content).unwrap();
+
+        assert!(graph.classes.contains_key("Logger"));
+        let class_def = graph.classes.get("Logger").unwrap();
+        assert!(class_def.fields.is_empty());
+        assert!(class_def.methods.contains_key("log"));
+    }
+
+    #[test]
+    fn test_class_multi_step_method() {
+        let content = r#"
+name: "Multi Step Method"
+entry: [c]
+
+class Processor(data="") {
+  [process(x)]: {
+    notify(message=$x)
+    data = $x
+  }
+}
+
+[c]: new Processor()
+"#;
+        let graph = GraphParser::parse(content).unwrap();
+
+        let class_def = graph.classes.get("Processor").unwrap();
+        let process = class_def.methods.get("process").unwrap();
+        assert_eq!(process.params, vec!["x"]);
+        // Multi-step body should have 2 nodes
+        assert_eq!(process.body.node_map.len(), 2);
+        assert_eq!(process.body.graph.edge_count(), 1);
     }
 }

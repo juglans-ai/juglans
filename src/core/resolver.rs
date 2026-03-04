@@ -127,6 +127,10 @@ pub fn resolve_lib_imports(
                 let namespaced = format!("{}.{}", namespace, func_name);
                 workflow.functions.insert(namespaced, func_def);
             }
+            for (class_name, class_def) in lib_graph.classes {
+                let namespaced = format!("{}.{}", namespace, class_name);
+                workflow.classes.insert(namespaced, class_def);
+            }
 
             import_stack.pop();
             continue;
@@ -183,6 +187,10 @@ pub fn resolve_lib_imports(
         for (func_name, func_def) in lib_graph.functions {
             let namespaced = format!("{}.{}", namespace, func_name);
             workflow.functions.insert(namespaced, func_def);
+        }
+        for (class_name, class_def) in lib_graph.classes {
+            let namespaced = format!("{}.{}", namespace, class_name);
+            workflow.classes.insert(namespaced, class_def);
         }
 
         import_stack.pop();
@@ -496,6 +504,31 @@ fn prefix_node_type(
                 call_path: call_path.clone(),
                 args: prefixed_args,
                 kwargs: prefixed_kwargs,
+            }
+        }
+        NodeType::NewInstance { class_name, args } => {
+            let prefixed_args: std::collections::HashMap<String, String> = args
+                .iter()
+                .map(|(k, v)| (k.clone(), prefix_variables(v, prefix, child_node_ids)))
+                .collect();
+            NodeType::NewInstance {
+                class_name: class_name.clone(),
+                args: prefixed_args,
+            }
+        }
+        NodeType::MethodCall {
+            instance_path,
+            method_name,
+            args,
+        } => {
+            let prefixed_args: std::collections::HashMap<String, String> = args
+                .iter()
+                .map(|(k, v)| (k.clone(), prefix_variables(v, prefix, child_node_ids)))
+                .collect();
+            NodeType::MethodCall {
+                instance_path: instance_path.clone(),
+                method_name: method_name.clone(),
+                args: prefixed_args,
             }
         }
     }

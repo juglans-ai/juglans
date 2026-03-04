@@ -1,18 +1,25 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 use std::cell::{Cell, RefCell};
+use std::path::Path;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use unicode_width::UnicodeWidthChar;
 
-use super::claude_code::{
-    self, ceil_char_boundary, floor_char_boundary, ClaudeEvent, ClaudeProcess,
-};
+use super::claude_code::{self, ClaudeEvent, ClaudeProcess};
 use super::dialog::Dialog;
 use super::editor::EditorState;
 use super::event::AppEvent;
-use super::messages::{ChatMessage, ToolStatus};
+use super::messages::{
+    load_attachment, read_directory_entries, Attachment, ChatMessage, ToolStatus,
+};
 use super::theme::Theme;
+
+#[derive(Debug, Clone)]
+pub struct PendingMessage {
+    pub text: String,
+    pub attachments: Vec<Attachment>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Page {
@@ -24,6 +31,14 @@ pub enum Page {
 pub struct TextSelection {
     pub start: (u16, u16),
     pub end: (u16, u16),
+}
+
+#[derive(Debug, Clone)]
+pub struct LinkRegion {
+    pub y: u16,
+    pub x_start: u16,
+    pub x_end: u16,
+    pub text: String,
 }
 
 pub struct App {
@@ -49,6 +64,8 @@ pub struct App {
     pub messages_area: Cell<Rect>,
     pub rendered_lines: RefCell<Vec<String>>,
     pub user_msg_rows: RefCell<Vec<u16>>,
+    pub link_registry: RefCell<Vec<(String, String)>>,
+    pub link_regions: RefCell<Vec<LinkRegion>>,
 
     // --- Claude Code streaming state ---
     pub streaming: bool,
@@ -59,7 +76,9 @@ pub struct App {
     tool_input_buf: String,
     needs_new_assistant_message: bool,
     pub pending_permission_response: Option<String>,
-    pub pending_send_message: Option<String>,
+    pub pending_send_message: Option<PendingMessage>,
+    pub attachments: Vec<Attachment>,
+    pub attachment_selected: bool,
     pub tick_counter: u32,
     pub waiting_for_response: bool,
 }
@@ -105,6 +124,8 @@ impl App {
             messages_area: Cell::new(Rect::default()),
             rendered_lines: RefCell::new(Vec::new()),
             user_msg_rows: RefCell::new(Vec::new()),
+            link_registry: RefCell::new(Vec::new()),
+            link_regions: RefCell::new(Vec::new()),
             // Claude Code state
             streaming: false,
             claude_rx: None,
@@ -115,6 +136,8 @@ impl App {
             needs_new_assistant_message: false,
             pending_permission_response: None,
             pending_send_message: None,
+            attachments: Vec::new(),
+            attachment_selected: false,
             tick_counter: 0,
             waiting_for_response: false,
         }
@@ -123,13 +146,14 @@ impl App {
     pub fn update(&mut self, event: AppEvent) {
         // Clear expired status messages
         if let Some((_, created)) = &self.status_message {
-            if created.elapsed() > Duration::from_secs(5) {
+            if created.elapsed() > Duration::from_secs(2) {
                 self.status_message = None;
             }
         }
 
         match event {
             AppEvent::Key(key) => self.handle_key(key),
+            AppEvent::Paste(text) => self.handle_paste(text),
             AppEvent::MouseScrollUp { x, y } => {
                 let ea = self.editor_area.get();
                 if y >= ea.y && y < ea.y + ea.height && x >= ea.x && x < ea.x + ea.width {
@@ -188,6 +212,12 @@ impl App {
                             Some(Dialog::MessageActions { .. }) => {
                                 self.handle_message_action(result);
                             }
+                            Some(Dialog::LinkPreview { .. }) => {
+                                self.handle_link_action(result);
+                            }
+                            Some(Dialog::FilePicker { .. }) => {
+                                self.handle_file_picker_result(result);
+                            }
                             _ => {}
                         }
                     }
@@ -197,7 +227,7 @@ impl App {
             return;
         }
 
-        // During streaming: only allow interrupt and scrolling
+        // During streaming: allow typing in editor but block sending
         if self.streaming {
             match (key.code, key.modifiers) {
                 (KeyCode::Esc, _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
@@ -207,7 +237,11 @@ impl App {
                 (KeyCode::PageDown, _) => self.scroll_down(10),
                 (KeyCode::Char('u'), KeyModifiers::CONTROL) => self.scroll_up(15),
                 (KeyCode::Char('d'), KeyModifiers::CONTROL) => self.scroll_down(15),
-                _ => {} // swallow all other keys during streaming
+                (KeyCode::Enter, KeyModifiers::NONE) => {} // block send
+                _ => {
+                    self.editor.handle_key(key);
+                    self.editor_scroll = 0;
+                }
             }
             return;
         }
@@ -275,7 +309,45 @@ impl App {
                 self.copy_last_response();
                 return;
             }
+            (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
+                self.open_file_picker();
+                return;
+            }
+            (KeyCode::Char('x'), KeyModifiers::CONTROL) => {
+                if let Some(removed) = self.attachments.pop() {
+                    self.status_message =
+                        Some((format!("Removed: {}", removed.file_name), Instant::now()));
+                }
+                return;
+            }
             _ => {}
+        }
+
+        // Attachment selected mode
+        if self.attachment_selected {
+            match key.code {
+                KeyCode::Delete | KeyCode::Backspace => {
+                    if let Some(removed) = self.attachments.pop() {
+                        self.status_message =
+                            Some((format!("Removed: {}", removed.file_name), Instant::now()));
+                    }
+                    self.attachment_selected = !self.attachments.is_empty();
+                }
+                KeyCode::Esc | KeyCode::Down => {
+                    self.attachment_selected = false;
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        // Up arrow at top of editor → select attachment
+        if key.code == KeyCode::Up && !self.attachments.is_empty() {
+            let (row, col) = self.editor.cursor_pos();
+            if row == 0 && col == 0 {
+                self.attachment_selected = true;
+                return;
+            }
         }
 
         // Forward to editor
@@ -303,8 +375,11 @@ impl App {
             self.conversation_starter = Some(text.clone());
         }
 
+        let attachments = std::mem::take(&mut self.attachments);
+
         self.messages.push(ChatMessage::User {
             content: text.clone(),
+            attachments: attachments.clone(),
         });
 
         // Streaming setup
@@ -323,19 +398,20 @@ impl App {
         });
 
         // Queue the message for async spawning in the event loop
-        self.pending_send_message = Some(text);
+        self.pending_send_message = Some(PendingMessage { text, attachments });
         self.scroll_from_bottom = 0;
     }
 
     /// Actually spawn the claude subprocess (called from the async event loop)
-    pub async fn do_spawn_claude(&mut self, text: String) {
+    pub async fn do_spawn_claude(&mut self, msg: PendingMessage) {
         let real_cwd = self.resolve_cwd();
 
         match claude_code::spawn_claude(
-            &text,
+            &msg.text,
             &self.model_name,
             self.session_id.as_deref(),
             &real_cwd,
+            &msg.attachments,
         )
         .await
         {
@@ -355,13 +431,14 @@ impl App {
     }
 
     /// Send a follow-up user message to an existing subprocess (multi-turn)
-    pub async fn send_user_message_to_subprocess(&mut self, text: String) {
+    pub async fn send_user_message_to_subprocess(&mut self, msg: PendingMessage) {
+        let content = claude_code::build_content_blocks(&msg.text, &msg.attachments);
         let user_msg = serde_json::json!({
             "type": "user",
             "session_id": self.session_id.as_deref().unwrap_or(""),
             "message": {
                 "role": "user",
-                "content": text
+                "content": content
             },
             "parent_tool_use_id": null
         });
@@ -370,6 +447,77 @@ impl App {
                 self.update_last_assistant_content(&format!("Error sending message: {}", e));
                 self.streaming = false;
                 self.request_start = None;
+            }
+        }
+    }
+
+    fn open_file_picker(&mut self) {
+        let cwd = std::path::PathBuf::from(self.resolve_cwd());
+        let entries = read_directory_entries(&cwd);
+        self.active_dialog = Some(Dialog::FilePicker {
+            current_dir: cwd,
+            entries,
+            selected: 0,
+            scroll_offset: 0,
+            filter: String::new(),
+        });
+    }
+
+    fn handle_paste(&mut self, text: String) {
+        let trimmed = text.trim();
+        // Unescape shell-escaped spaces: `/path/Screenshot\ 2026-03-03\ at\ 8.png`
+        let cleaned = trimmed
+            .replace("\\ ", " ")
+            .replace("\\(", "(")
+            .replace("\\)", ")");
+        let path = Path::new(&cleaned);
+
+        if !cleaned.contains('\n') && path.is_absolute() && path.exists() {
+            let ext = path
+                .extension()
+                .map(|e| e.to_string_lossy().to_lowercase())
+                .unwrap_or_default();
+            let is_image = ["png", "jpg", "jpeg", "gif", "webp"].contains(&ext.as_str());
+
+            if is_image {
+                match load_attachment(path) {
+                    Ok(att) => {
+                        let name = att.file_name.clone();
+                        self.attachments.push(att);
+                        self.status_message = Some((format!("Attached: {}", name), Instant::now()));
+                    }
+                    Err(e) => {
+                        self.status_message = Some((format!("Failed: {}", e), Instant::now()));
+                    }
+                }
+                return;
+            }
+        }
+
+        // Not a file path → insert as plain text into editor
+        for ch in text.chars() {
+            let key = KeyEvent::new(
+                if ch == '\n' {
+                    KeyCode::Enter
+                } else {
+                    KeyCode::Char(ch)
+                },
+                KeyModifiers::NONE,
+            );
+            self.editor.textarea.input(key);
+        }
+    }
+
+    fn handle_file_picker_result(&mut self, path: &str) {
+        let path = std::path::Path::new(path);
+        match load_attachment(path) {
+            Ok(attachment) => {
+                let name = attachment.file_name.clone();
+                self.attachments.push(attachment);
+                self.status_message = Some((format!("Attached: {}", name), Instant::now()));
+            }
+            Err(e) => {
+                self.status_message = Some((format!("Failed: {}", e), Instant::now()));
             }
         }
     }
@@ -392,7 +540,6 @@ impl App {
                     self.needs_new_assistant_message = false;
                 }
                 self.append_to_last_assistant_content(&text);
-                self.scroll_from_bottom = 0;
             }
 
             ClaudeEvent::ThinkingDelta(text) => {
@@ -417,7 +564,6 @@ impl App {
                     params: String::new(),
                     response: None,
                 });
-                self.scroll_from_bottom = 0;
             }
 
             ClaudeEvent::ToolInputDelta(chunk) => {
@@ -449,7 +595,6 @@ impl App {
 
             ClaudeEvent::AssistantSnapshot { content } => {
                 self.update_last_assistant_content(&content);
-                self.scroll_from_bottom = 0;
             }
 
             ClaudeEvent::MessageStop => {
@@ -698,6 +843,34 @@ impl App {
             // If no drag (single click) — clear selection
             if sel.start == sel.end {
                 self.selection = None;
+                // Single click on link → show LinkPreview dialog
+                if let Some(region) = self
+                    .link_regions
+                    .borrow()
+                    .iter()
+                    .find(|r| r.y == y && x >= r.x_start && x < r.x_end)
+                    .cloned()
+                {
+                    // Look up URL from link_registry (fuzzy match for wrapped links)
+                    if let Some((_, url)) = self
+                        .link_registry
+                        .borrow()
+                        .iter()
+                        .find(|(t, _)| {
+                            *t == region.text
+                                || t.starts_with(&region.text)
+                                || t.ends_with(&region.text)
+                        })
+                        .cloned()
+                    {
+                        self.active_dialog = Some(Dialog::LinkPreview {
+                            text: region.text,
+                            url,
+                            selected: 0,
+                        });
+                        return;
+                    }
+                }
                 // Single click on user message → open Message Actions
                 if self.user_msg_rows.borrow().contains(&y) {
                     self.active_dialog = Some(Dialog::MessageActions { selected: 0 });
@@ -717,7 +890,8 @@ impl App {
                     }
                 }
             }
-            // Keep selection visible (cleared on next click)
+            // Clear selection immediately after copy
+            self.selection = None;
         }
     }
 
@@ -755,21 +929,14 @@ impl App {
                 let to_col = if y == end.1 {
                     (end.0.saturating_sub(ma.x) as usize) + 1
                 } else {
-                    line.len()
+                    // Full line: use total display width as column
+                    unicode_width::UnicodeWidthStr::width(line.as_str())
                 };
-                // Safe char-boundary slicing
-                let safe_from = if from_col >= line.len() {
-                    line.len()
-                } else {
-                    floor_char_boundary(line, from_col)
-                };
-                let safe_to = if to_col >= line.len() {
-                    line.len()
-                } else {
-                    ceil_char_boundary(line, to_col)
-                };
-                if safe_from < safe_to {
-                    result.push(line[safe_from..safe_to].to_string());
+                // Convert display columns to byte offsets
+                let byte_from = display_col_to_byte(line, from_col);
+                let byte_to = display_col_to_byte(line, to_col);
+                if byte_from < byte_to {
+                    result.push(line[byte_from..byte_to].to_string());
                 }
             }
         }
@@ -791,7 +958,7 @@ impl App {
                     .messages
                     .iter()
                     .filter_map(|m| match m {
-                        ChatMessage::User { content } => Some(format!("> {}", content)),
+                        ChatMessage::User { content, .. } => Some(format!("> {}", content)),
                         ChatMessage::Assistant { content, .. } if !content.is_empty() => {
                             Some(content.clone())
                         }
@@ -821,31 +988,62 @@ impl App {
         }
     }
 
+    fn handle_link_action(&mut self, action: &str) {
+        if let Some(url) = action.strip_prefix("open_url:") {
+            if let Err(e) = std::process::Command::new("open").arg(url).spawn() {
+                self.status_message = Some((format!("Failed to open: {}", e), Instant::now()));
+            }
+        } else if let Some(url) = action.strip_prefix("copy_url:") {
+            match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(url)) {
+                Ok(_) => {
+                    self.status_message =
+                        Some(("URL copied to clipboard".to_string(), Instant::now()));
+                }
+                Err(e) => {
+                    self.status_message = Some((format!("Copy failed: {}", e), Instant::now()));
+                }
+            }
+        }
+    }
+
     fn scroll_up(&mut self, amount: u16) {
-        let approx_lines: u16 = self
+        let approx_lines: u32 = self
             .messages
             .iter()
             .map(|m| match m {
-                ChatMessage::User { content } => content.lines().count() as u16 + 2,
+                ChatMessage::User { content, .. } => content.lines().count() as u32 + 2,
                 ChatMessage::Assistant {
                     content, thinking, ..
                 } => {
-                    content.lines().count() as u16
+                    content.lines().count() as u32
                         + thinking
                             .as_ref()
-                            .map_or(0, |t| t.lines().count() as u16 + 2)
+                            .map_or(0, |t| t.lines().count() as u32 + 2)
                         + 4
                 }
                 _ => 6,
             })
             .sum();
-        self.scroll_from_bottom = self
-            .scroll_from_bottom
-            .saturating_add(amount)
-            .min(approx_lines);
+        let cap = approx_lines.min(u16::MAX as u32) as u16;
+        self.scroll_from_bottom = self.scroll_from_bottom.saturating_add(amount).min(cap);
     }
 
     fn scroll_down(&mut self, amount: u16) {
         self.scroll_from_bottom = self.scroll_from_bottom.saturating_sub(amount);
     }
+}
+
+/// Convert a display column (screen position) to a byte offset in a string.
+/// Accounts for CJK wide characters (2 display columns per character).
+fn display_col_to_byte(line: &str, target_col: usize) -> usize {
+    let mut col = 0;
+    let mut offset = 0;
+    for ch in line.chars() {
+        if col >= target_col {
+            break;
+        }
+        col += UnicodeWidthChar::width(ch).unwrap_or(1);
+        offset += ch.len_utf8();
+    }
+    offset
 }

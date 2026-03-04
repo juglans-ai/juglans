@@ -1,0 +1,24 @@
+name: "Pydantic-style Class Fields"
+entry: [req]
+
+class CreateUserRequest {
+  name: str
+  age: int = 0
+  role: str = "user"
+
+  [validate]: ok = $self.name != ""
+}
+
+class UserResponse {
+  id: str
+  name: str
+  age: int = 0
+  role: str = "user"
+  status: str = "ok"
+}
+
+[req]: new CreateUserRequest(name="Alice", age=25)
+[v]: $req.validate()
+[resp]: new UserResponse(id="u_001", name=$req.name, age=$req.age, role=$req.role)
+
+[req] -> [v] -> [resp]

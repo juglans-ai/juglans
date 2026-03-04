@@ -157,6 +157,8 @@ pub struct ChatRequest {
     pub user_message_id: Option<i32>,
     /// 是否推送内部 tool 执行事件到 SSE 流（默认 false）
     pub stream_tool_events: Option<bool>,
+    /// 是否推送 workflow node 执行事件到 SSE 流（默认 false）
+    pub stream_node_events: Option<bool>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -342,6 +344,19 @@ async fn handle_serve_request(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!("Flow import error: {}", e),
         );
+    }
+
+    // Pre-flight validation
+    let validation = WorkflowValidator::validate(&graph);
+    if !validation.is_valid {
+        let err_json = validation.to_error_json();
+        error!("❌ [Serve] Validation failed: {}", err_json);
+        let body = serde_json::to_vec(&err_json).unwrap_or_default();
+        return Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .unwrap();
     }
 
     // 构建 executor
@@ -550,20 +565,11 @@ async fn handle_serve_request(
     }
 
     // 读取 response
-    let status_code = ctx
-        .resolve_path("response.status")
-        .ok()
-        .flatten()
-        .and_then(|v| v.as_u64())
-        .unwrap_or(200) as u16;
+    let status_code = ctx.get_jvalue("response.status").i64().unwrap_or(200) as u16;
     let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
 
-    let resp_headers: Option<Value> = ctx.resolve_path("response.headers").ok().flatten();
-    let resp_file: Option<String> = ctx
-        .resolve_path("response.file")
-        .ok()
-        .flatten()
-        .and_then(|v| v.as_str().map(|s| s.to_string()));
+    let resp_headers = ctx.resolve_path("response.headers").ok().flatten();
+    let resp_file = ctx.get_str("response.file");
 
     let mut builder = Response::builder().status(status);
     let mut has_content_type = false;
@@ -604,16 +610,22 @@ async fn handle_serve_request(
         }
     } else {
         // JSON 响应（默认）
-        let response_body = ctx
-            .resolve_path("response.body")
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| {
-                ctx.resolve_path("output")
-                    .ok()
-                    .flatten()
-                    .unwrap_or(json!(null))
-            });
+        // 兜底：如果没有 response.body 但有 $error，返回 500
+        let resp_body_jv = ctx.get_jvalue("response.body");
+        if resp_body_jv.is_null() {
+            let error_jv = ctx.get_jvalue("error");
+            if !error_jv.is_null() {
+                let msg_jv = error_jv.get("message");
+                let msg = msg_jv.str_or("Internal error");
+                return error_response(StatusCode::INTERNAL_SERVER_ERROR, msg);
+            }
+        }
+
+        let response_body = if resp_body_jv.is_null() {
+            ctx.get_jvalue("output").into_inner()
+        } else {
+            resp_body_jv.into_inner()
+        };
         if !has_content_type {
             builder = builder.header("content-type", "application/json");
         }
@@ -1291,6 +1303,11 @@ async fn handle_chat(
         ctx.set_stream_tool_events(true);
     }
 
+    // 设置 stream_node_events 开关
+    if req.stream_node_events.unwrap_or(false) {
+        ctx.set_stream_node_events(true);
+    }
+
     // 设置输入上下文
     ctx.set("input.message".to_string(), json!(message_text.clone()))
         .ok();
@@ -1400,38 +1417,136 @@ async fn handle_chat(
             };
 
             match wf_result {
-                Ok((content, wf_path)) => match GraphParser::parse(&content) {
-                    Ok(mut graph) => {
-                        // 解析 lib imports + flow imports
-                        let wf_base_dir = wf_path.parent().unwrap_or(Path::new("."));
-                        let wf_canonical = wf_path.canonicalize().unwrap_or(wf_path.clone());
-                        let at_base: Option<PathBuf> = JuglansConfig::load()
-                            .ok()
-                            .and_then(|c| c.paths.base.map(|b| project_root.join(b)));
-                        let mut import_stack = vec![wf_canonical.clone()];
-                        match resolver::resolve_lib_imports(
-                            &mut graph,
-                            wf_base_dir,
-                            &mut import_stack,
-                            at_base.as_deref(),
-                        ) {
-                            Ok(()) => {
-                                import_stack = vec![wf_canonical];
-                                match resolver::resolve_flow_imports(
-                                    &mut graph,
-                                    wf_base_dir,
-                                    &mut import_stack,
-                                    at_base.as_deref(),
-                                ) {
-                                    Ok(()) => executor.execute_graph(Arc::new(graph), &ctx).await,
-                                    Err(e) => Err(anyhow::anyhow!("Flow Import Error: {}", e)),
+                Ok((content, wf_path)) => {
+                    // .jgflow 清单：跟随 source: 字段加载 .jg 文件并合并 metadata
+                    // Track source file's directory for correct flow import resolution
+                    let mut source_base_dir: Option<PathBuf> = None;
+                    let parse_result = if wf_path.extension().and_then(|e| e.to_str())
+                        == Some("jgflow")
+                    {
+                        match GraphParser::parse_manifest(&content) {
+                            Ok(manifest) if !manifest.source.is_empty() => {
+                                let source_path = wf_path
+                                    .parent()
+                                    .unwrap_or(Path::new("."))
+                                    .join(&manifest.source);
+                                match fs::read_to_string(&source_path) {
+                                    Ok(source_content) => match GraphParser::parse(&source_content)
+                                    {
+                                        Ok(mut g) => {
+                                            source_base_dir = Some(
+                                                source_path
+                                                    .parent()
+                                                    .unwrap_or(Path::new("."))
+                                                    .to_path_buf(),
+                                            );
+                                            if !manifest.slug.is_empty() {
+                                                g.slug = manifest.slug;
+                                            }
+                                            if !manifest.name.is_empty() {
+                                                g.name = manifest.name;
+                                            }
+                                            if !manifest.version.is_empty() {
+                                                g.version = manifest.version;
+                                            }
+                                            if !manifest.author.is_empty() {
+                                                g.author = manifest.author;
+                                            }
+                                            if !manifest.description.is_empty() {
+                                                g.description = manifest.description;
+                                            }
+                                            if !manifest.libs.is_empty() {
+                                                g.libs = manifest.libs;
+                                                g.lib_imports = manifest.lib_imports;
+                                                g.lib_auto_namespaces =
+                                                    manifest.lib_auto_namespaces;
+                                            }
+                                            if !manifest.entry_node.is_empty() {
+                                                g.entry_node = manifest.entry_node;
+                                            }
+                                            if !manifest.prompt_patterns.is_empty() {
+                                                g.prompt_patterns = manifest.prompt_patterns;
+                                            }
+                                            if !manifest.agent_patterns.is_empty() {
+                                                g.agent_patterns = manifest.agent_patterns;
+                                            }
+                                            if !manifest.tool_patterns.is_empty() {
+                                                g.tool_patterns = manifest.tool_patterns;
+                                            }
+                                            Ok(g)
+                                        }
+                                        Err(e) => Err(anyhow::anyhow!(
+                                            "Workflow Source Parse Error: {}",
+                                            e
+                                        )),
+                                    },
+                                    Err(e) => Err(anyhow::anyhow!(
+                                        "Workflow Source Read Error: {} (tried {:?})",
+                                        e,
+                                        source_path
+                                    )),
                                 }
                             }
-                            Err(e) => Err(anyhow::anyhow!("Lib Import Error: {}", e)),
+                            _ => GraphParser::parse(&content)
+                                .map_err(|e| anyhow::anyhow!("Workflow Parse Error: {}", e)),
                         }
+                    } else {
+                        GraphParser::parse(&content)
+                            .map_err(|e| anyhow::anyhow!("Workflow Parse Error: {}", e))
+                    };
+
+                    match parse_result {
+                        Ok(mut graph) => {
+                            // 解析 lib imports + flow imports
+                            // .jgflow + source: flow imports 相对于 source .jg 文件目录
+                            let wf_base_dir = source_base_dir
+                                .as_deref()
+                                .unwrap_or_else(|| wf_path.parent().unwrap_or(Path::new(".")));
+                            let wf_canonical = wf_path.canonicalize().unwrap_or(wf_path.clone());
+                            let at_base: Option<PathBuf> = JuglansConfig::load()
+                                .ok()
+                                .and_then(|c| c.paths.base.map(|b| project_root.join(b)));
+                            let mut import_stack = vec![wf_canonical.clone()];
+                            match resolver::resolve_lib_imports(
+                                &mut graph,
+                                wf_base_dir,
+                                &mut import_stack,
+                                at_base.as_deref(),
+                            ) {
+                                Ok(()) => {
+                                    import_stack = vec![wf_canonical];
+                                    match resolver::resolve_flow_imports(
+                                        &mut graph,
+                                        wf_base_dir,
+                                        &mut import_stack,
+                                        at_base.as_deref(),
+                                    ) {
+                                        Ok(()) => {
+                                            // Pre-flight validation
+                                            let validation = WorkflowValidator::validate(&graph);
+                                            if !validation.is_valid {
+                                                let err_msgs: Vec<String> = validation
+                                                    .errors
+                                                    .iter()
+                                                    .map(|e| format!("[{}] {}", e.code, e.message))
+                                                    .collect();
+                                                Err(anyhow::anyhow!(
+                                                    "Validation failed: {}",
+                                                    err_msgs.join("; ")
+                                                ))
+                                            } else {
+                                                executor.execute_graph(Arc::new(graph), &ctx).await
+                                            }
+                                        }
+                                        Err(e) => Err(anyhow::anyhow!("Flow Import Error: {}", e)),
+                                    }
+                                }
+                                Err(e) => Err(anyhow::anyhow!("Lib Import Error: {}", e)),
+                            }
+                        }
+                        Err(e) => Err(e),
                     }
-                    Err(e) => Err(anyhow::anyhow!("Workflow Parse Error: {}", e)),
-                },
+                }
                 Err(e) => Err(e),
             }
         } else {
@@ -1503,9 +1618,29 @@ async fn handle_chat(
                     .to_string(),
                 ))
             }
-            // Tool event → event: tool_event（内部 tool 执行的 start/complete 事件）
-            WorkflowEvent::ToolEvent(data) => {
+            // Tool start → event: tool_event
+            WorkflowEvent::ToolStart(evt) => {
+                let mut data = serde_json::to_value(&evt).unwrap_or_default();
+                data["type"] = serde_json::Value::String("tool_start".to_string());
                 Ok(Event::default().event("tool_event").data(data.to_string()))
+            }
+            // Tool complete → event: tool_event
+            WorkflowEvent::ToolComplete(evt) => {
+                let mut data = serde_json::to_value(&evt).unwrap_or_default();
+                data["type"] = serde_json::Value::String("tool_complete".to_string());
+                Ok(Event::default().event("tool_event").data(data.to_string()))
+            }
+            // Node start → event: node_event
+            WorkflowEvent::NodeStart(evt) => {
+                let mut data = serde_json::to_value(&evt).unwrap_or_default();
+                data["type"] = serde_json::Value::String("node_start".to_string());
+                Ok(Event::default().event("node_event").data(data.to_string()))
+            }
+            // Node complete → event: node_event
+            WorkflowEvent::NodeComplete(evt) => {
+                let mut data = serde_json::to_value(&evt).unwrap_or_default();
+                data["type"] = serde_json::Value::String("node_complete".to_string());
+                Ok(Event::default().event("node_event").data(data.to_string()))
             }
         }
     });

@@ -8,6 +8,23 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// 将字符串解析为 context 值，保留超大整数为字符串以避免 f64 精度丢失。
+fn parse_context_value(value_str: &str) -> Value {
+    match serde_json::from_str::<Value>(value_str) {
+        Ok(Value::Number(n))
+            if n.as_f64()
+                .map(|f| f.abs() > 9_007_199_254_740_992.0)
+                .unwrap_or(false)
+                && value_str.bytes().all(|b| b.is_ascii_digit() || b == b'-') =>
+        {
+            // 超过 f64 精度的大整数（如 Google/Apple user ID），保留为字符串
+            json!(value_str)
+        }
+        Ok(v) => v,
+        Err(_) => json!(value_str),
+    }
+}
+
 pub struct Timer;
 #[async_trait]
 impl Tool for Timer {
@@ -53,7 +70,7 @@ impl Tool for SetContext {
 
         if let (Some(path), Some(value_str)) = (params.get("path"), params.get("value")) {
             // 传统模式
-            let value = serde_json::from_str(value_str).unwrap_or(json!(value_str));
+            let value = parse_context_value(value_str);
             let stripped_path = path.strip_prefix("$ctx.").unwrap_or(path).trim_matches('"');
             context.set(stripped_path.to_string(), value)?;
         } else {
@@ -63,7 +80,7 @@ impl Tool for SetContext {
                 if key == "path" || key == "value" {
                     continue;
                 }
-                let value = serde_json::from_str(value_str).unwrap_or(json!(value_str));
+                let value = parse_context_value(value_str);
                 context.set(key.clone(), value)?;
             }
         }

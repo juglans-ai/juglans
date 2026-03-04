@@ -1,4 +1,5 @@
 // src/services/mcp.rs
+use crate::core::jvalue::JValue;
 use crate::services::config::McpServerConfig;
 use anyhow::{anyhow, Result};
 use reqwest::Client;
@@ -140,21 +141,26 @@ impl McpClient {
             .await
             .map_err(|_| anyhow!("MCP Server returned non-JSON response (Status {})", status))?;
 
-        if let Some(err) = body.get("error") {
-            return Err(anyhow!("MCP Execution Error: {:?}", err));
+        let jb = JValue::from(body);
+        if !jb.get("error").is_null() {
+            return Err(anyhow!(
+                "MCP Execution Error: {:?}",
+                jb.get("error").as_value()
+            ));
         }
 
-        if let Some(result_node) = body.get("result") {
-            if let Some(content) = result_node.get("content").and_then(|v| v.as_array()) {
+        let result_node = jb.get("result");
+        if !result_node.is_null() {
+            if let Some(content) = result_node.get("content").array() {
                 let mut result_buffer = String::new();
                 for part in content {
-                    if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                    if let Some(text) = JValue::from(part.clone()).get("text").str() {
                         result_buffer.push_str(text);
                     }
                 }
                 return Ok(result_buffer);
             }
-            return Ok(serde_json::to_string(result_node)?);
+            return Ok(serde_json::to_string(result_node.as_value())?);
         }
 
         Ok("Success (No content returned)".to_string())

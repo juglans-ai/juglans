@@ -101,6 +101,29 @@ impl BuiltinRegistry {
         reg!(testing::Assert);
         reg!(testing::Config);
 
+        // Database ORM
+        reg!(database::DbConnect);
+        reg!(database::DbDisconnect);
+        reg!(database::DbQuery);
+        reg!(database::DbExec);
+        reg!(database::DbFind);
+        reg!(database::DbFindOne);
+        reg!(database::DbCreate);
+        reg!(database::DbCreateMany);
+        reg!(database::DbUpsert);
+        reg!(database::DbUpdate);
+        reg!(database::DbDelete);
+        reg!(database::DbCount);
+        reg!(database::DbAggregate);
+        reg!(database::DbBegin);
+        reg!(database::DbCommit);
+        reg!(database::DbRollback);
+        reg!(database::DbCreateTable);
+        reg!(database::DbDropTable);
+        reg!(database::DbAlterTable);
+        reg!(database::DbTables);
+        reg!(database::DbColumns);
+
         let registry_arc = Arc::new(Self {
             tools: RwLock::new(tool_map),
             executor: RwLock::new(None),
@@ -239,6 +262,7 @@ impl BuiltinRegistry {
 }
 
 pub mod ai;
+pub mod database;
 pub mod devtools;
 pub mod http;
 pub mod network;

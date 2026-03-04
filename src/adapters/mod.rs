@@ -446,8 +446,12 @@ pub async fn run_agent_for_message(
                     let _ = result_tx.send(vec![]);
                 }
             }
-            WorkflowEvent::Meta(_) | WorkflowEvent::ToolEvent(_) => {
-                // Bot 模式忽略 meta / tool_event 事件
+            WorkflowEvent::Meta(_)
+            | WorkflowEvent::ToolStart(_)
+            | WorkflowEvent::ToolComplete(_)
+            | WorkflowEvent::NodeStart(_)
+            | WorkflowEvent::NodeComplete(_) => {
+                // Bot 模式忽略 meta / tool / node 事件
             }
         }
     }

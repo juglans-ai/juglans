@@ -10,6 +10,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
 use crate::core::graph::WorkflowGraph;
+use crate::core::jvalue::JValue;
 
 /// Type alias for pending tool start info: (tool_name, params, start_time)
 type PendingToolStarts = Arc<Mutex<HashMap<String, (String, HashMap<String, String>, Instant)>>>;
@@ -38,6 +39,46 @@ pub enum TraceStatus {
     Error(String),
 }
 
+/// Tool execution start event (structured)
+#[derive(Debug, Clone, Serialize)]
+pub struct ToolStartEvent {
+    pub node_id: String,
+    pub tool: String,
+    pub params: HashMap<String, String>,
+}
+
+/// Tool execution complete event (structured)
+#[derive(Debug, Clone, Serialize)]
+pub struct ToolCompleteEvent {
+    pub node_id: String,
+    pub tool: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Workflow node execution start event (structured)
+#[derive(Debug, Clone, Serialize)]
+pub struct NodeStartEvent {
+    pub node_id: String,
+    pub tool: String,
+    pub params: HashMap<String, String>,
+}
+
+/// Workflow node execution complete event (structured)
+#[derive(Debug, Clone, Serialize)]
+pub struct NodeCompleteEvent {
+    pub node_id: String,
+    pub tool: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// 工作流执行过程中的实时事件
 pub enum WorkflowEvent {
     Token(String),
@@ -51,8 +92,14 @@ pub enum WorkflowEvent {
         tools: Vec<Value>,
         result_tx: oneshot::Sender<Vec<ToolResultPayload>>,
     },
-    /// 【新增】内部 tool 执行事件（tool_start / tool_complete）
-    ToolEvent(Value),
+    /// Tool execution start event (AI sub-tool calls)
+    ToolStart(ToolStartEvent),
+    /// Tool execution complete event (AI sub-tool calls)
+    ToolComplete(ToolCompleteEvent),
+    /// Workflow node execution start event
+    NodeStart(NodeStartEvent),
+    /// Workflow node execution complete event
+    NodeComplete(NodeCompleteEvent),
 }
 
 /// A thread-safe, shared state for a single workflow execution.
@@ -70,6 +117,8 @@ pub struct WorkflowContext {
     current_workflow: Arc<RwLock<Option<Arc<WorkflowGraph>>>>,
     /// 【新增】是否向前端推送 tool 执行事件（默认 false）
     stream_tool_events: Arc<AtomicBool>,
+    /// 是否向前端推送 node 执行事件（默认 false）
+    stream_node_events: Arc<AtomicBool>,
     /// Tool 执行 trace（记录所有 tool 调用的结果，供 assert 查询）
     tool_trace: Arc<Mutex<Vec<ToolTraceEntry>>>,
     /// Pending tool starts（tool_start 时记录时间，tool_complete 时计算 duration）
@@ -92,6 +141,7 @@ impl WorkflowContext {
             max_depth: 10,
             current_workflow: Arc::new(RwLock::new(None)),
             stream_tool_events: Arc::new(AtomicBool::new(false)),
+            stream_node_events: Arc::new(AtomicBool::new(false)),
             tool_trace: Arc::new(Mutex::new(Vec::new())),
             pending_tool_starts: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -111,6 +161,7 @@ impl WorkflowContext {
             max_depth: 10,
             current_workflow: Arc::new(RwLock::new(None)),
             stream_tool_events: Arc::new(AtomicBool::new(false)),
+            stream_node_events: Arc::new(AtomicBool::new(false)),
             tool_trace: Arc::new(Mutex::new(Vec::new())),
             pending_tool_starts: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -259,6 +310,11 @@ impl WorkflowContext {
         self.stream_tool_events.store(enabled, Ordering::Relaxed);
     }
 
+    /// 设置是否推送 node 执行事件
+    pub fn set_stream_node_events(&self, enabled: bool) {
+        self.stream_node_events.store(enabled, Ordering::Relaxed);
+    }
+
     /// 发送 tool_start 事件（同时记录到 trace）
     pub fn emit_tool_start(&self, node_id: &str, tool: &str, params: &HashMap<String, String>) {
         // 记录开始时间到 pending（用 node_id 作为 key）
@@ -272,12 +328,11 @@ impl WorkflowContext {
         if !self.stream_tool_events.load(Ordering::Relaxed) {
             return;
         }
-        self.emit(WorkflowEvent::ToolEvent(json!({
-            "type": "tool_start",
-            "node_id": node_id,
-            "tool": tool,
-            "params": params,
-        })));
+        self.emit(WorkflowEvent::ToolStart(ToolStartEvent {
+            node_id: node_id.to_string(),
+            tool: tool.to_string(),
+            params: params.clone(),
+        }));
     }
 
     /// 发送 tool_complete 事件（同时写入 trace）
@@ -317,27 +372,93 @@ impl WorkflowContext {
             return;
         }
         match result {
-            Ok(Some(val)) => self.emit(WorkflowEvent::ToolEvent(json!({
-                "type": "tool_complete",
-                "node_id": node_id,
-                "tool": tool,
-                "status": "success",
-                "result": val,
-            }))),
-            Ok(None) => self.emit(WorkflowEvent::ToolEvent(json!({
-                "type": "tool_complete",
-                "node_id": node_id,
-                "tool": tool,
-                "status": "success",
-                "result": null,
-            }))),
-            Err(e) => self.emit(WorkflowEvent::ToolEvent(json!({
-                "type": "tool_complete",
-                "node_id": node_id,
-                "tool": tool,
-                "status": "error",
-                "error": e.to_string(),
-            }))),
+            Ok(val) => self.emit(WorkflowEvent::ToolComplete(ToolCompleteEvent {
+                node_id: node_id.to_string(),
+                tool: tool.to_string(),
+                status: "success".to_string(),
+                result: val.clone(),
+                error: None,
+            })),
+            Err(e) => self.emit(WorkflowEvent::ToolComplete(ToolCompleteEvent {
+                node_id: node_id.to_string(),
+                tool: tool.to_string(),
+                status: "error".to_string(),
+                result: None,
+                error: Some(e.to_string()),
+            })),
+        }
+    }
+
+    /// 发送 node_start 事件（workflow 节点开始执行，同时记录到 trace）
+    pub fn emit_node_start(&self, node_id: &str, tool: &str, params: &HashMap<String, String>) {
+        // 记录开始时间到 pending（用 node_id 作为 key）
+        if let Ok(mut pending) = self.pending_tool_starts.lock() {
+            pending.insert(
+                node_id.to_string(),
+                (tool.to_string(), params.clone(), Instant::now()),
+            );
+        }
+
+        if !self.stream_node_events.load(Ordering::Relaxed) {
+            return;
+        }
+        self.emit(WorkflowEvent::NodeStart(NodeStartEvent {
+            node_id: node_id.to_string(),
+            tool: tool.to_string(),
+            params: params.clone(),
+        }));
+    }
+
+    /// 发送 node_complete 事件（workflow 节点执行完成，同时写入 trace）
+    pub fn emit_node_complete(&self, node_id: &str, tool: &str, result: &Result<Option<Value>>) {
+        // 从 pending 中取出开始时间，计算 duration，写入 trace
+        let start_info = self
+            .pending_tool_starts
+            .lock()
+            .ok()
+            .and_then(|mut p| p.remove(node_id));
+
+        let (params, duration) = match start_info {
+            Some((_, params, started)) => (params, started.elapsed()),
+            None => (HashMap::new(), Duration::ZERO),
+        };
+
+        let (trace_result, trace_status) = match result {
+            Ok(val) => (val.clone(), TraceStatus::Success),
+            Err(e) => (None, TraceStatus::Error(e.to_string())),
+        };
+
+        let entry = ToolTraceEntry {
+            node_id: node_id.to_string(),
+            tool: tool.to_string(),
+            params,
+            result: trace_result,
+            duration,
+            status: trace_status,
+        };
+
+        if let Ok(mut trace) = self.tool_trace.lock() {
+            trace.push(entry);
+        }
+
+        if !self.stream_node_events.load(Ordering::Relaxed) {
+            return;
+        }
+        match result {
+            Ok(val) => self.emit(WorkflowEvent::NodeComplete(NodeCompleteEvent {
+                node_id: node_id.to_string(),
+                tool: tool.to_string(),
+                status: "success".to_string(),
+                result: val.clone(),
+                error: None,
+            })),
+            Err(e) => self.emit(WorkflowEvent::NodeComplete(NodeCompleteEvent {
+                node_id: node_id.to_string(),
+                tool: tool.to_string(),
+                status: "error".to_string(),
+                result: None,
+                error: Some(e.to_string()),
+            })),
         }
     }
 
@@ -421,8 +542,37 @@ impl WorkflowContext {
             .read()
             .map_err(|_| anyhow!("Failed to acquire context read lock"))?;
 
+        // 快速路径：直接 JSON pointer
         let pointer = format!("/{}", parts.join("/"));
-        Ok(data.pointer(&pointer).cloned())
+        if let Some(v) = data.pointer(&pointer) {
+            return Ok(Some(v.clone()));
+        }
+
+        // 慢速路径：逐段导航，遇到 JSON 字符串自动解析
+        let mut current: Value = match data.get(parts[0]) {
+            Some(v) => v.clone(),
+            None => return Ok(None),
+        };
+        for part in parts.iter().skip(1) {
+            current = match current {
+                Value::Object(map) => match map.get(*part) {
+                    Some(v) => v.clone(),
+                    None => return Ok(None),
+                },
+                Value::String(ref s) => {
+                    let parsed: Value = match serde_json::from_str(s) {
+                        Ok(v) => v,
+                        Err(_) => return Ok(None),
+                    };
+                    match parsed.get(*part) {
+                        Some(v) => v.clone(),
+                        None => return Ok(None),
+                    }
+                }
+                _ => return Ok(None),
+            };
+        }
+        Ok(Some(current))
     }
 
     /// Returns a snapshot of the context as a serde_json::Value.
@@ -432,5 +582,27 @@ impl WorkflowContext {
             .read()
             .map_err(|_| anyhow!("Failed to acquire context read lock"))?;
         Ok(data.clone())
+    }
+
+    /// Chainable value access via dot-notation path.
+    pub fn get_jvalue(&self, path: &str) -> JValue {
+        JValue::from(self.resolve_path(path).ok().flatten())
+    }
+
+    /// Shortcut: get a String value at path.
+    pub fn get_str(&self, path: &str) -> Option<String> {
+        self.get_jvalue(path).string()
+    }
+
+    /// Shortcut: get an i64 value at path.
+    #[allow(dead_code)]
+    pub fn get_i64(&self, path: &str) -> Option<i64> {
+        self.get_jvalue(path).i64()
+    }
+
+    /// Shortcut: get an f64 value at path.
+    #[allow(dead_code)]
+    pub fn get_f64(&self, path: &str) -> Option<f64> {
+        self.get_jvalue(path).f64()
     }
 }

@@ -15,6 +15,11 @@ double_quoted = @{ "\"" ~ (string_escape | (!("\"" | "\\") ~ ANY))* ~ "\"" }
 single_quoted = @{ "'" ~ (string_escape | (!("'" | "\\") ~ ANY))* ~ "'" }
 string        = { double_quoted | single_quoted }
 
+// ========== F-String (interpolated strings) ==========
+
+fstring_body = @{ (string_escape | !("\"" | "\\") ~ ANY)* }
+fstring      = { "f\"" ~ fstring_body ~ "\"" }
+
 true_lit  = { "True" | "true" }
 false_lit = { "False" | "false" }
 bool_lit  = { true_lit | false_lit }
@@ -51,7 +56,7 @@ bracket_access = { "[" ~ expr ~ "]" }
 // ========== Primary ==========
 
 paren_expr   = { "(" ~ expr ~ ")" }
-atom         = { func_call | number | string | bool_lit | none_lit | variable | identifier | array_lit | object_lit | paren_expr }
+atom         = { func_call | number | fstring | string | bool_lit | none_lit | variable | identifier | array_lit | object_lit | paren_expr }
 postfix_expr = { atom ~ (method_call | dot_access | bracket_access)* }
 
 // ========== Unary ==========

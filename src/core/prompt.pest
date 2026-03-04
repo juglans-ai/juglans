@@ -17,7 +17,7 @@ json_object = { "{" ~ (json_pair ~ ("," ~ json_pair)*)? ~ ","? ~ "}" }
 json_array = { "[" ~ (fm_value ~ ("," ~ fm_value)*)? ~ ","? ~ "]" }
 
 // --- Metadata Object (The content under inputs:) ---
-meta_key_names = _{ "slug" | "name" | "type" | "description" | "inputs" }
+meta_key_names = _{ "slug" | "name" | "type" | "description" | "inputs" | "is_public" }
 
 // obj_pair represents a key-value entry in the inputs list
 obj_pair = { !(meta_key_names ~ ":") ~ !separator ~ identifier ~ ":" ~ fm_value }
@@ -34,8 +34,9 @@ key_name  = { "name" ~ ":" ~ string }
 key_type  = { "type" ~ ":" ~ string }
 key_desc  = { "description" ~ ":" ~ string }
 key_inputs = { "inputs" ~ ":" ~ metadata_obj }
+key_public = { "is_public" ~ ":" ~ boolean }
 
-meta_entry = _{ (key_slug | key_name | key_type | key_desc | key_inputs) }
+meta_entry = _{ (key_slug | key_name | key_type | key_desc | key_inputs | key_public) }
 separator = _{ "---" }
 frontmatter = { separator ~ meta_entry+ ~ separator }
 

@@ -89,7 +89,7 @@ juglans workflows/router.jg -v --input '{"query": "test"}'
 juglans agents/analyst.jgagent --info
 
 # 推送到服务器
-juglans apply prompts/greeting.jgprompt
+juglans push prompts/greeting.jgprompt
 ```
 
 ## 📖 相关文档

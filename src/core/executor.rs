@@ -490,11 +490,11 @@ impl WorkflowExecutor {
                             )
                         })
                         .collect();
-                    context.emit_tool_start(&node.id, &action.name, &display_params);
+                    context.emit_node_start(&node.id, &action.name, &display_params);
                     let result = self
                         .execute_function(action.name.clone(), args, workflow.clone(), context)
                         .await;
-                    context.emit_tool_complete(&node.id, &action.name, &result);
+                    context.emit_node_complete(&node.id, &action.name, &result);
                     return result;
                 }
 
@@ -525,11 +525,11 @@ impl WorkflowExecutor {
                     rendered_params.insert(key, val_str);
                 }
                 debug!("  Arguments: {:?}", rendered_params);
-                context.emit_tool_start(&node.id, &action.name, &rendered_params);
+                context.emit_node_start(&node.id, &action.name, &rendered_params);
                 let result = self
                     .execute_tool_internal(&action.name, &rendered_params, context)
                     .await;
-                context.emit_tool_complete(&node.id, &action.name, &result);
+                context.emit_node_complete(&node.id, &action.name, &result);
                 result
             }
             NodeType::Foreach {
@@ -682,6 +682,116 @@ impl WorkflowExecutor {
                 }
 
                 self.execute_python_call(call_path, &resolved_kwargs)
+            }
+            NodeType::NewInstance { class_name, args } => {
+                debug!("│   NewInstance: {} args={:?}", class_name, args);
+                let class_def = workflow
+                    .classes
+                    .get(class_name)
+                    .ok_or_else(|| anyhow!("Class '{}' not found", class_name))?;
+
+                let mut instance = serde_json::Map::new();
+                instance.insert("__class__".to_string(), serde_json::json!(class_name));
+
+                for field in &class_def.fields {
+                    let value = if let Some(arg_expr) = args.get(&field.name) {
+                        self.process_parameter(arg_expr, context).await?
+                    } else if let Some(default_expr) = &field.default {
+                        self.process_parameter(default_expr, context).await?
+                    } else {
+                        return Err(anyhow!(
+                            "Class '{}' field '{}' has no default and was not provided",
+                            class_name,
+                            field.name
+                        ));
+                    };
+                    instance.insert(field.name.clone(), value);
+                }
+
+                let instance_val = Value::Object(instance);
+                // Store instance directly at the node id for ergonomic $instance access
+                context.set(node.id.clone(), instance_val.clone())?;
+                Ok(Some(instance_val))
+            }
+            NodeType::MethodCall {
+                instance_path,
+                method_name,
+                args,
+            } => {
+                debug!(
+                    "│   MethodCall: ${}.{}({:?})",
+                    instance_path, method_name, args
+                );
+
+                // 1. Resolve instance from context
+                let instance_val = context
+                    .resolve_path(instance_path)?
+                    .ok_or_else(|| anyhow!("Instance '${}' not found in context", instance_path))?;
+
+                let instance_obj = instance_val
+                    .as_object()
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "'${}' is not an object (cannot call methods)",
+                            instance_path
+                        )
+                    })?
+                    .clone();
+
+                // 2. Get class name from __class__ marker
+                let class_name = instance_obj
+                    .get("__class__")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow!("'${}' has no __class__ marker", instance_path))?
+                    .to_string();
+
+                // 3. Look up ClassDef and method
+                let class_def = workflow
+                    .classes
+                    .get(&class_name)
+                    .ok_or_else(|| anyhow!("Class '{}' not found", class_name))?
+                    .clone();
+                let method_def = class_def
+                    .methods
+                    .get(method_name)
+                    .ok_or_else(|| {
+                        anyhow!("Class '{}' has no method '{}'", class_name, method_name)
+                    })?
+                    .clone();
+
+                // 4. Bind $self and pre-populate class fields in context
+                context.set("self".to_string(), instance_val.clone())?;
+                for field in &class_def.fields {
+                    if let Some(field_val) = instance_obj.get(&field.name) {
+                        context.set(field.name.clone(), field_val.clone())?;
+                    }
+                }
+
+                // 5. Bind method parameters
+                for param_name in &method_def.params {
+                    if let Some(arg_expr) = args.get(param_name) {
+                        let val = self.process_parameter(arg_expr, context).await?;
+                        context.set(param_name.clone(), val)?;
+                    }
+                }
+
+                // 6. Execute method body
+                let body_arc = Arc::new(*method_def.body.clone());
+                self.clone().execute_graph(body_arc, context).await?;
+
+                // 7. Write back field values to instance
+                let mut updated_instance = instance_obj.clone();
+                for field in &class_def.fields {
+                    if let Ok(Some(val)) = context.resolve_path(&field.name) {
+                        updated_instance.insert(field.name.clone(), val);
+                    }
+                }
+                updated_instance.insert("__class__".to_string(), serde_json::json!(class_name));
+                let updated = Value::Object(updated_instance);
+                context.set(instance_path.to_string(), updated.clone())?;
+
+                // 8. Return updated instance as $output
+                Ok(Some(updated))
             }
         }
     }
@@ -1187,7 +1297,10 @@ impl WorkflowExecutor {
                         let node_succeeded = node_result.is_ok();
 
                         // Store node result in context
-                        Self::store_node_result(&node.id, &node_result, &context_clone);
+                        // Skip for NewInstance — it already stored the instance at node.id (line 713)
+                        if !matches!(node.node_type, NodeType::NewInstance { .. }) {
+                            Self::store_node_result(&node.id, &node_result, &context_clone);
+                        }
 
                         if self_clone.debug_config.show_context {
                             if let Ok(ctx_val) = context_clone.get_as_value() {
@@ -1221,6 +1334,22 @@ impl WorkflowExecutor {
                 }
                 join_all(tasks).await;
             }
+
+            // 检查是否有未处理的节点错误（导致 deadlock 的根因）
+            if let Ok(Some(error_val)) = context.resolve_path("error") {
+                if !error_val.is_null() {
+                    let node = error_val
+                        .get("node")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    let msg = error_val
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown error");
+                    return Err(anyhow::anyhow!("Node [{}] failed: {}", node, msg));
+                }
+            }
+
             Ok(())
         })
     }

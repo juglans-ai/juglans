@@ -14,8 +14,8 @@ pub mod welcome;
 use anyhow::Result;
 use app::App;
 use crossterm::event::{
-    DisableMouseCapture, EnableMouseCapture, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
-    PushKeyboardEnhancementFlags,
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use event::EventHandler;
@@ -24,6 +24,8 @@ use std::time::Duration;
 pub async fn run(mut app: App) -> Result<()> {
     let mut terminal = ratatui::init();
     execute!(std::io::stdout(), EnableMouseCapture)?;
+    execute!(std::io::stdout(), EnableBracketedPaste)?;
+    execute!(std::io::stdout(), crossterm::terminal::SetTitle("Juglans"))?;
 
     // Enable enhanced keyboard protocol (Kitty) so Shift+Enter is reported correctly
     let keyboard_enhanced = crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
@@ -40,11 +42,11 @@ pub async fn run(mut app: App) -> Result<()> {
         terminal.draw(|f| ui::draw(f, &app))?;
 
         // Handle pending message: spawn new subprocess or send to existing one
-        if let Some(text) = app.pending_send_message.take() {
+        if let Some(msg) = app.pending_send_message.take() {
             if app.claude_process.is_some() {
-                app.send_user_message_to_subprocess(text).await;
+                app.send_user_message_to_subprocess(msg).await;
             } else {
-                app.do_spawn_claude(text).await;
+                app.do_spawn_claude(msg).await;
             }
         }
 
@@ -105,7 +107,9 @@ pub async fn run(mut app: App) -> Result<()> {
     if keyboard_enhanced {
         let _ = execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
     }
+    execute!(std::io::stdout(), DisableBracketedPaste)?;
     execute!(std::io::stdout(), DisableMouseCapture)?;
+    let _ = execute!(std::io::stdout(), crossterm::terminal::SetTitle(""));
     ratatui::restore();
     Ok(())
 }

@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use crate::core::agent_parser::AgentResource;
 use crate::core::graph::WorkflowGraph;
+use crate::core::jvalue::JValue;
 use crate::core::prompt_parser::PromptResource;
 use crate::services::config::JuglansConfig;
 use crate::services::interface::{ChatRequest, JuglansRuntime};
@@ -416,7 +417,7 @@ impl Jug0Client {
     }
 
     pub async fn apply_prompt(&self, prompt: &PromptResource, force: bool) -> Result<String> {
-        let payload = json!({
+        let mut payload = json!({
             "name": prompt.name,
             "content": prompt.content,
             "type": prompt.r#type,
@@ -424,6 +425,10 @@ impl Jug0Client {
             "input_variables": prompt.inputs,
             "tags": json!([prompt.r#type])
         });
+
+        if let Some(public) = prompt.is_public {
+            payload["is_public"] = json!(public);
+        }
 
         self.upsert_resource(&prompt.slug, "prompts", payload, force)
             .await
@@ -475,6 +480,10 @@ impl Jug0Client {
             "temperature": agent.temperature,
             "skills": agent.skills,
         });
+
+        if let Some(public) = agent.is_public {
+            payload["is_public"] = json!(public);
+        }
 
         // Add username if present (auto-registers @handle in jug0)
         if let Some(ref username) = agent.username {
@@ -549,11 +558,14 @@ impl Jug0Client {
 
         let body: Value = res.json().await?;
 
+        let jb = JValue::from(body.clone());
         let (content, ext) = match resource_type {
             "prompt" => {
-                let content = body.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                let content_jv = jb.get("content");
+                let content = content_jv.str_or("");
                 let inputs = body.get("input_variables").cloned().unwrap_or(json!({}));
-                let name = body.get("name").and_then(|v| v.as_str()).unwrap_or(slug);
+                let name_jv = jb.get("name");
+                let name = name_jv.str_or(slug);
                 let formatted = format!(
                     "---\nslug: \"{}\"\nname: \"{}\"\ninputs: {}\n---\n{}",
                     slug,
@@ -564,15 +576,11 @@ impl Jug0Client {
                 (formatted, "jgprompt")
             }
             "agent" => {
-                let name = body.get("name").and_then(|v| v.as_str()).unwrap_or(slug);
-                let model = body
-                    .get("default_model")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("gpt-4o");
-                let temp = body
-                    .get("temperature")
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.7);
+                let name_jv = jb.get("name");
+                let name = name_jv.str_or(slug);
+                let model_jv = jb.get("default_model");
+                let model = model_jv.str_or("gpt-4o");
+                let temp = jb.get("temperature").f64().unwrap_or(0.7);
                 let formatted = format!(
                     "slug: \"{}\"\nname: \"{}\"\nmodel: \"{}\"\ntemperature: {}\nsystem_prompt: \"\"",
                     slug, name, model, temp
@@ -580,10 +588,8 @@ impl Jug0Client {
                 (formatted, "jgagent")
             }
             "workflow" => {
-                let definition = body
-                    .get("definition")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let def_jv = jb.get("definition");
+                let definition = def_jv.str_or("");
                 (definition.to_string(), "jg")
             }
             _ => unreachable!(),
@@ -620,7 +626,8 @@ impl Jug0Client {
             if res.status().is_success() {
                 let items: Vec<Value> = res.json().await?;
                 for item in items {
-                    if let Some(slug) = item.get("slug").and_then(|v| v.as_str()) {
+                    let ji = JValue::from(item.clone());
+                    if let Some(slug) = ji.get("slug").str() {
                         all_resources.push(ResourceInfo {
                             slug: slug.to_string(),
                             resource_type: rt.to_string(),
@@ -691,12 +698,16 @@ impl Jug0Client {
         let definition_json: Value =
             serde_json::from_str(definition).unwrap_or_else(|_| json!({"raw": definition}));
 
-        let payload = json!({
+        let mut payload = json!({
             "name": if workflow.name.is_empty() { None } else { Some(&workflow.name) },
             "endpoint_url": endpoint_url,
             "definition": definition_json,
             "is_active": true,
         });
+
+        if let Some(public) = workflow.is_public {
+            payload["is_public"] = json!(public);
+        }
 
         self.upsert_resource(&workflow.slug, "workflows", payload, force)
             .await
@@ -967,7 +978,7 @@ impl JuglansRuntime for Jug0Client {
 
             if ev.event == "meta" {
                 if let Ok(m) = serde_json::from_str::<Value>(&ev.data) {
-                    if let Some(id) = m.get("chat_id").and_then(|v| v.as_str()) {
+                    if let Some(id) = JValue::from(m.clone()).get("chat_id").str() {
                         final_id = id.to_string();
                     }
                     // 转发完整 meta 事件到前端（chat_id, user_message_id 等）

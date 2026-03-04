@@ -1,7 +1,14 @@
-/// Juglans Expression Language AST
-///
-/// Represents parsed expressions with Python-like semantics.
-/// Operates directly on `serde_json::Value` — no intermediate type system.
+//! Juglans Expression Language AST
+//!
+//! Represents parsed expressions with Python-like semantics.
+//! Operates directly on `serde_json::Value` — no intermediate type system.
+
+/// Part of an f-string: either literal text or an interpolated expression.
+#[derive(Debug, Clone)]
+pub enum FStringPart {
+    Text(String),
+    Expr(Expr),
+}
 
 #[derive(Debug, Clone)]
 pub enum Expr {
@@ -12,6 +19,8 @@ pub enum Expr {
     None,
     Array(Vec<Expr>),
     Object(Vec<(String, Expr)>),
+    /// F-string: `f"Hello {name}, count={count + 1}"`
+    FString(Vec<FStringPart>),
 
     // References
     /// Variable reference: `$ctx.field.nested` — resolved at eval time via context

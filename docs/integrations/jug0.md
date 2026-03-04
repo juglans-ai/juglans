@@ -64,16 +64,16 @@ Upload local resources to Jug0:
 
 ```bash
 # Push a Prompt
-juglans apply prompts/my-prompt.jgprompt
+juglans push prompts/my-prompt.jgprompt
 
 # Push an Agent
-juglans apply agents/my-agent.jgagent
+juglans push agents/my-agent.jgagent
 
 # Push a Workflow
-juglans apply workflows/my-flow.jg
+juglans push workflows/my-flow.jg
 
 # Force overwrite
-juglans apply prompts/my-prompt.jgprompt --force
+juglans push prompts/my-prompt.jgprompt --force
 ```
 
 ### Pull Resources

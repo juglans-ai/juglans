@@ -147,9 +147,9 @@ Resource paths support **glob patterns**, used for automatic file discovery duri
 
 ```bash
 # Batch apply using workspace configuration
-juglans apply                    # Apply all configured resources
-juglans apply --type workflow    # Apply only workflows
-juglans apply --dry-run          # Preview
+juglans push                    # Apply all configured resources
+juglans push --type workflow    # Apply only workflows
+juglans push --dry-run          # Preview
 ```
 
 **Exclude rules:**

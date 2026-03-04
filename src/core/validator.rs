@@ -3,6 +3,7 @@ use petgraph::algo::{is_cyclic_directed, toposort};
 use petgraph::Direction;
 use regex::Regex;
 use serde::Serialize;
+use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -85,6 +86,51 @@ impl ValidationResult {
 
     pub fn warning_count(&self) -> usize {
         self.warnings.len()
+    }
+
+    /// Format validation results as colored terminal output
+    pub fn format_report(&self, file_display: &str) -> String {
+        let mut out = String::new();
+        if !self.is_valid {
+            out.push_str(&format!(
+                "\x1b[1;31merror\x1b[0m: validation failed for '{}'\n",
+                file_display
+            ));
+        } else if !self.warnings.is_empty() {
+            out.push_str(&format!("\x1b[1;33mwarning\x1b[0m: '{}'\n", file_display));
+        }
+        for issue in &self.errors {
+            let node_suffix = issue
+                .node_id
+                .as_ref()
+                .map(|n| format!(" in [{}]", n))
+                .unwrap_or_default();
+            out.push_str(&format!(
+                "  \x1b[31m[{}]\x1b[0m {}{}\n",
+                issue.code, issue.message, node_suffix
+            ));
+        }
+        for issue in &self.warnings {
+            let node_suffix = issue
+                .node_id
+                .as_ref()
+                .map(|n| format!(" in [{}]", n))
+                .unwrap_or_default();
+            out.push_str(&format!(
+                "  \x1b[33m[{}]\x1b[0m {}{}\n",
+                issue.code, issue.message, node_suffix
+            ));
+        }
+        out
+    }
+
+    /// Convert to JSON error response (for web server)
+    pub fn to_error_json(&self) -> serde_json::Value {
+        json!({
+            "error": "Workflow validation failed",
+            "errors": self.errors,
+            "warnings": self.warnings,
+        })
     }
 }
 

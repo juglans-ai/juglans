@@ -86,13 +86,13 @@ enum Commands {
     /// Retrieve MCP tool schemas
     Install,
     /// Push resources to the server
-    Apply {
-        /// Files or directories to apply (if empty, uses workspace config)
+    Push {
+        /// Files or directories to push (if empty, uses workspace config)
         paths: Vec<PathBuf>,
         /// Force overwrite if resource already exists
         #[arg(long)]
         force: bool,
-        /// Preview changes without applying
+        /// Preview changes without pushing
         #[arg(long)]
         dry_run: bool,
         /// Filter by resource type (workflow, agent, prompt, tool, all)
@@ -581,6 +581,22 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
                 &mut import_stack,
                 at_base.as_deref(),
             )?;
+
+            // Pre-flight validation (after imports resolved)
+            let validation = WorkflowValidator::validate(&workflow_definition_obj);
+            if !validation.is_valid {
+                eprint!(
+                    "{}",
+                    validation.format_report(&source_file_path.display().to_string())
+                );
+                anyhow::bail!("Validation failed. Run `juglans check` for details.");
+            }
+            if validation.warning_count() > 0 {
+                eprint!(
+                    "{}",
+                    validation.format_report(&source_file_path.display().to_string())
+                );
+            }
 
             let mut prompt_registry_inst = PromptRegistry::new();
             let mut agent_registry_inst = AgentRegistry::new();
@@ -1322,6 +1338,34 @@ fn handle_check(path: Option<&Path>, show_all: bool, output_format: &str) -> Res
                             }
                         }
                         Err(e) => {
+                            // parse() 失败 → 尝试作为纯库文件解析
+                            if let Ok(lib_graph) = GraphParser::parse_lib(&content) {
+                                valid_count += 1;
+                                let slug = if lib_graph.slug.is_empty() {
+                                    file_name.to_string()
+                                } else {
+                                    lib_graph.slug.clone()
+                                };
+                                let func_count = lib_graph.functions.len();
+                                if show_all {
+                                    println!(
+                                        "    \x1b[32mok\x1b[0m[library]: {} — {} ({} function(s))",
+                                        relative_path, slug, func_count
+                                    );
+                                }
+                                if output_format == "json" {
+                                    results.push(serde_json::json!({
+                                        "file": relative_path,
+                                        "type": "library",
+                                        "slug": slug,
+                                        "valid": true,
+                                        "functions": func_count,
+                                    }));
+                                }
+                                continue;
+                            }
+
+                            // 两种解析都失败，报原始错误
                             error_count += 1;
                             let full_err = e.to_string();
                             println!(
@@ -1504,7 +1548,7 @@ fn handle_check(path: Option<&Path>, show_all: bool, output_format: &str) -> Res
     Ok(())
 }
 
-async fn handle_apply(
+async fn handle_push(
     paths: Vec<PathBuf>,
     force: bool,
     dry_run: bool,
@@ -1515,7 +1559,7 @@ async fn handle_apply(
     let local_config = JuglansConfig::load()?;
 
     // 收集要处理的文件
-    let mut files_to_apply = Vec::new();
+    let mut files_to_push = Vec::new();
 
     if paths.is_empty() {
         // 无参数：使用 workspace 配置
@@ -1546,7 +1590,7 @@ async fn handle_apply(
                 for entry in glob::glob(&pattern)? {
                     let path = entry?;
                     if !should_exclude(&path, &workspace.exclude) {
-                        files_to_apply.push(path);
+                        files_to_push.push(path);
                     }
                 }
             }
@@ -1557,26 +1601,26 @@ async fn handle_apply(
         // 有参数：扫描指定路径
         for path in paths {
             if path.is_file() {
-                files_to_apply.push(path);
+                files_to_push.push(path);
             } else if path.is_dir() {
-                scan_directory(&path, &mut files_to_apply, recursive, &resource_type)?;
+                scan_directory(&path, &mut files_to_push, recursive, &resource_type)?;
             } else {
                 // Glob 模式
                 for entry in glob::glob(path.to_str().unwrap_or(""))? {
-                    files_to_apply.push(entry?);
+                    files_to_push.push(entry?);
                 }
             }
         }
     }
 
-    if files_to_apply.is_empty() {
-        println!("⚠️  No files found to apply.");
+    if files_to_push.is_empty() {
+        println!("⚠️  No files found to push.");
         return Ok(());
     }
 
     // Sort files by dependency order: workflows → prompts → agents
     // This ensures agents can reference workflows that were just created
-    files_to_apply.sort_by_key(|path| {
+    files_to_push.sort_by_key(|path| {
         let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
         match ext {
             "jg" | "jgflow" => 0, // Workflows first (no dependencies)
@@ -1588,8 +1632,8 @@ async fn handle_apply(
     });
 
     // 统计
-    let mut stats = ApplyStats::default();
-    for file in &files_to_apply {
+    let mut stats = PushStats::default();
+    for file in &files_to_push {
         if let Some(ext) = file.extension().and_then(|s| s.to_str()) {
             match ext {
                 "jg" | "jgflow" => stats.workflows += 1,
@@ -1617,29 +1661,79 @@ async fn handle_apply(
 
     if dry_run {
         println!("\n🔍 Dry run mode - preview only:\n");
-        for file in &files_to_apply {
+        for file in &files_to_push {
             println!("  ✓ {}", file.display());
         }
-        println!("\n📊 Total: {} file(s)", files_to_apply.len());
-        println!("\nRun without --dry-run to apply.");
+        println!("\n📊 Total: {} file(s)", files_to_push.len());
+        println!("\nRun without --dry-run to push.");
         return Ok(());
     }
 
+    // Pre-push validation for workflow files
+    {
+        let mut validation_failed = false;
+        for file in &files_to_push {
+            let ext = file.extension().and_then(|s| s.to_str()).unwrap_or("");
+            if ext == "jgflow" {
+                if let Ok(content) = std::fs::read_to_string(file) {
+                    if let Ok(manifest) = GraphParser::parse_manifest(&content) {
+                        if !manifest.source.is_empty() {
+                            let source_path = file
+                                .parent()
+                                .unwrap_or(Path::new("."))
+                                .join(&manifest.source);
+                            if let Ok(source_content) = std::fs::read_to_string(&source_path) {
+                                if let Ok(graph) = GraphParser::parse(&source_content) {
+                                    let result = WorkflowValidator::validate(&graph);
+                                    if !result.is_valid {
+                                        eprint!(
+                                            "{}",
+                                            result.format_report(&file.display().to_string())
+                                        );
+                                        validation_failed = true;
+                                    } else if result.warning_count() > 0 {
+                                        eprint!(
+                                            "{}",
+                                            result.format_report(&file.display().to_string())
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if validation_failed {
+            anyhow::bail!("Push aborted due to validation errors.");
+        }
+    }
+
     // 实际执行
-    println!("\n📤 Applying resources...\n");
+    println!("\n📤 Pushing resources...\n");
 
     let jug0_api_ptr = Jug0Client::new(&local_config);
     let mut success_count = 0;
     let mut skip_count = 0;
     let mut error_count = 0;
+    let mut workflow_slug_map: HashMap<String, String> = HashMap::new();
 
-    for file in &files_to_apply {
-        match apply_single_file(file, &jug0_api_ptr, &local_config, force, &endpoint).await {
-            Ok(ApplyResult::Success(msg)) => {
+    for file in &files_to_push {
+        match push_single_file(
+            file,
+            &jug0_api_ptr,
+            &local_config,
+            force,
+            &endpoint,
+            &mut workflow_slug_map,
+        )
+        .await
+        {
+            Ok(PushResult::Success(msg)) => {
                 println!("  ✅ {}", msg);
                 success_count += 1;
             }
-            Ok(ApplyResult::Skipped(msg)) => {
+            Ok(PushResult::Skipped(msg)) => {
                 println!("  ⚠️  {}", msg);
                 skip_count += 1;
             }
@@ -1667,14 +1761,14 @@ async fn handle_apply(
 }
 
 #[derive(Default)]
-struct ApplyStats {
+struct PushStats {
     workflows: usize,
     agents: usize,
     prompts: usize,
     tools: usize,
 }
 
-enum ApplyResult {
+enum PushResult {
     Success(String),
     Skipped(String),
 }
@@ -1727,13 +1821,14 @@ fn scan_directory(
     Ok(())
 }
 
-async fn apply_single_file(
+async fn push_single_file(
     file: &Path,
     jug0_client: &Jug0Client,
     config: &JuglansConfig,
     force: bool,
     endpoint: &Option<String>,
-) -> Result<ApplyResult> {
+    workflow_slug_map: &mut HashMap<String, String>,
+) -> Result<PushResult> {
     let raw_file_data = fs::read_to_string(file)?;
     let ext_str = file.extension().and_then(|s| s.to_str()).unwrap_or("");
     let filename = file
@@ -1743,10 +1838,18 @@ async fn apply_single_file(
 
     match ext_str {
         "jgagent" => {
-            let msg = jug0_client
-                .apply_agent(&AgentParser::parse(&raw_file_data)?, force)
-                .await?;
-            Ok(ApplyResult::Success(format!(
+            let mut agent = AgentParser::parse(&raw_file_data)?;
+            if let Some(ref wf_ref) = agent.workflow {
+                let stem = Path::new(wf_ref.as_str())
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(wf_ref);
+                if let Some(real_slug) = workflow_slug_map.get(stem) {
+                    agent.workflow = Some(real_slug.clone());
+                }
+            }
+            let msg = jug0_client.apply_agent(&agent, force).await?;
+            Ok(PushResult::Success(format!(
                 "agent: {} - {}",
                 filename, msg
             )))
@@ -1755,14 +1858,14 @@ async fn apply_single_file(
             let msg = jug0_client
                 .apply_prompt(&PromptParser::parse(&raw_file_data)?, force)
                 .await?;
-            Ok(ApplyResult::Success(format!(
+            Ok(PushResult::Success(format!(
                 "prompt: {} - {}",
                 filename, msg
             )))
         }
         "jg" => {
-            Ok(ApplyResult::Skipped(format!(
-                "workflow: {} - .jg files cannot be applied directly. Use a .jgflow manifest with: source: \"./{}\"",
+            Ok(PushResult::Skipped(format!(
+                "workflow: {} - .jg files cannot be pushed directly. Use a .jgflow manifest with: source: \"./{}\"",
                 filename, filename
             )))
         }
@@ -1813,7 +1916,18 @@ async fn apply_single_file(
             let msg = jug0_client
                 .apply_workflow(&workflow, &definition, &endpoint_url, force)
                 .await?;
-            Ok(ApplyResult::Success(format!(
+
+            // Record slug mapping so agents can resolve workflow refs
+            if !workflow.source.is_empty() {
+                if let Some(stem) = Path::new(&workflow.source)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                {
+                    workflow_slug_map.insert(stem.to_string(), workflow.slug.clone());
+                }
+            }
+
+            Ok(PushResult::Success(format!(
                 "workflow: {} - {}",
                 filename, msg
             )))
@@ -1821,7 +1935,7 @@ async fn apply_single_file(
         "json" => {
             // Tool definition files - skip for now as they don't need to be uploaded
             // They are loaded locally by workflows when needed
-            Ok(ApplyResult::Skipped(format!(
+            Ok(PushResult::Skipped(format!(
                 "tool: {} - Tool definitions are loaded locally, no upload needed",
                 filename
             )))
@@ -1957,7 +2071,7 @@ async fn handle_skills(action: &SkillsAction) -> Result<()> {
                 prompts_dir.display()
             );
             println!(
-                "Use 'juglans apply {}/*.jgprompt' to push to jug0.",
+                "Use 'juglans push {}/*.jgprompt' to push to jug0.",
                 prompts_dir.display()
             );
         }
@@ -2254,7 +2368,7 @@ async fn main() -> Result<()> {
         match sub_command_enum {
             Commands::Init { name } => handle_init(name)?,
             Commands::Install => handle_install().await?,
-            Commands::Apply {
+            Commands::Push {
                 paths,
                 force,
                 dry_run,
@@ -2262,7 +2376,7 @@ async fn main() -> Result<()> {
                 recursive,
                 endpoint,
             } => {
-                handle_apply(
+                handle_push(
                     paths.clone(),
                     *force,
                     *dry_run,

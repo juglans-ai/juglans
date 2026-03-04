@@ -6,6 +6,7 @@ use tokio::sync::mpsc;
 #[derive(Debug)]
 pub enum AppEvent {
     Key(KeyEvent),
+    Paste(String),
     MouseScrollUp { x: u16, y: u16 },
     MouseScrollDown { x: u16, y: u16 },
     MouseClick { x: u16, y: u16 },
@@ -90,6 +91,11 @@ impl EventHandler {
                             }
                             _ => {}
                         },
+                        Ok(Event::Paste(text)) => {
+                            if tx.send(AppEvent::Paste(text)).is_err() {
+                                return;
+                            }
+                        }
                         Ok(Event::Resize(_w, _h)) => {
                             if tx.send(AppEvent::Resize((), ())).is_err() {
                                 return;

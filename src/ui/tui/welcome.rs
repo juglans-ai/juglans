@@ -104,6 +104,8 @@ impl<'a> Widget for WelcomeWidget<'a> {
             focused: self.app.active_dialog.is_none(),
             scroll_offset: self.app.editor_scroll,
             streaming: self.app.streaming,
+            attachments: &self.app.attachments,
+            attachment_selected: self.app.attachment_selected,
         };
         editor.render(editor_rect, buf);
 

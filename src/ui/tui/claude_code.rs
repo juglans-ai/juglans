@@ -1,10 +1,12 @@
 use anyhow::{anyhow, Context};
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::mpsc;
 use tracing::debug;
+
+use super::messages::{Attachment, AttachmentKind};
 
 // ---------------------------------------------------------------------------
 // ClaudeEvent — events sent from the background parser task to the TUI
@@ -217,11 +219,56 @@ struct UsagePayload {
 // spawn_claude — launch the subprocess and return handle + event receiver
 // ---------------------------------------------------------------------------
 
+/// Build the `content` field for a user message.
+/// Without attachments: plain string (backward compatible).
+/// With attachments: array of content blocks.
+pub fn build_content_blocks(text: &str, attachments: &[Attachment]) -> Value {
+    if attachments.is_empty() {
+        return Value::String(text.to_string());
+    }
+
+    let mut blocks: Vec<Value> = Vec::new();
+
+    for att in attachments {
+        match &att.kind {
+            AttachmentKind::Image {
+                media_type,
+                base64_data,
+            } => {
+                blocks.push(json!({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": base64_data,
+                    }
+                }));
+            }
+            AttachmentKind::TextFile { content } => {
+                blocks.push(json!({
+                    "type": "text",
+                    "text": format!("<file name=\"{}\">\n{}\n</file>", att.file_name, content)
+                }));
+            }
+        }
+    }
+
+    if !text.is_empty() {
+        blocks.push(json!({
+            "type": "text",
+            "text": text,
+        }));
+    }
+
+    Value::Array(blocks)
+}
+
 pub async fn spawn_claude(
     prompt: &str,
     model: &str,
     session_id: Option<&str>,
     cwd: &str,
+    attachments: &[Attachment],
 ) -> anyhow::Result<(ClaudeProcess, mpsc::UnboundedReceiver<ClaudeEvent>)> {
     let claude_bin = std::env::var("CLAUDE_BIN").unwrap_or_else(|_| "claude".to_string());
 
@@ -292,12 +339,13 @@ pub async fn spawn_claude(
     stdin.flush().await?;
 
     // Send user message
+    let content = build_content_blocks(prompt, attachments);
     let user_msg = json!({
         "type": "user",
         "session_id": session_id.unwrap_or(""),
         "message": {
             "role": "user",
-            "content": prompt
+            "content": content
         },
         "parent_tool_use_id": null
     });
@@ -461,20 +509,6 @@ pub fn floor_char_boundary(s: &str, i: usize) -> usize {
         let mut pos = i;
         while pos > 0 && !s.is_char_boundary(pos) {
             pos -= 1;
-        }
-        pos
-    }
-}
-
-/// Find the smallest byte index >= `i` that is a valid char boundary.
-/// Equivalent to `str::ceil_char_boundary` (stable since 1.91).
-pub fn ceil_char_boundary(s: &str, i: usize) -> usize {
-    if i >= s.len() {
-        s.len()
-    } else {
-        let mut pos = i;
-        while pos < s.len() && !s.is_char_boundary(pos) {
-            pos += 1;
         }
         pos
     }

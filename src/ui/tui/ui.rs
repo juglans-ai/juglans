@@ -1,6 +1,6 @@
 use ratatui::{
-    layout::{Constraint, Layout},
-    style::{Color, Style},
+    layout::{Constraint, Layout, Rect},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Clear, Paragraph},
     Frame,
@@ -72,7 +72,8 @@ fn draw_chat(f: &mut Frame, app: &App) {
 
     // Dynamic editor height: expands with content lines, max 6 text lines
     let text_lines = app.editor.textarea.lines().len() as u16;
-    let editor_height = (text_lines + 5).clamp(6, 11); // +5 = top pad + gap + variant + bottom pad + hints
+    let has_attachments = !app.attachments.is_empty();
+    let editor_height = (text_lines + 5 + if has_attachments { 1 } else { 0 }).clamp(6, 12);
 
     // Left panel: [messages] [gap] [editor]
     let left_chunks = Layout::vertical([
@@ -91,6 +92,7 @@ fn draw_chat(f: &mut Frame, app: &App) {
         waiting_for_response: app.waiting_for_response,
         _tick_counter: app.tick_counter,
         _request_start: app.request_start,
+        link_registry: &app.link_registry,
     };
     f.render_widget(messages, left_chunks[0]);
 
@@ -98,12 +100,20 @@ fn draw_chat(f: &mut Frame, app: &App) {
     let ma = left_chunks[0];
     app.messages_area.set(ma);
     {
+        use unicode_width::UnicodeWidthStr;
         let mut cached = Vec::with_capacity(ma.height as usize);
         for y in ma.y..ma.y + ma.height {
             let mut line = String::new();
-            for x in ma.x..ma.x + ma.width {
+            let mut x = ma.x;
+            while x < ma.x + ma.width {
                 if let Some(cell) = f.buffer_mut().cell((x, y)) {
-                    line.push_str(cell.symbol());
+                    let sym = cell.symbol();
+                    line.push_str(sym);
+                    // Skip continuation cells for wide characters (CJK = 2 cols)
+                    let sym_w = UnicodeWidthStr::width(sym).max(1) as u16;
+                    x += sym_w;
+                } else {
+                    x += 1;
                 }
             }
             cached.push(line);
@@ -123,6 +133,60 @@ fn draw_chat(f: &mut Frame, app: &App) {
             }
         }
         *app.user_msg_rows.borrow_mut() = rows;
+    }
+
+    // Detect link regions by scanning for accent-colored underlined cells
+    {
+        use super::app::LinkRegion;
+        use unicode_width::UnicodeWidthStr;
+        let mut regions: Vec<LinkRegion> = Vec::new();
+        for y in ma.y..ma.y + ma.height {
+            let mut x = ma.x;
+            while x < ma.x + ma.width {
+                if let Some(cell) = f.buffer_mut().cell((x, y)) {
+                    if cell.fg == app.theme.accent && cell.modifier.contains(Modifier::UNDERLINED) {
+                        // Start of a link span
+                        let x_start = x;
+                        let mut text = String::new();
+                        while x < ma.x + ma.width {
+                            if let Some(c) = f.buffer_mut().cell((x, y)) {
+                                if c.fg == app.theme.accent
+                                    && c.modifier.contains(Modifier::UNDERLINED)
+                                {
+                                    let sym = c.symbol();
+                                    text.push_str(sym);
+                                    // Advance by display width to skip continuation cells (CJK = 2 cols)
+                                    let sym_w = UnicodeWidthStr::width(sym).max(1) as u16;
+                                    x += sym_w;
+                                } else {
+                                    break;
+                                }
+                            } else {
+                                break;
+                            }
+                        }
+                        let text = text.trim().to_string();
+                        if !text.is_empty() {
+                            regions.push(LinkRegion {
+                                y,
+                                x_start,
+                                x_end: x,
+                                text,
+                            });
+                        }
+                        continue;
+                    }
+                }
+                // Advance by display width for non-link cells too
+                let sym_w = f
+                    .buffer_mut()
+                    .cell((x, y))
+                    .map(|c| UnicodeWidthStr::width(c.symbol()).max(1) as u16)
+                    .unwrap_or(1);
+                x += sym_w;
+            }
+        }
+        *app.link_regions.borrow_mut() = regions;
     }
 
     // Selection highlight
@@ -154,6 +218,25 @@ fn draw_chat(f: &mut Frame, app: &App) {
                     }
                 }
             }
+        }
+    }
+
+    // Copy toast: overlay on top-right corner of messages area
+    if let Some((msg, _)) = &app.status_message {
+        let label = format!(" \u{2713} {} ", msg);
+        let toast_w = label.chars().count() as u16;
+        if ma.width > toast_w + 1 {
+            let toast_rect = Rect {
+                x: ma.x + ma.width - toast_w - 1,
+                y: ma.y,
+                width: toast_w,
+                height: 1,
+            };
+            let toast_line = Line::from(Span::styled(
+                label,
+                Style::default().fg(app.theme.bg).bg(app.theme.accent),
+            ));
+            f.render_widget(Paragraph::new(toast_line), toast_rect);
         }
     }
 
@@ -197,6 +280,8 @@ fn draw_chat(f: &mut Frame, app: &App) {
         focused: app.active_dialog.is_none(),
         scroll_offset: app.editor_scroll,
         streaming: app.streaming,
+        attachments: &app.attachments,
+        attachment_selected: app.attachment_selected,
     };
     f.render_widget(editor, left_chunks[2]);
 

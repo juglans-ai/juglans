@@ -4,6 +4,7 @@ pub mod context;
 pub mod expr_ast;
 pub mod expr_eval;
 pub mod graph;
+pub mod jvalue;
 pub mod parser;
 pub mod prompt_parser;
 pub mod renderer;

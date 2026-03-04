@@ -32,6 +32,17 @@ pub enum NodeType {
         /// Named arguments
         kwargs: HashMap<String, String>,
     },
+    /// Class instantiation: new ClassName(field=value, ...)
+    NewInstance {
+        class_name: String,
+        args: HashMap<String, String>,
+    },
+    /// Method call on an instance: $instance.method(args)
+    MethodCall {
+        instance_path: String,
+        method_name: String,
+        args: HashMap<String, String>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -98,6 +109,10 @@ pub struct WorkflowGraph {
     pub lib_imports: HashMap<String, String>,
     // 【新增】列表形式导入的自动命名空间集合（resolver 中允许被 slug 覆盖）
     pub lib_auto_namespaces: HashSet<String>,
+    // 资源可见性
+    pub is_public: Option<bool>,
+    // Class 定义 (class_name -> ClassDef)
+    pub classes: HashMap<String, ClassDef>,
 }
 
 /// 函数节点定义：带参数的可复用节点
@@ -105,6 +120,24 @@ pub struct WorkflowGraph {
 pub struct FunctionDef {
     pub params: Vec<String>,
     pub body: Box<WorkflowGraph>,
+}
+
+/// Class 字段定义：名称 + 可选类型注解 + 可选默认值表达式
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct ClassField {
+    pub name: String,
+    /// 类型注解（Pydantic 风格 body 字段声明时设置，如 "str", "int", "float"）
+    pub type_hint: Option<String>,
+    /// 默认值原始表达式（运行时求值）
+    pub default: Option<String>,
+}
+
+/// Class 定义：字段列表 + 方法集合
+#[derive(Debug, Clone)]
+pub struct ClassDef {
+    pub fields: Vec<ClassField>,
+    pub methods: HashMap<String, FunctionDef>,
 }
 
 impl Default for WorkflowGraph {
@@ -132,6 +165,8 @@ impl Default for WorkflowGraph {
             functions: HashMap::new(),
             lib_imports: HashMap::new(),
             lib_auto_namespaces: HashSet::new(),
+            is_public: None,
+            classes: HashMap::new(),
         }
     }
 }

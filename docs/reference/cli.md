@@ -221,12 +221,12 @@ juglans install --force
 
 ## Resource Management
 
-### apply - Push Resources
+### push - Push Resources
 
 Push local resources to the Jug0 backend, supporting single file or batch operations.
 
 ```bash
-juglans apply [PATHS...] [OPTIONS]
+juglans push [PATHS...] [OPTIONS]
 ```
 
 **Arguments:**
@@ -248,12 +248,12 @@ juglans apply [PATHS...] [OPTIONS]
 
 ```bash
 # Push a single file
-juglans apply src/prompts/my-prompt.jgprompt
-juglans apply src/agents/my-agent.jgagent
-juglans apply src/workflows/my-flow.jgflow
+juglans push src/prompts/my-prompt.jgprompt
+juglans push src/agents/my-agent.jgagent
+juglans push src/workflows/my-flow.jgflow
 
 # Force overwrite
-juglans apply src/prompts/my-prompt.jgprompt --force
+juglans push src/prompts/my-prompt.jgprompt --force
 ```
 
 #### Batch Operations
@@ -271,20 +271,20 @@ tools = ["src/tools/**/*.json"]
 exclude = ["**/*.backup", "**/test_*"]
 ```
 
-Then run apply without arguments:
+Then run push without arguments:
 
 ```bash
-# Apply all configured resources
-juglans apply
+# Push all configured resources
+juglans push
 
-# Preview files that will be applied
-juglans apply --dry-run
+# Preview files that will be pushed
+juglans push --dry-run
 
-# Apply only workflows
-juglans apply --type workflow
+# Push only workflows
+juglans push --type workflow
 
-# Apply only agents
-juglans apply -t agent
+# Push only agents
+juglans push -t agent
 ```
 
 **Output example:**
@@ -297,12 +297,12 @@ juglans apply -t agent
   👤 5 agent(s)
   📝 8 prompt(s)
 
-📤 Applying resources...
+📤 Pushing resources...
 
-  ✅ workflow: trading-assistant.jg - Applied
-  ✅ agent: trader.jgagent - Applied
+  ✅ workflow: trading-assistant.jg - Pushed
+  ✅ agent: trader.jgagent - Pushed
   ⚠️  agent: assistant.jgagent - Skipped (exists, use --force)
-  ✅ prompt: greeting.jgprompt - Applied
+  ✅ prompt: greeting.jgprompt - Pushed
 
 📊 Summary:
   ✅ 9 succeeded
@@ -310,40 +310,40 @@ juglans apply -t agent
   ❌ 0 failed
 ```
 
-**Apply specific directories:**
+**Push specific directories:**
 
 ```bash
-# Apply an entire directory
-juglans apply src/workflows/
+# Push an entire directory
+juglans push src/workflows/
 
-# Recursively apply all subdirectories
-juglans apply src/ -r
+# Recursively push all subdirectories
+juglans push src/ -r
 
-# Apply multiple directories
-juglans apply src/agents/ src/prompts/
+# Push multiple directories
+juglans push src/agents/ src/prompts/
 
-# Apply a specific type
-juglans apply src/ -r --type workflow
+# Push a specific type
+juglans push src/ -r --type workflow
 ```
 
 **Glob patterns:**
 
 ```bash
-# Apply all workflows
-juglans apply "src/**/*.jg"
+# Push all workflows
+juglans push "src/**/*.jg"
 
-# Apply files with a specific prefix
-juglans apply "src/agents/prod_*.jgagent"
+# Push files with a specific prefix
+juglans push "src/agents/prod_*.jgagent"
 ```
 
 **Dry-run mode:**
 
 ```bash
-# Preview files that will be applied
-juglans apply --dry-run
+# Preview files that will be pushed
+juglans push --dry-run
 
 # Preview a specific directory
-juglans apply src/workflows/ --dry-run
+juglans push src/workflows/ --dry-run
 ```
 
 Output:
@@ -365,7 +365,7 @@ Output:
 
 📊 Total: 8 file(s)
 
-Run without --dry-run to apply.
+Run without --dry-run to push.
 ```
 
 ---
@@ -449,7 +449,7 @@ No resources found.
 **Use cases:**
 
 - View resources already on the server
-- Confirm whether resources have been successfully applied
+- Confirm whether resources have been successfully pushed
 - Confirm resource existence before pulling
 
 **Notes:**

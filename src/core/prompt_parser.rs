@@ -37,6 +37,7 @@ pub struct PromptResource {
     pub inputs: Value,
     pub ast: Vec<TemplateNode>,
     pub content: String,
+    pub is_public: Option<bool>,
 }
 
 pub struct PromptParser;
@@ -67,6 +68,10 @@ impl PromptParser {
                                 if let Some(obj_node) = meta.into_inner().next() {
                                     resource.inputs = Self::parse_object(obj_node);
                                 }
+                            }
+                            Rule::key_public => {
+                                let val = meta.into_inner().next().unwrap().as_str();
+                                resource.is_public = Some(val == "true");
                             }
                             _ => {}
                         }

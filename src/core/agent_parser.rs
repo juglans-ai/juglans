@@ -25,6 +25,8 @@ pub struct AgentResource {
     pub username: Option<String>,
     /// Avatar image (local file path or URL)
     pub avatar: Option<String>,
+    /// Visibility (default false)
+    pub is_public: Option<bool>,
 }
 
 pub struct AgentParser;
@@ -79,6 +81,10 @@ impl AgentParser {
                 Rule::key_skills => agent.skills = Self::parse_list(pair),
                 Rule::key_username => agent.username = Some(Self::parse_string(pair)),
                 Rule::key_avatar => agent.avatar = Some(Self::parse_string(pair)),
+                Rule::key_public => {
+                    let val = pair.into_inner().next().unwrap().as_str();
+                    agent.is_public = Some(val == "true");
+                }
                 Rule::key_system => {
                     let inner = pair.into_inner().next().unwrap();
                     match inner.as_rule() {

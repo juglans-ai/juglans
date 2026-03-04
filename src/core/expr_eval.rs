@@ -10,7 +10,7 @@ use pest::Parser;
 use pest_derive::Parser;
 use serde_json::{json, Value};
 
-use super::expr_ast::{BinOp, Expr, UnaryOp};
+use super::expr_ast::{BinOp, Expr, FStringPart, UnaryOp};
 
 // ============================================================
 // Pest Grammar
@@ -58,6 +58,18 @@ impl ExprEvaluator {
 
         let ast = self.parse_expression(expr_pair)?;
         self.eval_expr(&ast, resolver as &dyn Fn(&str) -> Option<Value>)
+    }
+
+    /// Parse an expression string into an AST node (used internally for f-string interpolation)
+    fn parse(&self, expr_str: &str) -> Result<Expr> {
+        let trimmed = expr_str.trim();
+        let pairs = ExprParser::parse(Rule::expression, trimmed)
+            .map_err(|e| anyhow!("F-string expression parse error: {}", e))?;
+        let expr_pair = pairs
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("Empty parse result for f-string expr '{}'", trimmed))?;
+        self.parse_expression(expr_pair)
     }
 
     /// Evaluate and return as bool using Python truthiness
@@ -211,6 +223,7 @@ impl ExprEvaluator {
             Rule::func_call => self.parse_func_call(pair),
             Rule::number => self.parse_number(pair),
             Rule::string => self.parse_string(pair),
+            Rule::fstring => self.parse_fstring(pair),
             Rule::bool_lit => {
                 let inner = pair.into_inner().next().unwrap();
                 match inner.as_rule() {
@@ -476,6 +489,79 @@ impl ExprEvaluator {
         }
         result
     }
+
+    fn parse_fstring(&self, pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
+        let body = pair.into_inner().next().map(|p| p.as_str()).unwrap_or("");
+
+        let mut parts = Vec::new();
+        let mut chars = body.chars().peekable();
+        let mut text_buf = String::new();
+
+        while let Some(c) = chars.next() {
+            match c {
+                '\\' => {
+                    if let Some(&next) = chars.peek() {
+                        chars.next();
+                        match next {
+                            'n' => text_buf.push('\n'),
+                            'r' => text_buf.push('\r'),
+                            't' => text_buf.push('\t'),
+                            '\\' => text_buf.push('\\'),
+                            '"' => text_buf.push('"'),
+                            other => {
+                                text_buf.push('\\');
+                                text_buf.push(other);
+                            }
+                        }
+                    }
+                }
+                '{' if chars.peek() == Some(&'{') => {
+                    chars.next();
+                    text_buf.push('{');
+                }
+                '{' => {
+                    // Flush text buffer
+                    if !text_buf.is_empty() {
+                        parts.push(FStringPart::Text(std::mem::take(&mut text_buf)));
+                    }
+                    // Extract expression until matching '}'
+                    let mut depth = 1;
+                    let mut expr_str = String::new();
+                    for ch in chars.by_ref() {
+                        match ch {
+                            '{' => {
+                                depth += 1;
+                                expr_str.push(ch);
+                            }
+                            '}' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                                expr_str.push(ch);
+                            }
+                            _ => expr_str.push(ch),
+                        }
+                    }
+                    // Parse expression string
+                    let expr = self.parse(&expr_str)?;
+                    parts.push(FStringPart::Expr(expr));
+                }
+                '}' if chars.peek() == Some(&'}') => {
+                    chars.next();
+                    text_buf.push('}');
+                }
+                _ => text_buf.push(c),
+            }
+        }
+
+        // Flush remaining text
+        if !text_buf.is_empty() {
+            parts.push(FStringPart::Text(text_buf));
+        }
+
+        Ok(Expr::FString(parts))
+    }
 }
 
 // ============================================================
@@ -494,6 +580,23 @@ impl ExprEvaluator {
                 }
             }
             Expr::String(s) => Ok(Value::String(s.clone())),
+            Expr::FString(parts) => {
+                let mut buf = String::new();
+                for part in parts {
+                    match part {
+                        FStringPart::Text(t) => buf.push_str(t),
+                        FStringPart::Expr(e) => {
+                            let val = self.eval_expr(e, resolver)?;
+                            match &val {
+                                Value::String(s) => buf.push_str(s),
+                                Value::Null => buf.push_str("None"),
+                                _ => buf.push_str(&val.to_string()),
+                            }
+                        }
+                    }
+                }
+                Ok(Value::String(buf))
+            }
             Expr::Bool(b) => Ok(Value::Bool(*b)),
             Expr::None => Ok(Value::Null),
 
@@ -1240,6 +1343,9 @@ fn access_field(obj: &Value, field: &str) -> Value {
         Value::String(s) => {
             if field == "length" {
                 json!(s.len())
+            } else if let Ok(parsed) = serde_json::from_str::<Value>(s) {
+                // 字符串是 JSON 编码的对象/数组，先解析再导航
+                access_field(&parsed, field)
             } else {
                 Value::Null
             }
@@ -1413,9 +1519,18 @@ fn call_builtin(name: &str, args: &[Value]) -> Result<Value> {
 
         "json" => {
             require_args(name, args, 1)?;
-            Ok(Value::String(
-                serde_json::to_string(&args[0]).unwrap_or_default(),
-            ))
+            match &args[0] {
+                Value::String(s) => {
+                    // 字符串输入 → 解析 JSON（decode 方向）
+                    Ok(serde_json::from_str(s).unwrap_or_else(|_| args[0].clone()))
+                }
+                other => {
+                    // 非字符串 → 序列化为 JSON 字符串（encode 方向）
+                    Ok(Value::String(
+                        serde_json::to_string(other).unwrap_or_default(),
+                    ))
+                }
+            }
         }
 
         "keys" => {
@@ -2513,6 +2628,7 @@ fn require_min_args(name: &str, args: &[Value], min: usize) -> Result<()> {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::approx_constant)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -2520,11 +2636,7 @@ mod tests {
     fn make_resolver(ctx: Value) -> impl Fn(&str) -> Option<Value> {
         move |path: &str| {
             // Strip ctx. prefix (like executor does for WorkflowContext)
-            let clean = if path.starts_with("ctx.") {
-                &path[4..]
-            } else {
-                path
-            };
+            let clean = path.strip_prefix("ctx.").unwrap_or(path);
             let parts: Vec<&str> = clean.split('.').collect();
             let pointer = format!("/{}", parts.join("/"));
             ctx.pointer(&pointer).cloned()
@@ -3503,5 +3615,65 @@ mod tests {
             eval("map(zip([1, 2, 3], [10, 20, 30]), pair => first(pair) + last(pair))"),
             json!([11, 22, 33])
         );
+    }
+
+    // ---- F-String Interpolation ----
+
+    #[test]
+    fn test_fstring_basic() {
+        let ctx = json!({"name": "Alice", "age": 30});
+        assert_eq!(
+            eval_with(r#"f"Hello {$ctx.name}""#, ctx),
+            json!("Hello Alice")
+        );
+    }
+
+    #[test]
+    fn test_fstring_expression() {
+        let ctx = json!({"count": 5});
+        assert_eq!(
+            eval_with(r#"f"Count: {$ctx.count + 1}""#, ctx),
+            json!("Count: 6")
+        );
+    }
+
+    #[test]
+    fn test_fstring_escaped_braces() {
+        assert_eq!(eval(r#"f"Escaped {{braces}}""#), json!("Escaped {braces}"));
+    }
+
+    #[test]
+    fn test_fstring_plain_text() {
+        assert_eq!(eval(r#"f"No interpolation""#), json!("No interpolation"));
+    }
+
+    #[test]
+    fn test_fstring_empty() {
+        assert_eq!(eval(r#"f"""#), json!(""));
+    }
+
+    #[test]
+    fn test_fstring_multiple_interps() {
+        let ctx = json!({"a": "X", "b": "Y"});
+        assert_eq!(
+            eval_with(r#"f"{$ctx.a} and {$ctx.b}""#, ctx),
+            json!("X and Y")
+        );
+    }
+
+    #[test]
+    fn test_fstring_null_value() {
+        assert_eq!(eval(r#"f"val={none}""#), json!("val=None"));
+    }
+
+    #[test]
+    fn test_fstring_number_value() {
+        assert_eq!(eval(r#"f"pi={3.14}""#), json!("pi=3.14"));
+    }
+
+    #[test]
+    fn test_fstring_nested_func() {
+        // Inside f-strings, use single quotes for string literals
+        assert_eq!(eval(r#"f"upper={upper('hello')}""#), json!("upper=HELLO"));
     }
 }

@@ -78,6 +78,7 @@ ratatui = "0.29"
 arboard = "3"
 tui-textarea = "0.7"
 unicode-width = "0.2"
+sqlx = { version = "0.8", features = ["runtime-tokio-native-tls", "postgres", "sqlite", "mysql", "any", "json", "chrono", "uuid"] }
 
 [features]
 default = ["native"]

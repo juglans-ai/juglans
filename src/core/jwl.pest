@@ -11,8 +11,8 @@ boolean = { "true" | "false" }
 null = { "null" }
 // 支持负数和小数的数字定义
 number = @{ "-"? ~ ("0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*) ~ ("." ~ ASCII_DIGIT*)? }
-// 带引号的字符串定义，支持转义
-string = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+// 带引号的字符串定义，支持反斜杠转义（\"  \\）
+string = @{ "\"" ~ (!("\"" | "\\") ~ ANY | "\\" ~ ANY)* ~ "\"" }
 // 标准标识符定义：字母或下划线开头，后跟字母数字或下划线
 identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 
@@ -25,6 +25,8 @@ namespaced_id = @{ identifier ~ ("." ~ identifier)* }
 
 // JWL 特有的变量引用语法，以 $ 开头
 variable_ref = @{ "$" ~ (ASCII_ALPHANUMERIC | "_" | ".")+ }
+// 兼容 v2 语法：$ 前缀可选
+var_or_ident = @{ "$"? ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_" | ".")* }
 
 // 递归的 JSON 对象与数组支持
 json_pair = { string ~ ":" ~ value }
@@ -39,13 +41,14 @@ value = _{ json_object | json_array | string | number | boolean | null }
 // - flows: 子工作流导入映射（用于跨工作流图合并）
 // - prompts/agents/tools: 本地资源导入
 // - python: Python 模块导入（支持系统模块、.py 文件、glob 模式）
-meta_key = { "slug" | "name" | "version" | "source" | "author" | "description" | "entry" | "exit" | "libs" | "flows" | "prompts" | "agents" | "tools" | "python" }
+meta_key = { "slug" | "name" | "version" | "source" | "author" | "description" | "entry" | "exit" | "libs" | "flows" | "prompts" | "agents" | "tools" | "python" | "is_public" }
 meta_list_item = { string | identifier }
 meta_val_list = { "[" ~ (meta_list_item ~ ("," ~ meta_list_item)*)? ~ ","? ~ "]" }
 // 【新增】对象映射值，用于 flows: { alias: "path" } 格式
 meta_map_pair = { identifier ~ ":" ~ string }
 meta_val_map = { "{" ~ (meta_map_pair ~ ","?)* ~ "}" }
-metadata = { meta_key ~ ":" ~ (string | meta_val_list | meta_val_map) }
+meta_boolean = { "true" | "false" }
+metadata = { meta_key ~ ":" ~ (string | meta_boolean | meta_val_list | meta_val_map) }
 
 // --- 节点定义 (Nodes) ---
 // 节点 ID 格式为 [id_name]（定义时只允许简单标识符）
@@ -84,7 +87,7 @@ while_def = { "while" ~ "(" ~ condition_expr ~ ")" ~ block_body }
 
 // 集合遍历语法：foreach($item in $list) 或 foreach parallel($item in $list)
 foreach_mode = { "parallel" }
-foreach_def = { "foreach" ~ foreach_mode? ~ "(" ~ variable_ref ~ "in" ~ variable_ref ~ ")" ~ block_body }
+foreach_def = { "foreach" ~ foreach_mode? ~ "(" ~ var_or_ident ~ "in" ~ var_or_ident ~ ")" ~ block_body }
 
 // 逻辑块定义，允许在其中定义局部的节点和连接
 block_body = { "{" ~ (node_def | edge_def)* ~ "}" }
@@ -92,11 +95,50 @@ block_body = { "{" ~ (node_def | edge_def)* ~ "}" }
 // 【新增】函数节点参数列表：[name(a, b)]: ...
 func_params = { "(" ~ (identifier ~ ("," ~ identifier)*)? ~ ")" }
 // 【新增】函数体：{ step1; step2 } 或 { step1 \n step2 }，至少一个步骤
-func_step = { task_def }
+func_step = { task_def | assignment_block }
 func_body = { "{" ~ func_step ~ (";"? ~ func_step)* ~ ";"? ~ "}" }
 
-// 节点内容：支持循环、遍历、任务调用或纯 JSON/字符串
-node_content = _{ while_def | foreach_def | task_def | json_object | string }
+// 赋值语法糖：count = 0, name = input.user → 解糖为 set_context(count=0, name=input.user)
+// assign_str 处理引号字符串和 f-string（内部逗号不会中断解析）
+assign_str = @{
+    "f\"" ~ (!("\"" | "\\") ~ ANY | "\\" ~ ANY)* ~ "\"" |
+    "\"" ~ (!("\"" | "\\") ~ ANY | "\\" ~ ANY)* ~ "\"" |
+    "'" ~ (!("'" | "\\") ~ ANY | "\\" ~ ANY)* ~ "'"
+}
+// 赋值右侧平衡嵌套：完整消费 (...) {...} [...] 结构（含内部逗号）
+assign_nested = @{
+    "(" ~ (assign_nested | assign_str | (!")" ~ ANY))* ~ ")" |
+    "{" ~ (assign_nested | assign_str | (!"}" ~ ANY))* ~ "}" |
+    "[" ~ (assign_nested | assign_str | (!"]" ~ ANY))* ~ "]"
+}
+// assign_value 是 atomic 的，WHITESPACE 不会自动消费，NEWLINE 可作为终止符
+assign_value = @{ (assign_nested | assign_str | !"," ~ !NEWLINE ~ !";" ~ !"}" ~ !"[" ~ ANY)+ }
+assignment = { identifier ~ "=" ~ assign_value }
+assignment_block = { assignment ~ ("," ~ assignment)* ~ ","? }
+
+// --- Class 定义 (OOP) ---
+// 构造参数，支持默认值：class Counter(count=0, name="default")
+class_field_value = @{ (assign_nested | assign_str | !"," ~ !NEWLINE ~ !";" ~ !"}" ~ !")" ~ !"[" ~ ANY)+ }
+class_field = { identifier ~ ("=" ~ class_field_value)? }
+class_params = { "(" ~ (class_field ~ ("," ~ class_field)*)? ~ ")" }
+// 方法定义：复用节点语法 [method(params)]: body
+class_method = { "[" ~ identifier ~ func_params? ~ "]" ~ ":" ~ (func_body | node_content) }
+// 类型注解标识符（str, int, float, bool, list, dict 等）
+type_hint = { identifier }
+// Body 内字段声明：name: str = "default"（Pydantic 风格）
+class_field_decl = { identifier ~ ":" ~ type_hint ~ ("=" ~ class_field_value)? }
+// Class body 成员：字段声明或方法定义
+class_member = _{ class_field_decl | class_method }
+class_body = { "{" ~ class_member+ ~ "}" }
+class_def = { "class" ~ identifier ~ class_params? ~ class_body }
+
+// new 表达式：new ClassName(field=value, ...)
+new_expr = { "new" ~ identifier ~ "(" ~ (param_pair ~ ("," ~ param_pair)*)? ~ ")" }
+// 实例方法调用节点：$instance.method(params)
+method_call_node = { variable_ref ~ "(" ~ (param_pair ~ ("," ~ param_pair)*)? ~ ")" }
+
+// 节点内容：支持循环、遍历、new 实例化、方法调用、任务调用、赋值语法糖或纯 JSON/字符串
+node_content = _{ while_def | foreach_def | new_expr | method_call_node | task_def | assignment_block | json_object | string }
 // 节点定义：支持可选的函数参数 [name(params)] 和函数体 { ... }
 node_def = { "[" ~ identifier ~ func_params? ~ "]" ~ ":" ~ (func_body | node_content) }
 
@@ -115,15 +157,15 @@ complex_edge_def = { node_ref ~ (edge_error | edge_condition) ~ "->" ~ node_ref 
 
 // --- Switch 表达式（多分支路由，只执行一个分支） ---
 // 语法：[node] -> switch $var { "case1": [target1], "case2": [target2], default: [fallback] }
-switch_case_value = { string | number | boolean | variable_ref }
+switch_case_value = { string | number | boolean | var_or_ident }
 switch_default = { "default" }
-switch_case = { (switch_case_value | switch_default) ~ ":" ~ node_ref }
+switch_case = { (switch_default | switch_case_value) ~ ":" ~ node_ref }
 switch_body = { "{" ~ (switch_case ~ ","?)* ~ "}" }
-switch_subject = { variable_ref | (!"{"  ~ ANY)+ }
+switch_subject = { var_or_ident | (!"{"  ~ ANY)+ }
 switch_edge_def = { node_ref ~ "->" ~ "switch" ~ switch_subject? ~ switch_body }
 
 // 统一边定义规则
 edge_def = _{ switch_edge_def | complex_edge_def | chain_edge_def }
 
 // --- 根语法单元 ---
-workflow = { SOI ~ (metadata | node_def | edge_def)* ~ EOI }
+workflow = { SOI ~ (metadata | class_def | node_def | edge_def)* ~ EOI }

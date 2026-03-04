@@ -54,7 +54,7 @@ except Exception as e:
 | Tool Calling | Function calling + manual routing | ToolRegistry auto-resolution |
 | MCP Protocol | mcp-python SDK | Native support |
 | Bot Adapters | python-telegram-bot + custom code | `juglans bot telegram` single command |
-| Resource Management | No standard approach | `juglans apply/pull/list` |
+| Resource Management | No standard approach | `juglans push/pull/list` |
 | WASM Deployment | Not possible | Native cdylib compile target |
 | Conditional Branching | if/else manual orchestration | `if $ctx.value == "x" -> [next]` |
 | Error Handling | try/except written manually | `on error -> [fallback]` declarative |
