@@ -46,6 +46,12 @@ pub struct Mock {
     builtin_registry: Option<Weak<super::BuiltinRegistry>>,
 }
 
+impl Default for Mock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Mock {
     pub fn new() -> Self {
         Self {

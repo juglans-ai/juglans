@@ -110,10 +110,8 @@ impl Tool for Notify {
         }
 
         let msg = params.get("message").map(|s| s.as_str()).unwrap_or("");
-        if !msg.is_empty() {
-            if !context.has_event_sender() {
-                println!("🔔 [Notification] {}", msg);
-            }
+        if !msg.is_empty() && !context.has_event_sender() {
+            println!("🔔 [Notification] {}", msg);
         }
 
         Ok(Some(json!({ "status": "sent", "content": msg })))
