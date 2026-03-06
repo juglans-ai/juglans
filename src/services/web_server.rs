@@ -56,7 +56,7 @@ pub struct AgentApiModel {
     pub temperature: Option<f64>,
     pub skills: Option<Vec<String>>,
     // 额外字段：Juglans 特有
-    pub workflow: Option<String>,
+    pub source: Option<String>,
     pub created_at: String,
 }
 
@@ -695,9 +695,9 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
     for key in agent_registry.keys() {
         if let Some(agent) = agent_registry.get(&key) {
             let wf_info = agent
-                .workflow
+                .source
                 .as_ref()
-                .map(|w| format!(" [workflow: {}]", w))
+                .map(|w| format!(" [source: {}]", w))
                 .unwrap_or_default();
             agents_html.push_str(&format!(
                 "    {} - {} (model: {}){}\n",
@@ -724,6 +724,8 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
     let mut workflow_count = 0;
     let mut workflow_valid_count = 0;
     let mut workflow_error_count = 0;
+    let mut cron_jobs_html = String::new();
+    let mut cron_count = 0;
 
     let wf_paths = glob::glob(&wf_pattern_jg)
         .into_iter()
@@ -732,6 +734,10 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
         .flatten();
 
     for entry in wf_paths {
+        // Skip .jgflow manifests — they are not standalone workflows
+        if entry.extension().and_then(|e| e.to_str()) == Some("jgflow") {
+            continue;
+        }
         if let Ok(content) = fs::read_to_string(&entry) {
             let file_name = entry
                 .file_stem()
@@ -783,6 +789,15 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
                         node_count,
                         status_text
                     ));
+
+                    // Collect cron-scheduled workflows
+                    if let Some(ref schedule) = graph.schedule {
+                        cron_jobs_html.push_str(&format!(
+                            "    <span class=\"status\">⏰</span> {} - {} [schedule: {}]\n",
+                            slug, name, schedule
+                        ));
+                        cron_count += 1;
+                    }
 
                     // Show first few issues
                     for err in validation.errors.iter().take(3) {
@@ -876,6 +891,10 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
 <pre>
 {}</pre>
 
+<h2>Cron Jobs ({} scheduled)</h2>
+<pre>
+{}</pre>
+
 <h2>API Endpoints</h2>
 <pre>
     GET  /               - This dashboard
@@ -900,6 +919,12 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
         agents_html,
         workflow_summary,
         workflows_html,
+        cron_count,
+        if cron_jobs_html.is_empty() {
+            "    (none)\n".to_string()
+        } else {
+            cron_jobs_html
+        },
     );
 
     Html(html)
@@ -1009,7 +1034,7 @@ async fn list_local_agents(
                         default_model: agent.model.clone(),
                         temperature: agent.temperature,
                         skills: Some(agent.skills.clone()),
-                        workflow: agent.workflow.clone(),
+                        source: agent.source.clone(),
                         created_at: Utc::now().to_rfc3339(),
                     });
                 }
@@ -1356,7 +1381,7 @@ async fn handle_chat(
     let project_root = state.project_root.clone();
 
     tokio::spawn(async move {
-        let result = if let Some(wf_ref) = &agent_meta.workflow {
+        let result = if let Some(wf_ref) = &agent_meta.source {
             // 判断是文件路径还是 slug
             let is_file_path = wf_ref.ends_with(".jg")
                 || wf_ref.ends_with(".jgflow")

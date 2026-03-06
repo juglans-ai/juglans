@@ -12,7 +12,14 @@ In the era of AI agents, the **structure of how agents interact** — who talks 
 
 Juglans makes this structure **explicit, composable, and verifiable**:
 
-```yaml
+```juglans
+[classify]: chat(agent="classifier", format="json")
+[answer]: chat(agent="qa", message=$input.query)
+[execute]: chat(agent="executor", message=$input.task)
+[fallback]: print(msg="Unknown intent")
+[review]: chat(agent="reviewer", message=$output)
+[refine]: chat(agent="refiner", message=$output)
+
 [classify] -> switch $output.intent {
     "question": [answer]
     "task": [execute]
@@ -32,7 +39,7 @@ The topology of this code — branching, convergence, cycles — **IS** the arch
 
 A node is simultaneously a **graph vertex** (with edges, topological position) and a **callable function** (with parameters, a body, reusable). Function calls don't flatten the topology — sub-graphs are expanded in place, preserving structure.
 
-```yaml
+```juglans
 [deploy(env, version)]: {
   bash(command="docker build -t app:" + $version + " .")
   bash(command="kubectl apply --namespace=" + $env)
@@ -47,13 +54,16 @@ A node is simultaneously a **graph vertex** (with edges, topological position) a
 
 `flows:` imports perform **graph merging** — the sub-workflow's complete topology (nodes, edges, branches) is embedded into the parent graph with namespace prefixes. This is an **embedding**, not a projection. No structural information is lost.
 
-```yaml
-flows: {
-  auth: "./auth.jg"
-  trading: "./trading.jg"
-}
-[route] if $ctx.need_auth -> [auth.start]
-[auth.done] -> [trading.begin]
+```juglans
+# Topology-preserving composition via flows:
+[route]: set_context(action=$input.action)
+[auth_start]: print(msg="Authenticating")
+[auth_done]: print(msg="Auth complete")
+[trade_begin]: print(msg="Trading")
+
+[route] if $ctx.action == "auth" -> [auth_start]
+[auth_start] -> [auth_done]
+[auth_done] -> [trade_begin]
 ```
 
 Compare: Python function calls flatten the call stack. Microservice calls hide network topology. Juglans sub-graphs remain **fully visible, reasonnable, and optimizable** within the parent graph.
@@ -62,8 +72,12 @@ Compare: Python function calls flatten the call stack. Microservice calls hide n
 
 With `serve()`, the routing topology of your HTTP API and the execution topology of your computation are **the same graph**:
 
-```yaml
+```juglans
 [request]: serve()
+[hello]: response(body="Hello World")
+[process]: response(body="Data received")
+[not_found]: response(body="Not Found", status=404)
+
 [request] -> switch $input.route {
   "GET /api/hello": [hello]
   "POST /api/data": [process]
@@ -160,7 +174,7 @@ cargo build --release
 
 ### Create Your First Agent
 
-```yaml
+```jgagent
 # my-agent.jgagent
 slug: "my-assistant"
 name: "My Assistant"
@@ -189,7 +203,7 @@ cargo build --release
 
 ### Create a Prompt Template
 
-```yaml
+```jgprompt
 # greeting.jgprompt
 ---
 slug: "greeting"
@@ -201,7 +215,7 @@ Hello, {{ name }}! How can I help you today?
 
 ### Create a Workflow
 
-```yaml
+```juglans
 # chat-flow.jg
 name: "Simple Chat"
 version: "0.1.0"

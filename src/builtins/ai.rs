@@ -664,23 +664,16 @@ impl Tool for Chat {
             .map(|s| s.to_lowercase())
             .unwrap_or_else(|| "text".to_string());
 
-        // 【修改】支持从 agent 获取默认 tools，并支持引用解析
-        // 从 workflow context 获取前端 client tools（web_server 注入的 $input.tools）
-        let client_tools_from_ctx: Option<String> = context
-            .resolve_path("input.tools")
-            .ok()
-            .flatten()
-            .and_then(|v| v.as_str().map(|s| s.to_string()));
-
-        let tools_json_str = params
-            .get("tools")
-            .or(client_tools_from_ctx.as_ref())
-            .or_else(|| {
-                // 如果 chat 没有指定 tools，尝试从 agent 获取默认 tools
-                self.agent_registry
-                    .get(agent_slug_str)
-                    .and_then(|agent| agent.tools.as_ref())
-            });
+        // Tools 解析优先级：
+        // 1. 节点参数 tools=...（显式指定）
+        // 2. Agent 配置的默认 tools（.jgagent 的 tools: 字段）
+        // 注意：不再隐式注入 $input.tools，避免前端 tools 泄漏到所有 chat 节点
+        // 如果需要前端 tools，在 workflow 中显式传递：chat(tools=$input.tools)
+        let tools_json_str = params.get("tools").or_else(|| {
+            self.agent_registry
+                .get(agent_slug_str)
+                .and_then(|agent| agent.tools.as_ref())
+        });
 
         let custom_tools_json_schema = if let Some(schema_raw) = tools_json_str {
             // 解析 tools：支持内联 JSON、单个引用(@slug)、多个引用([slugs])
@@ -824,13 +817,13 @@ impl Tool for Chat {
 
         let final_agent_config = if let Some(local_res) = self.agent_registry.get(agent_slug_str) {
             info!(
-                "│   Using local agent: {} (has_workflow: {})",
+                "│   Using local agent: {} (has_source: {})",
                 agent_slug_str,
-                local_res.workflow.is_some()
+                local_res.source.is_some()
             );
 
             // 【新增】检查 agent 是否有 workflow，如果有则执行嵌套 workflow
-            if let Some(ref workflow_path) = local_res.workflow {
+            if let Some(ref workflow_path) = local_res.source {
                 if let Some(registry_weak) = &self.builtin_registry {
                     if let Some(registry) = registry_weak.upgrade() {
                         // 获取 agent 文件的基准目录
@@ -1130,6 +1123,253 @@ impl Tool for MemorySearch {
         let search_results = self.runtime.search_memories(query_text, limit_val).await?;
 
         Ok(Some(json!(search_results)))
+    }
+}
+
+// ─── Vector Builtins ─────────────────────────────────────
+
+pub struct VectorCreateSpace {
+    runtime: Arc<dyn JuglansRuntime>,
+}
+
+impl VectorCreateSpace {
+    pub fn new(runtime: Arc<dyn JuglansRuntime>) -> Self {
+        Self { runtime }
+    }
+}
+
+#[async_trait]
+impl Tool for VectorCreateSpace {
+    fn name(&self) -> &str {
+        "vector_create_space"
+    }
+
+    async fn execute(
+        &self,
+        params: &HashMap<String, String>,
+        _context: &WorkflowContext,
+    ) -> Result<Option<Value>> {
+        let space = params
+            .get("space")
+            .ok_or_else(|| anyhow!("vector_create_space: 'space' parameter is required."))?;
+
+        let model = params.get("model").map(|s| s.as_str());
+        let public = params
+            .get("public")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+
+        info!(
+            "📦 Creating vector space: '{}' (model: {:?}, public: {})",
+            space, model, public
+        );
+
+        let result = self
+            .runtime
+            .vector_create_space(space, model, public)
+            .await?;
+
+        Ok(Some(result))
+    }
+}
+
+pub struct VectorUpsert {
+    runtime: Arc<dyn JuglansRuntime>,
+}
+
+impl VectorUpsert {
+    pub fn new(runtime: Arc<dyn JuglansRuntime>) -> Self {
+        Self { runtime }
+    }
+}
+
+#[async_trait]
+impl Tool for VectorUpsert {
+    fn name(&self) -> &str {
+        "vector_upsert"
+    }
+
+    async fn execute(
+        &self,
+        params: &HashMap<String, String>,
+        _context: &WorkflowContext,
+    ) -> Result<Option<Value>> {
+        let space = params
+            .get("space")
+            .ok_or_else(|| anyhow!("vector_upsert: 'space' parameter is required."))?;
+
+        let points_str = params
+            .get("points")
+            .ok_or_else(|| anyhow!("vector_upsert: 'points' parameter is required."))?;
+
+        let points: Vec<Value> = serde_json::from_str(points_str)
+            .map_err(|e| anyhow!("vector_upsert: invalid JSON in 'points': {}", e))?;
+
+        let model = params.get("model").map(|s| s.as_str());
+
+        info!(
+            "📥 Vector upsert: {} points into space '{}' (model: {:?})",
+            points.len(),
+            space,
+            model
+        );
+
+        let result = self.runtime.vector_upsert(space, points, model).await?;
+
+        Ok(Some(result))
+    }
+}
+
+pub struct VectorSearch {
+    runtime: Arc<dyn JuglansRuntime>,
+}
+
+impl VectorSearch {
+    pub fn new(runtime: Arc<dyn JuglansRuntime>) -> Self {
+        Self { runtime }
+    }
+}
+
+#[async_trait]
+impl Tool for VectorSearch {
+    fn name(&self) -> &str {
+        "vector_search"
+    }
+
+    async fn execute(
+        &self,
+        params: &HashMap<String, String>,
+        _context: &WorkflowContext,
+    ) -> Result<Option<Value>> {
+        let query = params
+            .get("query")
+            .ok_or_else(|| anyhow!("vector_search: 'query' parameter is required."))?;
+
+        let space = params.get("space").map(|s| s.as_str()).unwrap_or("default");
+
+        let limit: u64 = params
+            .get("limit")
+            .and_then(|l| l.parse().ok())
+            .unwrap_or(5);
+
+        let model = params.get("model").map(|s| s.as_str());
+
+        info!(
+            "🔍 Vector search: '{}' in space '{}' (limit: {}, model: {:?})",
+            query, space, limit, model
+        );
+
+        let results = self
+            .runtime
+            .vector_search(space, query, limit, model)
+            .await?;
+
+        Ok(Some(json!(results)))
+    }
+}
+
+pub struct VectorListSpaces {
+    runtime: Arc<dyn JuglansRuntime>,
+}
+
+impl VectorListSpaces {
+    pub fn new(runtime: Arc<dyn JuglansRuntime>) -> Self {
+        Self { runtime }
+    }
+}
+
+#[async_trait]
+impl Tool for VectorListSpaces {
+    fn name(&self) -> &str {
+        "vector_list_spaces"
+    }
+
+    async fn execute(
+        &self,
+        _params: &HashMap<String, String>,
+        _context: &WorkflowContext,
+    ) -> Result<Option<Value>> {
+        info!("📋 Vector list spaces");
+        let results = self.runtime.vector_list_spaces().await?;
+        Ok(Some(json!(results)))
+    }
+}
+
+pub struct VectorDeleteSpace {
+    runtime: Arc<dyn JuglansRuntime>,
+}
+
+impl VectorDeleteSpace {
+    pub fn new(runtime: Arc<dyn JuglansRuntime>) -> Self {
+        Self { runtime }
+    }
+}
+
+#[async_trait]
+impl Tool for VectorDeleteSpace {
+    fn name(&self) -> &str {
+        "vector_delete_space"
+    }
+
+    async fn execute(
+        &self,
+        params: &HashMap<String, String>,
+        _context: &WorkflowContext,
+    ) -> Result<Option<Value>> {
+        let space = params
+            .get("space")
+            .ok_or_else(|| anyhow!("vector_delete_space: 'space' parameter is required."))?;
+
+        info!("🗑️ Vector delete space: '{}'", space);
+        let result = self.runtime.vector_delete_space(space).await?;
+        Ok(Some(result))
+    }
+}
+
+pub struct VectorDelete {
+    runtime: Arc<dyn JuglansRuntime>,
+}
+
+impl VectorDelete {
+    pub fn new(runtime: Arc<dyn JuglansRuntime>) -> Self {
+        Self { runtime }
+    }
+}
+
+#[async_trait]
+impl Tool for VectorDelete {
+    fn name(&self) -> &str {
+        "vector_delete"
+    }
+
+    async fn execute(
+        &self,
+        params: &HashMap<String, String>,
+        _context: &WorkflowContext,
+    ) -> Result<Option<Value>> {
+        let space = params
+            .get("space")
+            .ok_or_else(|| anyhow!("vector_delete: 'space' parameter is required."))?;
+
+        let ids_raw = params
+            .get("ids")
+            .ok_or_else(|| anyhow!("vector_delete: 'ids' parameter is required."))?;
+
+        // Support JSON array or comma-separated string
+        let ids: Vec<String> = if ids_raw.trim_start().starts_with('[') {
+            serde_json::from_str(ids_raw)
+                .unwrap_or_else(|_| ids_raw.split(',').map(|s| s.trim().to_string()).collect())
+        } else {
+            ids_raw.split(',').map(|s| s.trim().to_string()).collect()
+        };
+
+        info!(
+            "🗑️ Vector delete {} point(s) from space '{}'",
+            ids.len(),
+            space
+        );
+        let result = self.runtime.vector_delete(space, ids).await?;
+        Ok(Some(result))
     }
 }
 

@@ -4,6 +4,7 @@
 mod adapters;
 mod builtins;
 mod core;
+mod lsp;
 mod registry;
 mod runtime;
 mod services;
@@ -228,7 +229,17 @@ enum Commands {
         /// Project path (default: current directory)
         path: Option<PathBuf>,
     },
-    /// Run tests — discovers and executes _test_ blocks in .jg files
+    /// Run a workflow on a cron schedule (local dev scheduler)
+    Cron {
+        /// Workflow file (.jg or .jgflow) to schedule
+        file: PathBuf,
+        /// Cron expression (overrides schedule in file metadata)
+        #[arg(long, short = 's')]
+        schedule: Option<String>,
+    },
+    /// Start Language Server Protocol (LSP) server
+    Lsp,
+    /// Run tests — discovers and executes test_* nodes in .jg files
     Test {
         /// Path to test file or directory (default: ./tests/)
         path: Option<PathBuf>,
@@ -236,6 +247,14 @@ enum Commands {
         #[arg(long)]
         filter: Option<String>,
         /// Output format: text, json, junit
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
+    /// Validate code snippets in markdown documentation
+    Doctest {
+        /// Path to markdown file or directory (default: ./docs/)
+        path: Option<PathBuf>,
+        /// Output format: text, json
         #[arg(long, default_value = "text")]
         format: String,
     },
@@ -652,7 +671,7 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
             show_welcome(
                 &agent_meta_definition.name,
                 &agent_meta_definition.slug,
-                agent_meta_definition.workflow.is_some(),
+                agent_meta_definition.source.is_some(),
             );
 
             let global_system_config = JuglansConfig::load()?;
@@ -672,7 +691,7 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
 
             let mut active_workflow_ptr = None;
 
-            if let Some(wf_path_string) = &agent_meta_definition.workflow {
+            if let Some(wf_path_string) = &agent_meta_definition.source {
                 let wf_physical_path = relative_base_offset.join(wf_path_string);
                 let wf_source_data_str =
                     fs::read_to_string(&wf_physical_path).with_context(|| {
@@ -1283,6 +1302,16 @@ fn handle_check(path: Option<&Path>, show_all: bool, output_format: &str) -> Res
 
                             project_ctx.file_dir =
                                 entry.parent().unwrap_or(Path::new(".")).to_path_buf();
+
+                            // Resolve flow imports before validation (merge subgraph nodes/edges)
+                            let mut graph = graph;
+                            let _ = resolver::resolve_flow_imports(
+                                &mut graph,
+                                &project_ctx.file_dir.clone(),
+                                &mut vec![],
+                                None,
+                            );
+
                             let validation =
                                 WorkflowValidator::validate_with_project(&graph, &project_ctx);
                             let slug = if graph.slug.is_empty() {
@@ -1838,16 +1867,7 @@ async fn push_single_file(
 
     match ext_str {
         "jgagent" => {
-            let mut agent = AgentParser::parse(&raw_file_data)?;
-            if let Some(ref wf_ref) = agent.workflow {
-                let stem = Path::new(wf_ref.as_str())
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or(wf_ref);
-                if let Some(real_slug) = workflow_slug_map.get(stem) {
-                    agent.workflow = Some(real_slug.clone());
-                }
-            }
+            let agent = AgentParser::parse(&raw_file_data)?;
             let msg = jug0_client.apply_agent(&agent, force).await?;
             Ok(PushResult::Success(format!(
                 "agent: {} - {}",
@@ -2299,6 +2319,99 @@ async fn handle_tui(_agent: Option<&Path>) -> Result<()> {
     ui::tui::run(app).await
 }
 
+async fn handle_cron(file: &PathBuf, schedule_override: Option<&str>) -> Result<()> {
+    use cron::Schedule;
+    use std::str::FromStr;
+
+    let absolute_path =
+        fs::canonicalize(file).with_context(|| format!("Cannot resolve {:?}", file))?;
+    let source_raw = fs::read_to_string(&absolute_path)?;
+    let ext = absolute_path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+
+    // Parse file to extract schedule metadata
+    let workflow = if ext == "jgflow" {
+        GraphParser::parse_manifest(&source_raw)?
+    } else {
+        GraphParser::parse(&source_raw)?
+    };
+
+    let cron_expr = schedule_override
+        .map(|s| s.to_string())
+        .or(workflow.schedule.clone())
+        .ok_or_else(|| {
+            anyhow!(
+                "No schedule found. Add `schedule: \"0 * * * *\"` to your .jgflow \
+                 or use --schedule \"0 * * * *\""
+            )
+        })?;
+
+    // cron crate requires 6-field (with seconds) or 7-field expressions.
+    // If user provides standard 5-field cron, prepend "0" for seconds.
+    let full_expr = if cron_expr.split_whitespace().count() == 5 {
+        format!("0 {}", cron_expr)
+    } else {
+        cron_expr.clone()
+    };
+
+    let schedule = Schedule::from_str(&full_expr)
+        .map_err(|e| anyhow!("Invalid cron expression '{}': {}", cron_expr, e))?;
+
+    println!("⏰ Cron scheduler started for: {}", absolute_path.display());
+    println!("   Schedule: {}", cron_expr);
+
+    // Show next few fire times
+    let upcoming: Vec<_> = schedule.upcoming(chrono::Utc).take(3).collect();
+    for (i, t) in upcoming.iter().enumerate() {
+        println!("   Next {}: {}", i + 1, t.format("%Y-%m-%d %H:%M:%S UTC"));
+    }
+    println!("   Press Ctrl+C to stop.\n");
+
+    loop {
+        let now = chrono::Utc::now();
+        let next = schedule
+            .upcoming(chrono::Utc)
+            .next()
+            .ok_or_else(|| anyhow!("No upcoming schedule"))?;
+
+        let wait = (next - now)
+            .to_std()
+            .unwrap_or(std::time::Duration::from_secs(1));
+        println!(
+            "⏳ Waiting until {} ({:.0}s)...",
+            next.format("%H:%M:%S UTC"),
+            wait.as_secs_f64()
+        );
+
+        tokio::time::sleep(wait).await;
+
+        println!(
+            "🚀 Executing workflow at {}...",
+            chrono::Utc::now().format("%H:%M:%S UTC")
+        );
+
+        // Build a synthetic CLI to reuse handle_file_logic
+        let cli = Cli {
+            file: Some(absolute_path.clone()),
+            command: None,
+            input: None,
+            input_file: None,
+            dry_run: false,
+            output: None,
+            output_format: "text".to_string(),
+            verbose: false,
+            info: false,
+        };
+
+        match handle_file_logic(&cli).await {
+            Ok(_) => println!("✅ Execution completed.\n"),
+            Err(e) => println!("❌ Execution failed: {}\n", e),
+        }
+    }
+}
+
 async fn handle_test(path: Option<&Path>, filter: Option<&str>, format: &str) -> Result<()> {
     use testing::{reporter, TestRunner};
 
@@ -2309,7 +2422,7 @@ async fn handle_test(path: Option<&Path>, filter: Option<&str>, format: &str) ->
 
     if test_files.is_empty() {
         println!("\n  No test files found in {}\n", search_path.display());
-        println!("  Test files are .jg files containing [_test_*] function blocks.");
+        println!("  Test files are .jg files containing [test_*] nodes.");
         println!("  Default search path: ./tests/\n");
         return Ok(());
     }
@@ -2474,12 +2587,22 @@ async fn main() -> Result<()> {
                     path: path.clone(),
                 })?;
             }
+            Commands::Cron { file, schedule } => {
+                handle_cron(file, schedule.as_deref()).await?;
+            }
+            Commands::Lsp => {
+                lsp::run_server().await?;
+            }
             Commands::Test {
                 path,
                 filter,
                 format,
             } => {
                 handle_test(path.as_deref(), filter.as_deref(), format).await?;
+            }
+            Commands::Doctest { path, format } => {
+                let target = path.as_deref().unwrap_or(Path::new("./docs"));
+                juglans::doctest::run_doctest(target, format)?;
             }
         }
     } else if let Some(ref file_path) = application_cli.file {

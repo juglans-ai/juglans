@@ -21,7 +21,7 @@ A workflow that retrieves relevant documents and generates answers based on cont
 
 ### rag-pipeline.jg
 
-```yaml
+```juglans
 name: "RAG Pipeline"
 description: "Retrieval-Augmented Generation workflow"
 
@@ -51,9 +51,6 @@ exit: [respond]
   documents=$output
 )
 
-[check_results] if !$ctx.has_results -> [no_context_response]
-[check_results] -> [build_context]
-
 # 4. Build context
 [build_context]: set_context(
   context=join(map($ctx.documents, d => d.content), "\n\n---\n\n")
@@ -82,6 +79,9 @@ exit: [respond]
   sources=map($ctx.documents, d => {"id": d.id, "score": d.score})
 )
 
+[check_results] if !$ctx.has_results -> [no_context_response]
+[check_results] -> [build_context]
+
 [generate] -> [respond]
 [no_context_response] -> [respond]
 ```
@@ -90,7 +90,7 @@ exit: [respond]
 
 ### src/prompts/rag-prompt.jgprompt
 
-```yaml
+```jgprompt
 name: "rag-prompt"
 description: "RAG context injection prompt"
 
@@ -114,7 +114,7 @@ template: |
 
 ### src/agents/rag-responder.jgagent
 
-```yaml
+```jgagent
 name: "rag-responder"
 description: "RAG response generator"
 
@@ -139,7 +139,7 @@ system_prompt: |
 
 RAG with reranking:
 
-```yaml
+```juglans
 name: "RAG with Reranking"
 
 entry: [embed_query]
@@ -188,7 +188,7 @@ exit: [respond]
 
 ### src/agents/reranker.jgagent
 
-```yaml
+```jgagent
 name: "reranker"
 description: "Document reranking agent"
 
@@ -217,7 +217,7 @@ system_prompt: |
 
 Using HyDE (Hypothetical Document Embedding):
 
-```yaml
+```juglans
 name: "RAG with HyDE"
 
 entry: [generate_hypothetical]
@@ -256,7 +256,7 @@ exit: [respond]
 
 ### src/agents/hyde-generator.jgagent
 
-```yaml
+```jgagent
 name: "hyde-generator"
 description: "Hypothetical document generator for HyDE"
 
@@ -275,7 +275,7 @@ system_prompt: |
 
 ### multi-source-rag.jg
 
-```yaml
+```juglans
 name: "Multi-source RAG"
 
 entry: [embed_query]

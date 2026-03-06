@@ -18,7 +18,26 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate:
+    name: Validate Doc Examples
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build juglans
+        run: cargo build --release
+
+      - name: Validate doc examples
+        run: ./target/release/juglans doctest docs/
+
   build:
+    needs: validate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

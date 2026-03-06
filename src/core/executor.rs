@@ -18,7 +18,7 @@ use tracing::{debug, error, info, warn};
 use crate::builtins::BuiltinRegistry;
 use crate::core::context::WorkflowContext;
 use crate::core::expr_eval::{self, ExprEvaluator};
-use crate::core::graph::{NodeType, WorkflowGraph};
+use crate::core::graph::{self, NodeType, WorkflowGraph};
 use crate::core::parser::GraphParser;
 use crate::runtime::python::PythonRuntime;
 use crate::services::agent_loader::AgentRegistry;
@@ -454,6 +454,26 @@ impl WorkflowExecutor {
                 Ok(Some(val.clone()))
             }
             NodeType::Task(action) => {
+                // 检查是否是 struct/class 实例化（函数调用式：Name(field=value)）
+                if workflow.classes.contains_key(&action.name) {
+                    let class_def = workflow.classes.get(&action.name).unwrap().clone();
+                    let mut instance = serde_json::Map::new();
+                    instance.insert("__class__".to_string(), serde_json::json!(&action.name));
+                    for field in &class_def.fields {
+                        let value = if let Some(arg_expr) = action.params.get(&field.name) {
+                            self.process_parameter(arg_expr, context).await?
+                        } else if let Some(default_expr) = &field.default {
+                            self.process_parameter(default_expr, context).await?
+                        } else {
+                            Value::Null
+                        };
+                        instance.insert(field.name.clone(), value);
+                    }
+                    let instance_val = Value::Object(instance);
+                    context.set(node.id.clone(), instance_val.clone())?;
+                    return Ok(Some(instance_val));
+                }
+
                 // 检查是否是函数节点调用
                 if workflow.functions.contains_key(&action.name) {
                     // Resolve all function args concurrently
@@ -529,6 +549,89 @@ impl WorkflowExecutor {
                 let result = self
                     .execute_tool_internal(&action.name, &rendered_params, context)
                     .await;
+                context.emit_node_complete(&node.id, &action.name, &result);
+                result
+            }
+            NodeType::Assert(expr_str) => {
+                debug!("│   Assert: {}", expr_str);
+                context.emit_node_start(&node.id, "assert", &HashMap::new());
+                let resolver = |path: &str| -> Option<Value> {
+                    let clean = path.strip_prefix("ctx.").unwrap_or(path);
+                    match clean {
+                        "_tools_called" => {
+                            let tools: Vec<Value> = context
+                                .trace_entries()
+                                .iter()
+                                .map(|e| json!(e.tool.clone()))
+                                .collect();
+                            Some(json!(tools))
+                        }
+                        "_trace" => {
+                            let entries: Vec<Value> = context
+                                .trace_entries()
+                                .iter()
+                                .map(|e| {
+                                    json!({
+                                        "tool": e.tool,
+                                        "params": e.params,
+                                        "status": format!("{:?}", e.status),
+                                    })
+                                })
+                                .collect();
+                            Some(json!(entries))
+                        }
+                        _ => context.resolve_path(clean).ok().flatten(),
+                    }
+                };
+                let result = match self.expr_eval.eval(expr_str, &resolver) {
+                    Ok(val) => {
+                        if expr_eval::is_truthy(&val) {
+                            Ok(Some(json!({"assert": true, "expr": expr_str})))
+                        } else {
+                            Err(anyhow!("Assertion failed: `{}` → {:?}", expr_str, val))
+                        }
+                    }
+                    Err(e) => Err(anyhow!("Assertion error: `{}` → {}", expr_str, e)),
+                };
+                context.emit_node_complete(&node.id, "assert", &result);
+                result
+            }
+            NodeType::AssignCall { var, action } => {
+                debug!("│   AssignCall: {} = {}(...)", var, action.name);
+                // Resolve params (same as Task)
+                let param_futures: Vec<_> = action
+                    .params
+                    .iter()
+                    .map(|(key, val_template)| {
+                        let key = key.clone();
+                        let val_template = val_template.clone();
+                        let executor = self.clone();
+                        let ctx = context.clone();
+                        async move {
+                            let processed_val =
+                                executor.process_parameter(&val_template, &ctx).await?;
+                            let val_str = match processed_val {
+                                Value::String(s) => s,
+                                other => other.to_string(),
+                            };
+                            Ok::<(String, String), anyhow::Error>((key, val_str))
+                        }
+                    })
+                    .collect();
+                let resolved = futures::future::join_all(param_futures).await;
+                let mut rendered_params = HashMap::new();
+                for result in resolved {
+                    let (key, val_str) = result?;
+                    rendered_params.insert(key, val_str);
+                }
+                context.emit_node_start(&node.id, &action.name, &rendered_params);
+                let result = self
+                    .execute_tool_internal(&action.name, &rendered_params, context)
+                    .await;
+                // Store result in variable
+                if let Ok(Some(ref val)) = result {
+                    context.set(var.clone(), val.clone())?;
+                }
                 context.emit_node_complete(&node.id, &action.name, &result);
                 result
             }
@@ -851,11 +954,16 @@ impl WorkflowExecutor {
         let completed = completed_nodes.lock().unwrap().clone();
         let degrees = in_degrees.lock().unwrap();
 
-        // 找出所有不可达的节点
+        // 找出所有不可达的节点（跳过 test_* 节点）
         let unreachable: Vec<NodeIndex> = degrees
             .iter()
             .filter(|(idx, &degree)| {
                 if degree == 0 || completed.contains(idx) {
+                    return false;
+                }
+
+                // Skip test nodes — they are intentionally not executed
+                if graph::is_test_node_id(&workflow.graph[**idx].id) {
                     return false;
                 }
 
@@ -1221,7 +1329,13 @@ impl WorkflowExecutor {
             // 注入当前 workflow 到 context（供 on_tool=[node] handler 使用）
             context.set_current_workflow(workflow.clone());
 
-            let total_nodes = workflow.graph.node_count();
+            // Exclude test_* nodes from normal execution count
+            let test_node_count = workflow
+                .graph
+                .node_indices()
+                .filter(|&idx| graph::is_test_node_id(&workflow.graph[idx].id))
+                .count();
+            let total_nodes = workflow.graph.node_count() - test_node_count;
             if total_nodes == 0 {
                 return Ok(());
             }
@@ -1245,7 +1359,9 @@ impl WorkflowExecutor {
                 let guard = in_degrees.lock().unwrap();
                 guard
                     .iter()
-                    .filter(|(_, &degree)| degree == 0)
+                    .filter(|(idx, &degree)| {
+                        degree == 0 && !graph::is_test_node_id(&workflow.graph[**idx].id)
+                    })
                     .map(|(&idx, _)| idx)
                     .collect()
             }));

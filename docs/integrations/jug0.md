@@ -116,7 +116,7 @@ juglans delete my-prompt --type prompt
 
 Jug0 uses the `owner/slug` format to identify resources:
 
-```yaml
+```juglans
 # Reference remote resources in workflows
 [chat]: chat(agent="juglans/assistant", message=$input.query)
 [render]: p(slug="juglans/greeting", name=$input.name)
@@ -124,7 +124,7 @@ Jug0 uses the `owner/slug` format to identify resources:
 
 ### Local vs Remote
 
-```yaml
+```juglans
 # Local resources (imported via file)
 prompts: ["./prompts/*.jgprompt"]
 [render]: p(slug="my-local-prompt")
@@ -135,21 +135,21 @@ prompts: ["./prompts/*.jgprompt"]
 
 ### Mixed Usage
 
-```yaml
+```juglans
 name: "Hybrid Workflow"
-
-# Import local resources
-prompts: ["./prompts/*.jgprompt"]
-agents: ["./agents/*.jgagent"]
 
 entry: [start]
 exit: [end]
+
+[start]: print(msg="Starting")
 
 # Use a local Agent
 [local_chat]: chat(agent="my-local-agent", message=$input.query)
 
 # Use a remote Agent
 [remote_chat]: chat(agent="juglans/premium-agent", message=$output)
+
+[end]: print(msg="Done")
 
 [start] -> [local_chat] -> [remote_chat] -> [end]
 ```
@@ -160,7 +160,7 @@ exit: [end]
 
 The `chat()` tool in workflows calls the Jug0 Chat API:
 
-```yaml
+```juglans
 [chat]: chat(
   agent="my-agent",
   message="Hello!",
@@ -201,7 +201,7 @@ data: {"type": "done", "tokens": 15}
 
 ### Non-streaming Response
 
-```yaml
+```juglans
 [chat]: chat(
   agent="my-agent",
   message="Hello!",
@@ -284,13 +284,14 @@ Automatically identifies the resource type (Prompt/Agent/Workflow).
 
 ### Handling in Workflows
 
-```yaml
+```juglans
 [api_call]: chat(agent="external", message=$input)
-[api_call] -> [success]
-[api_call] on error -> [handle_error]
-
+[success]: print(msg="API call succeeded")
 [handle_error]: notify(status="API call failed, using fallback")
 [fallback]: chat(agent="local-fallback", message=$input)
+
+[api_call] -> [success]
+[api_call] on error -> [handle_error]
 [handle_error] -> [fallback]
 ```
 

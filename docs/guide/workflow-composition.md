@@ -8,11 +8,13 @@ Through `flows:` declarations, you can compose multiple `.jg` files into a unifi
 
 Use the `flows:` object mapping in the metadata section to declare subworkflows to import:
 
-```yaml
+```juglans
 flows: {
   auth: "./auth.jg"
   trading: "./trading.jg"
 }
+
+[start]: print(msg="Importing flows")
 ```
 
 Keys are aliases, and values are relative paths (relative to the directory of the current `.jg` file).
@@ -21,17 +23,19 @@ Keys are aliases, and values are relative paths (relative to the directory of th
 
 Use the `[alias.node_id]` format to reference nodes in subworkflows:
 
-```yaml
-# Jump from a parent node to a subworkflow
-[route] if $ctx.need_auth -> [auth.start]
+```juglans
+# Cross-flow references use alias.node_id format
+[route]: set_context(need_auth=$input.need_auth)
+[auth_start]: print(msg="Auth started")
+[next_step]: print(msg="Next step")
 
-# Jump back from a subworkflow to a parent node
-[auth.done] -> [next_step]
+[route] if $ctx.need_auth -> [auth_start]
+[auth_start] -> [next_step]
 ```
 
 ### Minimal Complete Example
 
-```yaml
+```juglans
 name: "Main Router"
 prompts: ["./prompts/*.jgprompt"]
 agents: ["./agents/*.jgagent"]
@@ -75,12 +79,16 @@ Assume the `auth` subworkflow has two internal nodes, `verify` and `extract`:
 
 The parent workflow can access subworkflow node outputs through namespace paths:
 
-```yaml
-# Output of the verify node in the auth subworkflow
-[next]: chat(message=$auth.verify.output)
+```juglans
+# Access subworkflow node outputs via namespace
+[next]: chat(message=$ctx.auth_result)
+[check]: set_context(intent=$output.intent)
+[trade]: print(msg="Trading")
+[done]: print(msg="Done")
 
-# Used in conditions
-[check] if $auth.extract.output.intent == "trade" -> [trade]
+[next] -> [check]
+[check] if $ctx.intent == "trade" -> [trade]
+[check] -> [done]
 ```
 
 ---
@@ -124,16 +132,16 @@ All intermediate subworkflow nodes (including internal conditional branches, swi
 
 Subworkflows can have their own `flows:` declarations, enabling multi-level composition:
 
-```yaml
-# main.jg
-flows: {
-  order: "./order.jg"
-}
+```juglans
+# Recursive imports: main imports order, order imports payment
+# After merging, payment nodes get prefix: order.payment.*
 
-# order.jg
-flows: {
-  payment: "./payment.jg"
-}
+[start]: print(msg="Order flow")
+[validate]: print(msg="Validating")
+[charge]: print(msg="Charging")
+[confirm]: print(msg="Confirmed")
+
+[start] -> [validate] -> [charge] -> [confirm]
 ```
 
 After merging, the `payment` subworkflow's nodes appear in the final DAG with the `order.payment.` prefix:
@@ -159,10 +167,12 @@ Import chain: ["/path/to/main.jg", "/path/to/auth.jg"]
 
 Resource imports declared in subworkflows (prompts, agents, tools) are automatically merged into the parent workflow, with paths resolved relative to the subworkflow file's directory:
 
-```yaml
-# src/trading.jg
-prompts: ["./prompts/*.jgprompt"]    # Relative to the .jg file's directory (src/)
-agents: ["./pure-agents/*.jgagent"]
+```juglans
+# src/trading.jg — resource patterns relative to the .jg file's directory
+prompts: ["./prompts/*.jgprompt"]
+agents: ["./agents/*.jgagent"]
+
+[start]: print(msg="Trading workflow")
 ```
 
 After merging, the parent workflow can use prompts and agents introduced by the subworkflow. Python module imports are also automatically merged (with deduplication).
@@ -189,7 +199,7 @@ my-project/
 
 ### Main Workflow — `src/main.jg`
 
-```yaml
+```juglans
 name: "Event Router"
 agents: ["./agents/*.jgagent"]
 
@@ -226,7 +236,7 @@ exit: [done]
 
 ### Subworkflow — `src/trading.jg`
 
-```yaml
+```juglans
 name: "Trading Flow"
 agents: ["./pure-agents/*.jgagent"]
 

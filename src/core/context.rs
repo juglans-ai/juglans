@@ -471,6 +471,7 @@ impl WorkflowContext {
     }
 
     /// 查询指定 tool 的调用记录
+    #[allow(dead_code)]
     pub fn trace_tool_called(&self, tool_name: &str) -> Vec<ToolTraceEntry> {
         self.trace_entries()
             .into_iter()
@@ -479,6 +480,7 @@ impl WorkflowContext {
     }
 
     /// 计算 trace 总耗时
+    #[allow(dead_code)]
     pub fn trace_total_duration(&self) -> Duration {
         self.trace_entries().iter().map(|e| e.duration).sum()
     }

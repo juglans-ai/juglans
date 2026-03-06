@@ -4,7 +4,7 @@
 
 ## Basic Structure
 
-```yaml
+```jgagent
 slug: "agent_identifier"
 name: "Display Name"
 description: "A brief description of what this agent does"
@@ -32,7 +32,7 @@ system_prompt: "You are a helpful assistant."
 
 ### Supported Models
 
-```yaml
+```jgagent
 # DeepSeek
 model: "deepseek-chat"
 model: "deepseek-coder"
@@ -55,7 +55,7 @@ model: "mistral"
 
 ### Temperature Parameter
 
-```yaml
+```jgagent
 temperature: 0.0    # Deterministic output
 temperature: 0.7    # Balanced creativity (recommended)
 temperature: 1.0    # More randomness
@@ -66,7 +66,7 @@ temperature: 2.0    # Highly random
 
 ### Inline Method
 
-```yaml
+```jgagent
 system_prompt: "You are a helpful assistant."
 
 # Multi-line prompt
@@ -81,7 +81,7 @@ system_prompt: |
 
 ### Referencing a Prompt File
 
-```yaml
+```jgagent
 system_prompt: p(slug="system-analyst")
 ```
 
@@ -95,7 +95,7 @@ Agents can be configured with a default tool set. These tools are automatically 
 
 Define tools directly using a JSON array, no escaping needed:
 
-```yaml
+```jgagent
 slug: "web-agent"
 model: "gpt-4o"
 tools: [
@@ -136,7 +136,7 @@ tools: [
 
 You can also use a JSON string:
 
-```yaml
+```jgagent
 slug: "tool-agent"
 model: "deepseek-chat"
 tools: "[{\"type\":\"function\",\"function\":{\"name\":\"calculator\",\"description\":\"Perform mathematical calculations\"}}]"
@@ -146,7 +146,7 @@ tools: "[{\"type\":\"function\",\"function\":{\"name\":\"calculator\",\"descript
 
 Reference registered tool sets, with support for combining multiple toolboxes:
 
-```yaml
+```jgagent
 slug: "code-agent"
 model: "deepseek-chat"
 
@@ -165,7 +165,7 @@ Where:
 
 When a `chat()` call in a workflow also specifies the `tools` parameter, the workflow configuration takes priority:
 
-```yaml
+```jgagent
 # Agent configuration
 slug: "my-agent"
 tools: [{"type": "function", "function": {"name": "default_tool"}}]
@@ -188,7 +188,7 @@ tools: [{"type": "function", "function": {"name": "default_tool"}}]
 
 Configure Model Context Protocol servers to extend Agent capabilities:
 
-```yaml
+```jgagent
 slug: "tool-agent"
 model: "gpt-4o"
 mcp:
@@ -216,7 +216,7 @@ token = "${GITHUB_TOKEN}"
 
 Add predefined skills to an Agent:
 
-```yaml
+```jgagent
 slug: "skilled-agent"
 model: "deepseek-chat"
 skills:
@@ -229,7 +229,7 @@ skills:
 
 Bind an Agent to a specific workflow:
 
-```yaml
+```jgagent
 slug: "workflow-agent"
 model: "gpt-4o"
 workflow: "../complex-task.jg"
@@ -241,7 +241,7 @@ When a user interacts with this Agent, it can trigger the associated workflow ex
 
 ### General Assistant
 
-```yaml
+```jgagent
 slug: "assistant"
 name: "General Assistant"
 model: "deepseek-chat"
@@ -257,7 +257,7 @@ system_prompt: |
 
 ### Code Expert
 
-```yaml
+```jgagent
 slug: "code-expert"
 name: "Code Expert"
 model: "deepseek-coder"
@@ -282,7 +282,7 @@ skills:
 
 ### Data Analyst
 
-```yaml
+```jgagent
 slug: "data-analyst"
 name: "Data Analyst"
 model: "gpt-4o"
@@ -298,7 +298,7 @@ skills:
 
 ### Creative Writing
 
-```yaml
+```jgagent
 slug: "creative-writer"
 name: "Creative Writer"
 model: "claude-3-opus"
@@ -316,7 +316,7 @@ system_prompt: |
 
 ### Router Agent
 
-```yaml
+```jgagent
 slug: "router"
 name: "Intent Router"
 model: "gpt-3.5-turbo"
@@ -336,7 +336,7 @@ system_prompt: |
 
 ### Multi-Step Workflow Agent
 
-```yaml
+```jgagent
 slug: "research-agent"
 name: "Research Agent"
 model: "gpt-4o"
@@ -357,13 +357,13 @@ mcp:
 
 ### Basic Call
 
-```yaml
+```juglans
 [chat]: chat(agent="assistant", message=$input.question)
 ```
 
 ### Specifying Output Format
 
-```yaml
+```juglans
 [classify]: chat(
   agent="router",
   message=$input.query,
@@ -373,7 +373,7 @@ mcp:
 
 ### Stateless Call
 
-```yaml
+```juglans
 [analyze]: chat(
   agent="analyst",
   message=$input.data,

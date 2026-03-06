@@ -37,8 +37,13 @@ pub fn print_text(results: &[FileTestResult]) {
                 icon, result.name, duration, assertions,
             );
 
-            if let Some(error) = &result.error {
-                // Extract the most relevant part of the error
+            if !result.failed_assertions.is_empty() {
+                for msg in &result.failed_assertions {
+                    let display_msg = msg.lines().next().unwrap_or(msg).trim();
+                    println!("      \x1b[31m{}\x1b[0m", display_msg);
+                }
+            } else if let Some(error) = &result.error {
+                // Non-assertion error (e.g., tool execution failure)
                 let display_error = error.lines().next().unwrap_or(error).trim();
                 println!("      \x1b[31m{}\x1b[0m", display_error);
             }
@@ -86,6 +91,7 @@ pub fn print_json(results: &[FileTestResult]) {
                     "duration_ms": r.duration.as_millis(),
                     "assertions": r.assertions,
                     "error": r.error,
+                    "failed_assertions": r.failed_assertions,
                 })
             })
         })

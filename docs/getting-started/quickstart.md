@@ -59,7 +59,7 @@ base_url = "http://localhost:3000"  # Or your Jug0 service address
 
 Create `src/agents/assistant.jgagent`:
 
-```yaml
+```jgagent
 slug: "assistant"
 name: "AI Assistant"
 model: "deepseek-chat"
@@ -73,7 +73,7 @@ system_prompt: |
 
 Create `src/prompts/analyze.jgprompt`:
 
-```yaml
+```jgprompt
 ---
 slug: "analyze"
 name: "Analysis Prompt"
@@ -98,7 +98,7 @@ Feel free to use informal language.
 
 Create `src/main.jg`:
 
-```yaml
+```juglans
 # Import resources
 prompts: ["./prompts/*.jgprompt"]
 agents: ["./agents/*.jgagent"]

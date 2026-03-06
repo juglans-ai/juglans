@@ -30,7 +30,7 @@ except Exception as e:
 
 **Juglans approach:**
 
-```yaml
+```juglans
 [load_memory]: sh(cmd="cat MEMORY.md")
 [chat]: chat(
   agent="my-agent",

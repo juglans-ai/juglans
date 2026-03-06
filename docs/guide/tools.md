@@ -54,7 +54,7 @@ Tool definition files allow you to store OpenAI Function Calling format tool def
 
 Import tool definitions at the top of a workflow file:
 
-```yaml
+```juglans
 name: "My Workflow"
 
 # Import tool definition files
@@ -69,7 +69,7 @@ entry: [start]
 
 #### Single Tool Set
 
-```yaml
+```juglans
 [step]: chat(
   agent="assistant",
   message=$input.query,
@@ -79,7 +79,7 @@ entry: [start]
 
 #### Multiple Tool Sets
 
-```yaml
+```juglans
 [step]: chat(
   agent="assistant",
   message=$input.query,
@@ -89,7 +89,7 @@ entry: [start]
 
 #### Inline JSON (Backward Compatible)
 
-```yaml
+```juglans
 [step]: chat(
   agent="assistant",
   message=$input.query,
@@ -108,7 +108,7 @@ entry: [start]
 
 Configure default tool sets in `.jgagent` files:
 
-```yaml
+```jgagent
 slug: "web-agent"
 model: "gpt-4o"
 system_prompt: "You are a web scraping assistant."
@@ -128,7 +128,7 @@ Juglans includes 6 Claude Code-style built-in developer tools, automatically reg
 
 ### Usage in Agents
 
-```yaml
+```jgagent
 slug: "code-assistant"
 model: "deepseek-chat"
 tools: ["devtools"]
@@ -141,7 +141,7 @@ tools: ["devtools"]
 
 devtools can be called directly in nodes as built-in tools, without declaring them in the `tools:` field:
 
-```yaml
+```juglans
 # Call directly as nodes
 [read]: read_file(file_path="./src/main.rs")
 [search]: grep(pattern="TODO|FIXME", path="./src")
@@ -170,7 +170,7 @@ Workflow inline JSON > Workflow reference > Agent default
 
 Example:
 
-```yaml
+```juglans
 # src/agents/my-agent.jgagent
 tools: "default-tools"
 
@@ -186,7 +186,7 @@ tools: "default-tools"
 
 When referencing multiple tool sets:
 
-```yaml
+```jgagent
 tools: ["web-tools", "data-tools"]
 ```
 
@@ -234,7 +234,7 @@ Final: [parse_html, calculate, fetch_url]
 
 **workflow.jg:**
 
-```yaml
+```juglans
 tools: ["./tools/*.json"]
 
 [fetch]: chat(
@@ -265,7 +265,7 @@ tools: ["./tools/*.json"]
 
 **agents/analyst.jgagent:**
 
-```yaml
+```jgagent
 slug: "analyst"
 tools: ["web-tools", "math-tools"]  # Combined tools
 ```
@@ -313,7 +313,7 @@ Provide clear descriptions in tool definitions:
 
 Create test workflows to verify tool definitions:
 
-```yaml
+```juglans
 name: "Test Web Tools"
 tools: ["./tools/web-tools.json"]
 
@@ -328,7 +328,7 @@ tools: ["./tools/web-tools.json"]
 
 ### Tool Set Not Found
 
-```yaml
+```jgagent
 tools: "nonexistent"  # Error
 ```
 

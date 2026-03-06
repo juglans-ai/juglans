@@ -96,3 +96,34 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/juglans:${{ steps.version.outputs.version }}
             ${{ secrets.DOCKERHUB_USERNAME }}/juglans:latest
             ${{ secrets.DOCKERHUB_USERNAME }}/juglans:${{ steps.version.outputs.version }}
+
+  # 构建并推送文档镜像
+  build-docs-image:
+    name: Build & Push Docs Image
+    needs: ci-gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push docs image
+        uses: docker/build-push-action@v5
+        with:
+          context: docs
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/juglans-docs:latest
+            ghcr.io/${{ github.repository_owner }}/juglans-docs:${{ steps.version.outputs.version }}

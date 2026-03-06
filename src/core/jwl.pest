@@ -12,7 +12,11 @@ null = { "null" }
 // 支持负数和小数的数字定义
 number = @{ "-"? ~ ("0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*) ~ ("." ~ ASCII_DIGIT*)? }
 // 带引号的字符串定义，支持反斜杠转义（\"  \\）
-string = @{ "\"" ~ (!("\"" | "\\") ~ ANY | "\\" ~ ANY)* ~ "\"" }
+// 三引号优先匹配（PEG ordered choice），内部可包含未转义的 " 和换行
+string = @{
+    "\"\"\"" ~ (!"\"\"\"" ~ ANY)* ~ "\"\"\"" |
+    "\"" ~ (!("\"" | "\\") ~ ANY | "\\" ~ ANY)* ~ "\""
+}
 // 标准标识符定义：字母或下划线开头，后跟字母数字或下划线
 identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 
@@ -41,7 +45,7 @@ value = _{ json_object | json_array | string | number | boolean | null }
 // - flows: 子工作流导入映射（用于跨工作流图合并）
 // - prompts/agents/tools: 本地资源导入
 // - python: Python 模块导入（支持系统模块、.py 文件、glob 模式）
-meta_key = { "slug" | "name" | "version" | "source" | "author" | "description" | "entry" | "exit" | "libs" | "flows" | "prompts" | "agents" | "tools" | "python" | "is_public" }
+meta_key = { "slug" | "name" | "version" | "source" | "author" | "description" | "entry" | "exit" | "libs" | "flows" | "prompts" | "agents" | "tools" | "python" | "is_public" | "schedule" }
 meta_list_item = { string | identifier }
 meta_val_list = { "[" ~ (meta_list_item ~ ("," ~ meta_list_item)*)? ~ ","? ~ "]" }
 // 【新增】对象映射值，用于 flows: { alias: "path" } 格式
@@ -94,14 +98,26 @@ block_body = { "{" ~ (node_def | edge_def)* ~ "}" }
 
 // 【新增】函数节点参数列表：[name(a, b)]: ...
 func_params = { "(" ~ (identifier ~ ("," ~ identifier)*)? ~ ")" }
+
+// assert 语法关键字：assert <expression>
+// 捕获 assert 后面直到 ; 或 } 或换行的所有内容作为原始表达式
+assert_expr = @{ (!";" ~ !"}" ~ !NEWLINE ~ ANY)+ }
+assert_stmt = { "assert" ~ assert_expr }
+
+// 赋值调用：var = tool_call(params)，将 tool 返回值存入变量
+assign_call = { identifier ~ "=" ~ task_def }
+
 // 【新增】函数体：{ step1; step2 } 或 { step1 \n step2 }，至少一个步骤
-func_step = { task_def | assignment_block }
+// PEG ordered choice: assert_stmt 和 assign_call 优先匹配
+func_step = { assert_stmt | assign_call | task_def | assignment_block }
 func_body = { "{" ~ func_step ~ (";"? ~ func_step)* ~ ";"? ~ "}" }
 
 // 赋值语法糖：count = 0, name = input.user → 解糖为 set_context(count=0, name=input.user)
 // assign_str 处理引号字符串和 f-string（内部逗号不会中断解析）
 assign_str = @{
+    "f\"\"\"" ~ (!"\"\"\"" ~ ANY)* ~ "\"\"\"" |
     "f\"" ~ (!("\"" | "\\") ~ ANY | "\\" ~ ANY)* ~ "\"" |
+    "\"\"\"" ~ (!"\"\"\"" ~ ANY)* ~ "\"\"\"" |
     "\"" ~ (!("\"" | "\\") ~ ANY | "\\" ~ ANY)* ~ "\"" |
     "'" ~ (!("'" | "\\") ~ ANY | "\\" ~ ANY)* ~ "'"
 }
@@ -132,15 +148,25 @@ class_member = _{ class_field_decl | class_method }
 class_body = { "{" ~ class_member+ ~ "}" }
 class_def = { "class" ~ identifier ~ class_params? ~ class_body }
 
+// --- Struct 定义 (Go/Rust 风格，纯数据结构) ---
+// struct 字段声明：name: type = default
+struct_field = { identifier ~ ":" ~ type_hint ~ ("=" ~ class_field_value)? }
+// struct body = 纯字段声明（不含方法）
+struct_body = { "{" ~ struct_field+ ~ "}" }
+// struct 花括号实例化：UserResponse { id = "u_001", name = "Alice" }
+struct_init_fields = { assignment ~ (","? ~ assignment)* ~ ","? }
+struct_init = { identifier ~ "{" ~ struct_init_fields? ~ "}" }
+
 // new 表达式：new ClassName(field=value, ...)
 new_expr = { "new" ~ identifier ~ "(" ~ (param_pair ~ ("," ~ param_pair)*)? ~ ")" }
 // 实例方法调用节点：$instance.method(params)
 method_call_node = { variable_ref ~ "(" ~ (param_pair ~ ("," ~ param_pair)*)? ~ ")" }
 
-// 节点内容：支持循环、遍历、new 实例化、方法调用、任务调用、赋值语法糖或纯 JSON/字符串
-node_content = _{ while_def | foreach_def | new_expr | method_call_node | task_def | assignment_block | json_object | string }
+// 节点内容：支持循环、遍历、new 实例化、方法调用、struct 花括号实例化、任务调用、赋值语法糖或纯 JSON/字符串
+node_content = _{ while_def | foreach_def | new_expr | method_call_node | struct_init | task_def | assignment_block | json_object | string }
 // 节点定义：支持可选的函数参数 [name(params)] 和函数体 { ... }
-node_def = { "[" ~ identifier ~ func_params? ~ "]" ~ ":" ~ (func_body | node_content) }
+// struct_body 先试（字段是 id: type 形式），func_body 后试（字段是 id = value 形式）
+node_def = { "[" ~ identifier ~ func_params? ~ "]" ~ ":" ~ (struct_body | func_body | node_content) }
 
 // --- 边定义 (Edges / Connections) ---
 // 条件分支语法：[A] if ctx.var == 1 -> [B]
@@ -168,4 +194,7 @@ switch_edge_def = { node_ref ~ "->" ~ "switch" ~ switch_subject? ~ switch_body }
 edge_def = _{ switch_edge_def | complex_edge_def | chain_edge_def }
 
 // --- 根语法单元 ---
+// .jgflow manifest — 只允许 metadata 声明（不允许 node/edge/class）
+manifest = { SOI ~ metadata* ~ EOI }
+// .jg workflow — 完整语法
 workflow = { SOI ~ (metadata | class_def | node_def | edge_def)* ~ EOI }

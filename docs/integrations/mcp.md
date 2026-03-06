@@ -107,7 +107,7 @@ alias = "fs"  # Optional alias
 
 **Calling in workflows:**
 
-```yaml
+```juglans
 # Use alias (if configured)
 [read]: fs.read_file(path="/data/input.txt")
 
@@ -126,7 +126,7 @@ alias = "fs"  # Optional alias
 
 ### Complete Example
 
-```yaml
+```juglans
 name: "Code Review Workflow"
 
 entry: [fetch_pr]
@@ -196,7 +196,7 @@ Available tools:
 | `move_file` | Move/rename a file |
 | `search_files` | Search for files |
 
-```yaml
+```juglans
 # Read a file
 [read]: filesystem.read_file(path="data/config.json")
 
@@ -240,7 +240,7 @@ Available tools:
 | `list_pr_files` | List PR files |
 | `search_code` | Search code |
 
-```yaml
+```juglans
 # Search code
 [search]: github.search_code(
   query="TODO in:file language:rust",
@@ -281,7 +281,7 @@ Available tools:
 | `list_tables` | List tables |
 | `describe_table` | Describe table structure |
 
-```yaml
+```juglans
 # Query data
 [query]: postgres.query(
   sql="SELECT * FROM users WHERE active = true LIMIT 10"
@@ -367,8 +367,8 @@ base_url = "http://localhost:5000"
 
 ### Use in Workflows
 
-```yaml
-[custom]: my-tools.my_tool(input=$ctx.data)
+```juglans
+[custom]: my_tools.my_tool(input=data)
 ```
 
 ## Tool Discovery
@@ -399,14 +399,14 @@ When a workflow loads an Agent, Juglans will:
 
 ### MCP Tool Errors
 
-```yaml
+```juglans
 [api_call]: github.get_repo(repo=$input.repo)
-[api_call] -> [process]
-[api_call] on error -> [handle_error]
-
+[process]: print(msg="Got repo info")
 [handle_error]: notify(status="GitHub API error, repo may not exist")
 [fallback]: set_context(repo_info=null)
 
+[api_call] -> [process]
+[api_call] on error -> [handle_error]
 [handle_error] -> [fallback]
 ```
 
@@ -446,8 +446,11 @@ Juglans only connects via HTTP; permission control should be implemented on the 
 
 Add error handling for MCP calls:
 
-```yaml
+```juglans
 [fetch]: github.get_repo(repo=$input.repo)
+[process]: print(msg="Fetched repo")
+[retry_or_fallback]: print(msg="Retrying or using fallback")
+
 [fetch] -> [process]
 [fetch] on error -> [retry_or_fallback]
 ```

@@ -462,6 +462,10 @@ impl ExprEvaluator {
 
     fn extract_string_value(&self, pair: pest::iterators::Pair<Rule>) -> String {
         let raw = pair.as_str();
+        // Triple-quoted: raw string, no escape processing
+        if raw.starts_with("\"\"\"") {
+            return raw[3..raw.len() - 3].to_string();
+        }
         // Strip surrounding quotes
         let inner = &raw[1..raw.len() - 1];
         // Process escape sequences
@@ -491,7 +495,12 @@ impl ExprEvaluator {
     }
 
     fn parse_fstring(&self, pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
-        let body = pair.into_inner().next().map(|p| p.as_str()).unwrap_or("");
+        let inner_pair = pair.into_inner().next();
+        let is_triple = inner_pair
+            .as_ref()
+            .map(|p| p.as_rule() == Rule::fstring_triple_body)
+            .unwrap_or(false);
+        let body = inner_pair.map(|p| p.as_str()).unwrap_or("");
 
         let mut parts = Vec::new();
         let mut chars = body.chars().peekable();
@@ -499,7 +508,7 @@ impl ExprEvaluator {
 
         while let Some(c) = chars.next() {
             match c {
-                '\\' => {
+                '\\' if !is_triple => {
                     if let Some(&next) = chars.peek() {
                         chars.next();
                         match next {
@@ -3675,5 +3684,117 @@ mod tests {
     fn test_fstring_nested_func() {
         // Inside f-strings, use single quotes for string literals
         assert_eq!(eval(r#"f"upper={upper('hello')}""#), json!("upper=HELLO"));
+    }
+
+    // ---- Triple-quoted strings ----
+
+    #[test]
+    fn test_triple_quoted_basic() {
+        assert_eq!(eval(r#""""hello world""""#), json!("hello world"));
+    }
+
+    #[test]
+    fn test_triple_quoted_with_double_quotes() {
+        assert_eq!(
+            eval(r#""""he said "hello" and left""""#),
+            json!(r#"he said "hello" and left"#)
+        );
+    }
+
+    #[test]
+    fn test_triple_quoted_with_json() {
+        assert_eq!(
+            eval(r#""""{"key":"value","nested":{"id":1}}""""#),
+            json!(r#"{"key":"value","nested":{"id":1}}"#)
+        );
+    }
+
+    #[test]
+    fn test_triple_quoted_multiline() {
+        let input = "\"\"\"line1\nline2\nline3\"\"\"";
+        assert_eq!(eval(input), json!("line1\nline2\nline3"));
+    }
+
+    #[test]
+    fn test_triple_quoted_with_single_quotes() {
+        assert_eq!(
+            eval(r#""""it's a "test" string""""#),
+            json!(r#"it's a "test" string"#)
+        );
+    }
+
+    #[test]
+    fn test_triple_quoted_empty() {
+        assert_eq!(eval(r#""""""""#), json!(""));
+    }
+
+    #[test]
+    fn test_triple_quoted_with_backslash() {
+        // Backslash NOT processed as escape (raw string)
+        assert_eq!(eval(r#""""path\to\file""""#), json!(r"path\to\file"));
+    }
+
+    #[test]
+    fn test_triple_quoted_curl_command() {
+        let input = r#""""curl -sf -X POST http://localhost:8001/api/publish -H 'Content-Type: application/json' -d '{"channel":"test","data":{"id":1}}'""""#;
+        let result = eval(input);
+        assert!(result.as_str().unwrap().contains(r#"{"channel":"test"#));
+    }
+
+    #[test]
+    fn test_triple_quoted_concat() {
+        assert_eq!(
+            eval(r#""""hello """ + """ world""""#),
+            json!("hello  world")
+        );
+    }
+
+    // ---- Triple-quoted f-strings ----
+
+    #[test]
+    fn test_fstring_triple_basic() {
+        assert_eq!(
+            eval_with(r#"f"""Hello {$ctx.name}!""""#, json!({"name": "Alice"})),
+            json!("Hello Alice!")
+        );
+    }
+
+    #[test]
+    fn test_fstring_triple_with_quotes() {
+        assert_eq!(
+            eval_with(
+                r#"f"""curl -H "Authorization: Bearer {$ctx.key}" https://api.com""""#,
+                json!({"key": "sk-123"})
+            ),
+            json!(r#"curl -H "Authorization: Bearer sk-123" https://api.com"#)
+        );
+    }
+
+    #[test]
+    fn test_fstring_triple_json_template() {
+        let result = eval_with(
+            r#"f"""{{"channel":"{$ctx.channel}","data":{{"content":"{$ctx.content}"}}}}""""#,
+            json!({"channel": "chat:dm:abc", "content": "hello"}),
+        );
+        let s = result.as_str().unwrap();
+        assert!(s.contains(r#""channel":"chat:dm:abc""#));
+        assert!(s.contains(r#""content":"hello""#));
+    }
+
+    #[test]
+    fn test_fstring_triple_multiline() {
+        let input = "f\"\"\"Hello\n{$ctx.name}\nBye\"\"\"";
+        assert_eq!(
+            eval_with(input, json!({"name": "World"})),
+            json!("Hello\nWorld\nBye")
+        );
+    }
+
+    #[test]
+    fn test_fstring_triple_escaped_braces() {
+        assert_eq!(
+            eval(r#"f"""literal {{braces}}""""#),
+            json!("literal {braces}")
+        );
     }
 }

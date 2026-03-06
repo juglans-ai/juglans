@@ -29,7 +29,7 @@ POST /api/workflows/my-flow/execute
 
 ### Access
 
-```yaml
+```text
 $input              # Entire input object
 $input.query        # String: "hello"
 $input.count        # Number: 5
@@ -38,7 +38,7 @@ $input.nested.field # Nested access
 
 ### Examples
 
-```yaml
+```juglans
 [process]: chat(
   agent="assistant",
   message=$input.query
@@ -74,7 +74,7 @@ The execution result of the most recent node.
 
 ### Examples
 
-```yaml
+```juglans
 # String output
 [ask]: chat(agent="assistant", message="Hello")
 [log]: notify(status="Response: " + $output)
@@ -97,23 +97,23 @@ User-defined variable storage, set via `set_context()`.
 
 ### Setting Variables
 
-```yaml
+```juglans
 # Simple values
 [init]: set_context(count=0, status="ready")
 
 # Objects
-[init]: set_context(config={"timeout": 30, "retries": 3})
+[setup]: set_context(config={"timeout": 30, "retries": 3})
 
 # Arrays
-[init]: set_context(results=[], history=[])
+[prepare]: set_context(results=[], history=[])
 
-# Nested paths
-[update]: set_context(user.name="Alice", user.score=100)
+# From output
+[update]: set_context(name=$output.name, score=$output.score)
 ```
 
 ### Reading Variables
 
-```yaml
+```text
 $ctx.count           # Number
 $ctx.status          # String
 $ctx.config.timeout  # Nested access
@@ -123,7 +123,7 @@ $ctx.user.name       # Nested object
 
 ### Updating Variables
 
-```yaml
+```juglans
 # Increment
 [inc]: set_context(count=$ctx.count + 1)
 
@@ -140,7 +140,7 @@ $ctx.user.name       # Nested object
 
 `$ctx` persists throughout the entire workflow execution:
 
-```yaml
+```juglans
 [init]: set_context(total=0)
 [step1]: set_context(total=$ctx.total + 10)  # total=10
 [step2]: set_context(total=$ctx.total + 20)  # total=30
@@ -164,7 +164,7 @@ Metadata information from AI replies.
 
 ### Examples
 
-```yaml
+```juglans
 [ask]: chat(agent="assistant", message=$input.query)
 [log]: notify(status="Used " + $reply.tokens + " tokens")
 [save]: set_context(
@@ -183,7 +183,7 @@ When using `flows:` to import subworkflows, variable references to internal subw
 
 Only variables whose first segment matches a subworkflow internal node ID get prefixed. Global variables (`$ctx`, `$input`, `$output`) are not affected:
 
-```yaml
+```text
 # Assume the auth subworkflow has two internal nodes: verify and extract
 
 # Syntax inside subworkflow           →  Actual variable after merging
@@ -196,16 +196,17 @@ $output                     →  $output                 # Unchanged
 
 ### Usage in the Parent Workflow
 
-```yaml
-flows: {
-  auth: "./auth.jg"
-}
+```juglans
+# After flow import merging, subworkflow node outputs are accessed via namespace
+[next]: chat(message=$ctx.auth_result)
 
-# Access subworkflow node output through namespace path
-[next]: chat(message=$auth.verify.output)
+# Conditions can use any context variable
+[check]: set_context(intent=$output.intent)
+[trade]: print(msg="Trading")
+[done]: print(msg="Done")
 
-# Used in conditions
-[check] if $auth.extract.output.intent == "trade" -> [trade]
+[check] if $ctx.intent == "trade" -> [trade]
+[check] -> [done]
 ```
 
 See [Workflow Composition Guide](../guide/workflow-composition.md) for details.
@@ -224,23 +225,23 @@ Available in `foreach` and `while` loops:
 
 ### Examples
 
-```yaml
+```juglans
+[init]: set_context(results=[])
+
 [process]: foreach($item in $input.items) {
   [log]: notify(
     status="Processing " + (loop.index + 1) + "/" + len($input.items)
   )
 
-  {% if loop.first %}
-  [init]: set_context(results=[])
-  {% endif %}
-
   [handle]: chat(agent="processor", message=$item)
   [collect]: set_context(results=append($ctx.results, $output))
 
-  {% if loop.last %}
-  [summary]: notify(status="All items processed!")
-  {% endif %}
+  [log] -> [handle] -> [collect]
 }
+
+[done]: notify(status="All items processed! Count: " + len($ctx.results))
+
+[init] -> [process] -> [done]
 ```
 
 ---
@@ -249,38 +250,38 @@ Available in `foreach` and `while` loops:
 
 ### Arithmetic Operations
 
-```yaml
-$ctx.a + $ctx.b      # Addition
-$ctx.a - $ctx.b      # Subtraction
-$ctx.a * $ctx.b      # Multiplication
-$ctx.a / $ctx.b      # Division
-$ctx.a % $ctx.b      # Modulo
+```juglans
+[add]: set_context(result=$ctx.a + $ctx.b)       # Addition
+[sub]: set_context(result=$ctx.a - $ctx.b)       # Subtraction
+[mul]: set_context(result=$ctx.a * $ctx.b)       # Multiplication
+[div]: set_context(result=$ctx.a / $ctx.b)       # Division
+[mod]: set_context(result=$ctx.a % $ctx.b)       # Modulo
 ```
 
 ### Comparison Operations
 
-```yaml
-$ctx.a == $ctx.b     # Equal to
-$ctx.a != $ctx.b     # Not equal to
-$ctx.a > $ctx.b      # Greater than
-$ctx.a < $ctx.b      # Less than
-$ctx.a >= $ctx.b     # Greater than or equal to
-$ctx.a <= $ctx.b     # Less than or equal to
+```juglans
+[eq]: set_context(result=$ctx.a == $ctx.b)       # Equal to
+[ne]: set_context(result=$ctx.a != $ctx.b)       # Not equal to
+[gt]: set_context(result=$ctx.a > $ctx.b)        # Greater than
+[lt]: set_context(result=$ctx.a < $ctx.b)        # Less than
+[ge]: set_context(result=$ctx.a >= $ctx.b)       # Greater than or equal to
+[le]: set_context(result=$ctx.a <= $ctx.b)       # Less than or equal to
 ```
 
 ### Logical Operations
 
-```yaml
-$ctx.a && $ctx.b     # AND
-$ctx.a || $ctx.b     # OR
-!$ctx.a              # NOT
+```juglans
+[and]: set_context(result=$ctx.a && $ctx.b)      # AND
+[or]: set_context(result=$ctx.a || $ctx.b)       # OR
+[not]: set_context(result=!$ctx.a)               # NOT
 ```
 
 ### String Operations
 
-```yaml
-"Hello, " + $input.name              # Concatenation
-$input.text + " (length: " + len($input.text) + ")"
+```juglans
+[greet]: notify(status="Hello, " + $input.name)
+[info]: notify(status=$input.text + " (length: " + len($input.text) + ")")
 ```
 
 ### Built-in Functions
@@ -296,7 +297,7 @@ $input.text + " (length: " + len($input.text) + ")"
 
 ## Complete Example
 
-```yaml
+```juglans
 name: "Context Demo"
 version: "0.1.0"
 
@@ -353,18 +354,21 @@ exit: [summary]
 
 ### Print Context
 
-```yaml
+```juglans
 [debug]: notify(status="Context: " + json($ctx))
 ```
 
 ### Check Variable Type
 
-```yaml
+```juglans
 [check]: notify(status="Type: " + type($ctx.value))
 ```
 
 ### Conditional Breakpoint
 
-```yaml
+```juglans
+[breakpoint]: notify(status="count=" + $ctx.count)
+[error_handler]: notify(status="Count exceeded 100!")
+
 [breakpoint] if $ctx.count > 100 -> [error_handler]
 ```

@@ -1,11 +1,15 @@
 // src/testing/mod.rs
 //
 // Test runner for `juglans test`.
-// Discovers `_test_*` function blocks in .jg files and executes them.
+// Discovers `test_*` nodes in .jg files and executes them as independent subgraphs.
 
 pub mod reporter;
 
 use anyhow::{anyhow, Result};
+use petgraph::graph::NodeIndex;
+use petgraph::visit::EdgeRef;
+use petgraph::Direction;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -13,31 +17,11 @@ use tracing::debug;
 
 use crate::core::context::WorkflowContext;
 use crate::core::executor::WorkflowExecutor;
-use crate::core::graph::WorkflowGraph;
+use crate::core::graph::{self, WorkflowGraph};
 use crate::core::parser::GraphParser;
 use crate::services::agent_loader::AgentRegistry;
 use crate::services::interface::JuglansRuntime;
 use crate::services::prompt_loader::PromptRegistry;
-
-/// Configuration extracted from `_test_config` block
-#[derive(Debug, Clone)]
-pub struct TestConfig {
-    pub agent: Option<String>,
-    pub budget: f64,
-    pub mock: bool,
-    pub timeout: Duration,
-}
-
-impl Default for TestConfig {
-    fn default() -> Self {
-        Self {
-            agent: None,
-            budget: 10.0,
-            mock: false,
-            timeout: Duration::from_secs(60),
-        }
-    }
-}
 
 /// Result of a single test case
 #[derive(Debug, Clone)]
@@ -47,6 +31,7 @@ pub struct TestResult {
     pub duration: Duration,
     pub error: Option<String>,
     pub assertions: usize,
+    pub failed_assertions: Vec<String>,
 }
 
 /// Result of running all tests in a single file
@@ -98,29 +83,10 @@ impl TestRunner {
         let workflow = GraphParser::parse(&content)
             .map_err(|e| anyhow!("Failed to parse {}: {}", path.display(), e))?;
 
-        // Classify _test_* function blocks
-        let mut config_fn = None;
-        let mut setup_fn = None;
-        let mut teardown_fn = None;
-        let mut test_cases: Vec<String> = Vec::new();
+        // Find test roots: test_* nodes with in-degree == 0
+        let test_roots = find_test_roots(&workflow);
 
-        for name in workflow.functions.keys() {
-            if !name.starts_with("_test_") {
-                continue;
-            }
-
-            match name.as_str() {
-                "_test_config" => config_fn = Some(name.clone()),
-                "_test_setup" => setup_fn = Some(name.clone()),
-                "_test_teardown" => teardown_fn = Some(name.clone()),
-                _ => test_cases.push(name.clone()),
-            }
-        }
-
-        // Sort test cases for deterministic ordering
-        test_cases.sort();
-
-        if test_cases.is_empty() {
+        if test_roots.is_empty() {
             return Ok(FileTestResult {
                 path: path.to_path_buf(),
                 results: Vec::new(),
@@ -142,26 +108,13 @@ impl TestRunner {
 
         let workflow_arc = Arc::new(workflow);
 
-        // Extract config if present
-        let _config = if let Some(config_name) = &config_fn {
-            self.run_config_block(&executor, &workflow_arc, config_name)
-                .await
-                .unwrap_or_default()
-        } else {
-            TestConfig::default()
-        };
-
-        // Run each test case
+        // Run each test subgraph
         let mut results = Vec::new();
-        for test_name in &test_cases {
+        for root_idx in &test_roots {
+            let root_name = workflow_arc.graph[*root_idx].id.clone();
+            let subgraph_nodes = collect_subgraph(&workflow_arc, *root_idx);
             let result = self
-                .run_single_test(
-                    &executor,
-                    &workflow_arc,
-                    test_name,
-                    setup_fn.as_deref(),
-                    teardown_fn.as_deref(),
-                )
+                .run_subgraph_test(&executor, &workflow_arc, &root_name, &subgraph_nodes)
                 .await;
             results.push(result);
         }
@@ -172,113 +125,60 @@ impl TestRunner {
         })
     }
 
-    /// Execute the _test_config block and extract TestConfig
-    async fn run_config_block(
+    /// Run a single test subgraph
+    async fn run_subgraph_test(
         &self,
         executor: &Arc<WorkflowExecutor>,
         workflow: &Arc<WorkflowGraph>,
-        config_name: &str,
-    ) -> Result<TestConfig> {
-        let context = WorkflowContext::new();
-        let result = executor
-            .clone()
-            .execute_function(
-                config_name.to_string(),
-                std::collections::HashMap::new(),
-                workflow.clone(),
-                &context,
-            )
-            .await?;
-
-        let mut config = TestConfig::default();
-
-        if let Some(val) = result {
-            if let Some(obj) = val.as_object() {
-                if let Some(agent) = obj.get("agent").and_then(|v| v.as_str()) {
-                    config.agent = Some(agent.to_string());
-                }
-                if let Some(budget) = obj.get("budget").and_then(|v| v.as_str()) {
-                    config.budget = budget.parse().unwrap_or(10.0);
-                }
-                if let Some(mock) = obj.get("mock").and_then(|v| v.as_str()) {
-                    config.mock = mock == "true";
-                }
-                if let Some(timeout) = obj.get("timeout").and_then(|v| v.as_str()) {
-                    let secs: u64 = timeout.parse().unwrap_or(60);
-                    config.timeout = Duration::from_secs(secs);
-                }
-            }
-        }
-
-        Ok(config)
-    }
-
-    /// Run a single test case with optional setup/teardown
-    async fn run_single_test(
-        &self,
-        executor: &Arc<WorkflowExecutor>,
-        workflow: &Arc<WorkflowGraph>,
-        test_name: &str,
-        setup_fn: Option<&str>,
-        teardown_fn: Option<&str>,
+        root_name: &str,
+        subgraph_nodes: &[NodeIndex],
     ) -> TestResult {
         let started = Instant::now();
         let context = WorkflowContext::new();
 
-        // Run setup
-        if let Some(setup) = setup_fn {
-            debug!("Running setup for {}", test_name);
-            if let Err(e) = executor
-                .clone()
-                .execute_function(
-                    setup.to_string(),
-                    std::collections::HashMap::new(),
-                    workflow.clone(),
-                    &context,
-                )
-                .await
-            {
-                return TestResult {
-                    name: test_name.to_string(),
-                    passed: false,
-                    duration: started.elapsed(),
-                    error: Some(format!("setup failed: {}", e)),
-                    assertions: 0,
-                };
-            }
-        }
+        // Build a sub-workflow containing only the test nodes
+        let sub_workflow = extract_subworkflow(workflow, subgraph_nodes);
+        let sub_arc = Arc::new(sub_workflow);
 
-        // Run the test
-        let test_result = executor
-            .clone()
-            .execute_function(
-                test_name.to_string(),
-                std::collections::HashMap::new(),
-                workflow.clone(),
-                &context,
-            )
-            .await;
+        debug!(
+            "Running test: {} ({} nodes)",
+            root_name,
+            subgraph_nodes.len()
+        );
 
-        // Count assertions from trace (tool calls to "assert")
+        // Execute the sub-DAG
+        let exec_result = executor.clone().execute_graph(sub_arc, &context).await;
+
+        // Count assertions from trace
         let trace = context.trace_entries();
         let assertions = trace.iter().filter(|e| e.tool == "assert").count();
 
-        // Check for failures: either execute_function returned Err, or
-        // any assert tool call had an error status in the trace
-        let (passed, error) = match test_result {
-            Err(e) => (false, Some(e.to_string())),
-            Ok(_) => {
-                // Check trace for failed assertions
-                let failed_assert = trace.iter().find(|e| {
-                    e.tool == "assert"
-                        && matches!(e.status, crate::core::context::TraceStatus::Error(_))
-                });
+        // Collect all failed assertions
+        let failed_assertions: Vec<String> = trace
+            .iter()
+            .filter(|e| {
+                e.tool == "assert"
+                    && matches!(e.status, crate::core::context::TraceStatus::Error(_))
+            })
+            .map(|e| match &e.status {
+                crate::core::context::TraceStatus::Error(msg) => msg.clone(),
+                _ => unreachable!(),
+            })
+            .collect();
 
-                if let Some(entry) = failed_assert {
-                    match &entry.status {
-                        crate::core::context::TraceStatus::Error(msg) => (false, Some(msg.clone())),
-                        _ => (true, None),
-                    }
+        let (passed, error) = match exec_result {
+            Err(e) => {
+                let err_msg = e.to_string();
+                // If the error is an assertion failure not yet in failed_assertions, include it
+                if failed_assertions.is_empty() {
+                    (false, Some(err_msg))
+                } else {
+                    (false, failed_assertions.first().cloned())
+                }
+            }
+            Ok(_) => {
+                if !failed_assertions.is_empty() {
+                    (false, failed_assertions.first().cloned())
                 } else {
                     // Also check context $error
                     match context.resolve_path("error") {
@@ -295,26 +195,13 @@ impl TestRunner {
             }
         };
 
-        // Run teardown (even if test failed)
-        if let Some(teardown) = teardown_fn {
-            debug!("Running teardown for {}", test_name);
-            let _ = executor
-                .clone()
-                .execute_function(
-                    teardown.to_string(),
-                    std::collections::HashMap::new(),
-                    workflow.clone(),
-                    &context,
-                )
-                .await;
-        }
-
         TestResult {
-            name: test_name.to_string(),
+            name: root_name.to_string(),
             passed,
             duration: started.elapsed(),
             error,
             assertions,
+            failed_assertions,
         }
     }
 
@@ -345,9 +232,9 @@ impl TestRunner {
             if path.is_dir() {
                 Self::walk_dir(&path, files)?;
             } else if path.extension().is_some_and(|ext| ext == "jg") {
-                // Only include files that contain _test_ blocks
+                // Only include files that contain test_* nodes
                 if let Ok(content) = std::fs::read_to_string(&path) {
-                    if content.contains("_test_") {
+                    if content.contains("[test_") {
                         files.push(path);
                     }
                 }
@@ -355,14 +242,106 @@ impl TestRunner {
         }
         Ok(())
     }
+}
 
-    /// Check if a .jg file contains test blocks (without full parsing)
-    pub fn _is_test_file(path: &Path) -> bool {
-        if !path.extension().is_some_and(|ext| ext == "jg") {
-            return false;
+/// Find test root nodes: `test_*` nodes with no incoming edges
+fn find_test_roots(workflow: &WorkflowGraph) -> Vec<NodeIndex> {
+    let mut roots: Vec<NodeIndex> = workflow
+        .graph
+        .node_indices()
+        .filter(|&idx| {
+            let node = &workflow.graph[idx];
+            if !graph::is_test_node_id(&node.id) {
+                return false;
+            }
+            // Must have no incoming edges (in-degree == 0)
+            workflow
+                .graph
+                .edges_directed(idx, Direction::Incoming)
+                .count()
+                == 0
+        })
+        .collect();
+    roots.sort_by_key(|idx| workflow.graph[*idx].id.clone());
+    roots
+}
+
+/// BFS forward from root to collect all reachable nodes
+fn collect_subgraph(workflow: &WorkflowGraph, root: NodeIndex) -> Vec<NodeIndex> {
+    let mut visited = Vec::new();
+    let mut seen = HashSet::new();
+    let mut queue = std::collections::VecDeque::new();
+    queue.push_back(root);
+
+    while let Some(idx) = queue.pop_front() {
+        if !seen.insert(idx) {
+            continue;
         }
-        std::fs::read_to_string(path)
-            .map(|content| content.contains("_test_"))
-            .unwrap_or(false)
+        visited.push(idx);
+        for neighbor in workflow.graph.neighbors_directed(idx, Direction::Outgoing) {
+            if !seen.contains(&neighbor) {
+                queue.push_back(neighbor);
+            }
+        }
     }
+
+    visited
+}
+
+/// Strip `test_` prefix from node ID so execute_graph doesn't skip it
+fn strip_test_prefix(id: &str) -> String {
+    // test_foo → _root, test_foo.__1 → __1
+    if let Some(suffix) = id.strip_prefix("test_") {
+        if let Some(pos) = suffix.find(".__") {
+            suffix[pos + 1..].to_string()
+        } else {
+            "_root".to_string()
+        }
+    } else {
+        id.to_string()
+    }
+}
+
+/// Extract a sub-workflow from a set of node indices
+fn extract_subworkflow(source: &WorkflowGraph, node_indices: &[NodeIndex]) -> WorkflowGraph {
+    let mut sub = WorkflowGraph::default();
+    let mut idx_map: HashMap<NodeIndex, NodeIndex> = HashMap::new();
+
+    // Copy nodes, stripping test_ prefix so execute_graph doesn't skip them
+    for &idx in node_indices {
+        let mut node = source.graph[idx].clone();
+        node.id = strip_test_prefix(&node.id);
+        let new_idx = sub.graph.add_node(node.clone());
+        sub.node_map.insert(node.id.clone(), new_idx);
+        idx_map.insert(idx, new_idx);
+    }
+
+    // Copy edges between nodes in the subgraph
+    for &idx in node_indices {
+        for edge in source.graph.edges_directed(idx, Direction::Outgoing) {
+            if let Some(&new_target) = idx_map.get(&edge.target()) {
+                let new_source = idx_map[&idx];
+                sub.graph
+                    .add_edge(new_source, new_target, edge.weight().clone());
+            }
+        }
+    }
+
+    // Set entry to the root (first node, with test_ prefix stripped)
+    if let Some(&first) = node_indices.first() {
+        sub.entry_node = strip_test_prefix(&source.graph[first].id);
+    }
+
+    // Copy switch routes for nodes in the subgraph
+    for &idx in node_indices {
+        let id = &source.graph[idx].id;
+        if let Some(route) = source.switch_routes.get(id) {
+            sub.switch_routes.insert(id.clone(), route.clone());
+        }
+    }
+
+    // Copy functions (tests may call functions defined in the same file)
+    sub.functions = source.functions.clone();
+
+    sub
 }

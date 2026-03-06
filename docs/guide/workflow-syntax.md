@@ -4,7 +4,7 @@
 
 ## File Structure
 
-```yaml
+```text
 # Metadata
 name: "Workflow Name"
 version: "0.1.0"
@@ -20,7 +20,7 @@ entry: [start_node]
 exit: [end_node]
 
 # Node definitions
-[node_id]: tool_call(params...)
+[node_id]: tool_call(param1="value1")
 
 # Edge definitions
 [A] -> [B]
@@ -44,7 +44,7 @@ Workflows can import local Prompt and Agent files, and can also reference remote
 
 Use glob patterns to import local files:
 
-```yaml
+```text
 # Relative path (relative to the directory containing the .jg file)
 prompts: ["./prompts/*.jgprompt"]
 agents: ["./agents/*.jgagent"]
@@ -71,11 +71,17 @@ prompts: ["/absolute/path/to/prompts/*.jgprompt"]
 
 Use `flows:` to merge nodes from other `.jg` files into the current workflow, enabling cross-file branching:
 
-```yaml
+```juglans
 flows: {
   auth: "./auth.jg"
   trading: "./trading.jg"
 }
+
+entry: [route]
+exit: [next_step]
+
+[route]: print(msg="routing")
+[next_step]: print(msg="done")
 
 # Reference sub-workflow nodes
 [route] if $ctx.need_auth -> [auth.start]
@@ -88,7 +94,7 @@ Sub-workflow nodes are merged into the parent DAG with the alias as a namespace 
 
 Imported local resources can be referenced by slug:
 
-```yaml
+```juglans
 # Import local Agent
 agents: ["./agents/*.jgagent"]
 
@@ -98,7 +104,7 @@ agents: ["./agents/*.jgagent"]
 
 To reference remote (Jug0) resources, use the `owner/slug` format:
 
-```yaml
+```juglans
 # No import needed, directly reference remote resources
 [chat]: chat(agent="juglans/premium-agent", message=$input)
 [render]: p(slug="owner/shared-prompt", data=$input)
@@ -106,7 +112,7 @@ To reference remote (Jug0) resources, use the `owner/slug` format:
 
 ### Mixed Usage
 
-```yaml
+```juglans
 # Import local resources
 prompts: ["./prompts/*.jgprompt"]
 agents: ["./agents/*.jgagent"]
@@ -114,11 +120,15 @@ agents: ["./agents/*.jgagent"]
 entry: [start]
 exit: [end]
 
+[start]: print(msg="begin")
+
 # Use local Agent
 [local_chat]: chat(agent="my-agent", message=$input)
 
 # Use remote Agent
 [remote_chat]: chat(agent="juglans/cloud-agent", message=$output)
+
+[end]: print(msg="done")
 
 [start] -> [local_chat] -> [remote_chat] -> [end]
 ```
@@ -127,7 +137,7 @@ exit: [end]
 
 Define the starting and ending points of a workflow:
 
-```yaml
+```juglans
 entry: [start]           # Single entry
 exit: [end]              # Single exit
 
@@ -139,7 +149,7 @@ exit: [success, failure]
 
 ### Basic Syntax
 
-```yaml
+```juglans
 [node_id]: tool_name(param1=value1, param2=value2)
 ```
 
@@ -149,7 +159,7 @@ exit: [success, failure]
 - Must be enclosed in square brackets
 - Case-sensitive
 
-```yaml
+```text
 [start]              # Valid
 [process_data]       # Valid
 [step-1]             # Valid
@@ -158,7 +168,7 @@ exit: [success, failure]
 
 In edge definitions, you can also use namespaced format to reference imported sub-workflow nodes:
 
-```yaml
+```text
 [auth.start]         # Reference the start node of the auth sub-workflow
 [trading.done]       # Reference the done node of the trading sub-workflow
 ```
@@ -167,7 +177,7 @@ Namespaced nodes are produced by `flows:` imports. See [Workflow Composition](./
 
 ### Tool Calls
 
-```yaml
+```juglans
 # String parameters
 [node]: notify(status="Processing...")
 
@@ -187,7 +197,7 @@ Namespaced nodes are produced by `flows:` imports. See [Workflow Composition](./
 
 ### Literal Nodes
 
-```yaml
+```juglans
 # String literal
 [message]: "Hello, World!"
 
@@ -202,14 +212,28 @@ Namespaced nodes are produced by `flows:` imports. See [Workflow Composition](./
 
 ### Simple Connections
 
-```yaml
+```juglans
+[A]: print(msg="a")
+[B]: print(msg="b")
+[C]: print(msg="c")
+
 [A] -> [B]              # Execute B after A completes
 [A] -> [B] -> [C]       # Chained connection
 ```
 
 ### Conditional Branches
 
-```yaml
+```juglans
+[router]: print(msg="routing")
+[simple_handler]: print(msg="simple")
+[complex_handler]: print(msg="complex")
+[node]: print(msg="scoring")
+[high_score]: print(msg="high")
+[low_score]: print(msg="low")
+[check]: print(msg="checking")
+[proceed]: print(msg="proceed")
+[reject]: print(msg="reject")
+
 # Expression-based conditions
 [router] if $ctx.type == "simple" -> [simple_handler]
 [router] if $ctx.type == "complex" -> [complex_handler]
@@ -225,7 +249,18 @@ Namespaced nodes are produced by `flows:` imports. See [Workflow Composition](./
 
 **Cross-workflow branching:** Conditional edge targets can be sub-workflow nodes:
 
-```yaml
+```juglans
+flows: {
+  auth: "./auth.jg"
+  trading: "./trading.jg"
+}
+
+entry: [route]
+exit: [done]
+
+[route]: print(msg="routing")
+[done]: print(msg="done")
+
 [route] if $output.type == "auth" -> [auth.start]
 [route] if $output.type == "trade" -> [trading.start]
 [auth.done] -> [done]
@@ -238,8 +273,11 @@ Namespaced nodes are produced by `flows:` imports. See [Workflow Composition](./
 
 Multi-branch selection that executes only one matching branch (unlike conditional edges):
 
-```yaml
+```juglans
 [classify]: chat(agent="classifier", message=$input)
+[answer]: print(msg="answering")
+[execute]: print(msg="executing")
+[fallback]: print(msg="fallback")
 
 # switch block: only one branch is taken
 [classify] -> switch $output.intent {
@@ -262,7 +300,13 @@ Multi-branch selection that executes only one matching branch (unlike conditiona
 | Syntax | Multiple lines | Single block |
 | Default handling | Requires an extra edge | `default` keyword |
 
-```yaml
+```juglans
+[node]: print(msg="start")
+[path_a]: print(msg="a")
+[path_b]: print(msg="b")
+[default]: print(msg="default")
+[path_default]: print(msg="path_default")
+
 # Conditional edges: may execute multiple simultaneously
 [node] if $ctx.a -> [path_a]
 [node] if $ctx.b -> [path_b]  # Both a and b may execute
@@ -280,7 +324,13 @@ Multi-branch selection that executes only one matching branch (unlike conditiona
 
 ### Error Handling
 
-```yaml
+```juglans
+[risky_operation]: print(msg="risky")
+[error_handler]: print(msg="error")
+[api_call]: print(msg="api")
+[process]: print(msg="process")
+[fallback]: print(msg="fallback")
+
 # Jump on error
 [risky_operation] on error -> [error_handler]
 
@@ -291,7 +341,12 @@ Multi-branch selection that executes only one matching branch (unlike conditiona
 
 ### Default Path
 
-```yaml
+```juglans
+[router]: print(msg="routing")
+[path_a]: print(msg="a")
+[path_b]: print(msg="b")
+[default_path]: print(msg="default")
+
 # Default path when no conditions are met
 [router] if $ctx.a == 1 -> [path_a]
 [router] if $ctx.b == 1 -> [path_b]
@@ -306,7 +361,7 @@ Functions are **not** added to the main DAG — they exist as callable templates
 
 ### Single-Step Function
 
-```yaml
+```juglans
 # Define
 [greet(name)]: bash(command="echo Hello, " + $name)
 
@@ -318,7 +373,7 @@ Functions are **not** added to the main DAG — they exist as callable templates
 
 Use `{ ... }` to define a function with multiple sequential steps:
 
-```yaml
+```juglans
 # Define: steps run in sequence (__0 -> __1)
 [build(dir)]: {
   bash(command="cd " + $dir + " && make")
@@ -331,13 +386,13 @@ Use `{ ... }` to define a function with multiple sequential steps:
 
 Steps can be separated by newlines or semicolons:
 
-```yaml
+```text
 [pipeline(a, b)]: { bash(command=$a); bash(command=$b) }
 ```
 
 ### Multiple Parameters
 
-```yaml
+```juglans
 [deploy(env, version)]: {
   bash(command="docker build -t app:" + $version + " .")
   bash(command="docker push app:" + $version)
@@ -373,7 +428,7 @@ Steps can be separated by newlines or semicolons:
 
 ### While Loop
 
-```yaml
+```juglans
 [loop]: while($ctx.count < 10) {
   [increment]: set_context(count=$ctx.count + 1)
   [process]: chat(agent="worker", message="Item " + $ctx.count)
@@ -383,7 +438,7 @@ Steps can be separated by newlines or semicolons:
 
 ### Foreach Loop
 
-```yaml
+```juglans
 [process_items]: foreach($item in $input.items) {
   [handle]: chat(agent="processor", message=$item.content)
   [save]: set_context(results=append($ctx.results, $output))
@@ -405,7 +460,7 @@ Available inside loops:
 
 ### Path Syntax
 
-```yaml
+```text
 $input.field           # Input variable
 $output                # Current node output
 $output.nested.field   # Nested access
@@ -415,7 +470,7 @@ $reply.content         # Last reply content
 
 ### Usage in Tool Calls
 
-```yaml
+```juglans
 [step1]: chat(message=$input.question)
 [step2]: p(slug="template", data=$output)
 [step3]: notify(status="Result: " + $output.summary)
@@ -425,7 +480,7 @@ $reply.content         # Last reply content
 
 ### Simple Chat
 
-```yaml
+```juglans
 name: "Simple Chat"
 version: "0.1.0"
 
@@ -443,7 +498,7 @@ exit: [end]
 
 ### Workflow with Routing
 
-```yaml
+```juglans
 name: "Smart Router"
 version: "0.1.0"
 
@@ -480,7 +535,7 @@ exit: [done]
 
 ### Batch Processing
 
-```yaml
+```juglans
 name: "Batch Processor"
 version: "0.1.0"
 
@@ -515,7 +570,7 @@ exit: [summary]
 
 ### With Error Handling
 
-```yaml
+```juglans
 name: "Robust Workflow"
 version: "0.1.0"
 

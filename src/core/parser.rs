@@ -1,6 +1,6 @@
 // src/core/parser.rs
 use crate::core::graph::{
-    Action, ClassDef, ClassField, Edge, FunctionDef, Node, NodeType, SwitchCase, SwitchRoute,
+    self, Action, ClassDef, ClassField, Edge, FunctionDef, Node, NodeType, SwitchCase, SwitchRoute,
     WorkflowGraph,
 };
 use anyhow::{anyhow, Result};
@@ -115,19 +115,21 @@ impl GraphParser {
         Ok(workflow_instance)
     }
 
-    /// 解析 .jgflow 清单文件 — 只提取 metadata，不要求节点或 entry
+    /// 解析 .jgflow 清单文件 — 只提取 metadata，不允许节点/边/类定义
     pub fn parse_manifest(content: &str) -> Result<WorkflowGraph> {
-        let mut pairs = JwlGrammar::parse(Rule::workflow, content)
+        let mut pairs = JwlGrammar::parse(Rule::manifest, content)
             .map_err(|e| anyhow!("Manifest Syntax Error:\n{}", e))?;
 
-        let workflow_pair = pairs
+        let manifest_pair = pairs
             .next()
             .ok_or_else(|| anyhow!("Manifest Error: The input is empty."))?;
 
         let mut workflow_instance = WorkflowGraph::default();
 
-        if workflow_pair.as_rule() == Rule::workflow {
-            Self::parse_block(workflow_pair, &mut workflow_instance)?;
+        for inner in manifest_pair.into_inner() {
+            if inner.as_rule() == Rule::metadata {
+                Self::parse_metadata(inner, &mut workflow_instance)?;
+            }
         }
 
         // 清单不需要 entry 节点
@@ -202,6 +204,9 @@ impl GraphParser {
             "is_public" => {
                 workflow.is_public = Some(Self::parse_text_value_raw(val_node) == "true");
             }
+            "schedule" => {
+                workflow.schedule = Some(Self::parse_text_value_raw(val_node));
+            }
             "flows" => {
                 // 解析 flows: { alias: "path", ... } 对象映射
                 if val_node.as_rule() == Rule::meta_val_map {
@@ -265,7 +270,14 @@ impl GraphParser {
 
     fn parse_text_value_raw(pair: Pair<Rule>) -> String {
         match pair.as_rule() {
-            Rule::string => pair.as_str().trim_matches('"').to_string(),
+            Rule::string => {
+                let s = pair.as_str();
+                if s.starts_with("\"\"\"") {
+                    s[3..s.len() - 3].to_string()
+                } else {
+                    s.trim_matches('"').to_string()
+                }
+            }
             Rule::identifier => pair.as_str().to_string(),
             _ => pair.as_str().to_string(),
         }
@@ -357,9 +369,40 @@ impl GraphParser {
             return Self::parse_function_def(node_id_str, params, content_node, workflow);
         }
 
-        // [name]: { func_body } without params — also treat as function def (for _test_ blocks etc.)
+        // [name]: { func_body } without params
         if content_node.as_rule() == Rule::func_body {
+            if graph::is_test_node_id(&node_id_str) {
+                // test_ blocks: expand into chained DAG nodes for test runner discovery
+                return Self::expand_test_block(node_id_str, content_node, workflow);
+            }
+            // Regular blocks: treat as function def
             return Self::parse_function_def(node_id_str, Vec::new(), content_node, workflow);
+        }
+
+        // [name]: { struct_body } — 纯字段声明 → 存为 ClassDef（不进 DAG）
+        if content_node.as_rule() == Rule::struct_body {
+            let mut fields = Vec::new();
+            for field_pair in content_node.into_inner() {
+                if field_pair.as_rule() == Rule::struct_field {
+                    let mut parts = field_pair.into_inner();
+                    let name = parts.next().unwrap().as_str().to_string();
+                    let type_hint = parts.next().unwrap().as_str().to_string();
+                    let default = parts.next().map(|v| v.as_str().trim().to_string());
+                    fields.push(ClassField {
+                        name,
+                        type_hint: Some(type_hint),
+                        default,
+                    });
+                }
+            }
+            workflow.classes.insert(
+                node_id_str,
+                ClassDef {
+                    fields,
+                    methods: HashMap::new(),
+                },
+            );
+            return Ok(());
         }
 
         // 常规节点（现有逻辑）
@@ -402,6 +445,27 @@ impl GraphParser {
                 NodeType::MethodCall {
                     instance_path: instance_path.to_string(),
                     method_name: method_name.to_string(),
+                    args,
+                }
+            }
+            Rule::struct_init => {
+                // struct 花括号实例化：UserResponse { id = "u_001", name = "Alice" }
+                let mut inner = content_node.into_inner();
+                let struct_name = inner.next().unwrap().as_str().to_string();
+                let mut args = HashMap::new();
+                if let Some(fields_pair) = inner.next() {
+                    // struct_init_fields → assignment*
+                    for assignment in fields_pair.into_inner() {
+                        if assignment.as_rule() == Rule::assignment {
+                            let mut parts = assignment.into_inner();
+                            let key = parts.next().unwrap().as_str().to_string();
+                            let value = parts.next().unwrap().as_str().trim().to_string();
+                            args.insert(key, value);
+                        }
+                    }
+                }
+                NodeType::NewInstance {
+                    class_name: struct_name,
                     args,
                 }
             }
@@ -507,7 +571,30 @@ impl GraphParser {
                     if step.as_rule() == Rule::func_step {
                         let inner_pair = step.into_inner().next().unwrap();
                         let step_id = format!("__{}", step_index);
-                        let action = match inner_pair.as_rule() {
+                        let node_type = match inner_pair.as_rule() {
+                            Rule::assert_stmt => {
+                                let expr_str = inner_pair
+                                    .into_inner()
+                                    .next()
+                                    .unwrap()
+                                    .as_str()
+                                    .trim()
+                                    .to_string();
+                                NodeType::Assert(expr_str)
+                            }
+                            Rule::assign_call => {
+                                let mut parts = inner_pair.into_inner();
+                                let var_name = parts.next().unwrap().as_str().to_string();
+                                let task_pair = parts.next().unwrap();
+                                let action = Self::parse_task_action(
+                                    task_pair,
+                                    &format!("{}.__{}", name, step_index),
+                                )?;
+                                NodeType::AssignCall {
+                                    var: var_name,
+                                    action,
+                                }
+                            }
                             Rule::assignment_block => {
                                 let mut params = HashMap::new();
                                 for assignment in inner_pair.into_inner() {
@@ -516,20 +603,23 @@ impl GraphParser {
                                     let value = parts.next().unwrap().as_str().trim().to_string();
                                     params.insert(key, value);
                                 }
-                                Action {
+                                NodeType::Task(Action {
                                     name: "set_context".to_string(),
                                     params,
-                                }
+                                })
                             }
-                            _ => Self::parse_task_action(
-                                inner_pair,
-                                &format!("{}.__{}", name, step_index),
-                            )?,
+                            _ => {
+                                let action = Self::parse_task_action(
+                                    inner_pair,
+                                    &format!("{}.__{}", name, step_index),
+                                )?;
+                                NodeType::Task(action)
+                            }
                         };
 
                         let node = Node {
                             id: step_id.clone(),
-                            node_type: NodeType::Task(action),
+                            node_type,
                         };
                         let idx = body.graph.add_node(node);
                         body.node_map.insert(step_id.clone(), idx);
@@ -602,6 +692,93 @@ impl GraphParser {
     ) -> Result<()> {
         let func_def = Self::parse_function_body(&name, params, content)?;
         workflow.functions.insert(name, func_def);
+        Ok(())
+    }
+
+    /// Expand a test_ block into chained DAG nodes in the main graph.
+    /// [test_foo]: { step1; step2; step3 }
+    /// → nodes: test_foo (step1), test_foo.__1 (step2), test_foo.__2 (step3)
+    /// → edges: test_foo → test_foo.__1 → test_foo.__2
+    fn expand_test_block(
+        root_id: String,
+        content: Pair<Rule>,
+        workflow: &mut WorkflowGraph,
+    ) -> Result<()> {
+        let mut step_index = 0;
+        let mut last_idx: Option<petgraph::graph::NodeIndex> = None;
+
+        for step in content.into_inner() {
+            if step.as_rule() != Rule::func_step {
+                continue;
+            }
+            let inner_pair = step.into_inner().next().unwrap();
+            let step_id = if step_index == 0 {
+                root_id.clone()
+            } else {
+                format!("{}.__{}", root_id, step_index)
+            };
+
+            let node_type = match inner_pair.as_rule() {
+                Rule::assert_stmt => {
+                    let expr_str = inner_pair
+                        .into_inner()
+                        .next()
+                        .unwrap()
+                        .as_str()
+                        .trim()
+                        .to_string();
+                    NodeType::Assert(expr_str)
+                }
+                Rule::assign_call => {
+                    let mut parts = inner_pair.into_inner();
+                    let var_name = parts.next().unwrap().as_str().to_string();
+                    let task_pair = parts.next().unwrap();
+                    let action = Self::parse_task_action(
+                        task_pair,
+                        &format!("{}.__{}", root_id, step_index),
+                    )?;
+                    NodeType::AssignCall {
+                        var: var_name,
+                        action,
+                    }
+                }
+                Rule::assignment_block => {
+                    let mut params = HashMap::new();
+                    for assignment in inner_pair.into_inner() {
+                        let mut parts = assignment.into_inner();
+                        let key = parts.next().unwrap().as_str().to_string();
+                        let value = parts.next().unwrap().as_str().trim().to_string();
+                        params.insert(key, value);
+                    }
+                    NodeType::Task(Action {
+                        name: "set_context".to_string(),
+                        params,
+                    })
+                }
+                _ => {
+                    let action = Self::parse_task_action(
+                        inner_pair,
+                        &format!("{}.__{}", root_id, step_index),
+                    )?;
+                    NodeType::Task(action)
+                }
+            };
+
+            let node = Node {
+                id: step_id.clone(),
+                node_type,
+            };
+            let idx = workflow.graph.add_node(node);
+            workflow.node_map.insert(step_id, idx);
+
+            if let Some(prev_idx) = last_idx {
+                workflow.graph.add_edge(prev_idx, idx, Edge::default());
+            }
+
+            last_idx = Some(idx);
+            step_index += 1;
+        }
+
         Ok(())
     }
 
@@ -1286,5 +1463,50 @@ class Processor(data="") {
         // Multi-step body should have 2 nodes
         assert_eq!(process.body.node_map.len(), 2);
         assert_eq!(process.body.graph.edge_count(), 1);
+    }
+
+    // ---- Triple-quoted strings ----
+
+    #[test]
+    fn test_triple_quoted_in_task_param() {
+        let input = r#"
+            [run]: bash(command="""echo "hello world" && echo '{"key":"value"}'""")
+        "#;
+        let wf = GraphParser::parse(input).unwrap();
+        let node = &wf.graph[*wf.node_map.get("run").unwrap()];
+        if let NodeType::Task(action) = &node.node_type {
+            assert_eq!(action.name, "bash");
+            let cmd = action.params.get("command").unwrap();
+            assert!(cmd.contains(r#"echo "hello world""#));
+        } else {
+            panic!("Expected Task node");
+        }
+    }
+
+    #[test]
+    fn test_triple_quoted_multiline_param() {
+        let input = "[run]: bash(command=\"\"\"line1\nline2\nline3\"\"\")";
+        let wf = GraphParser::parse(input).unwrap();
+        assert!(wf.node_map.contains_key("run"));
+    }
+
+    #[test]
+    fn test_triple_quoted_with_regular_string() {
+        let input = r#"
+            [a]: bash(command="""echo "test" done""")
+            [b]: bash(command="echo simple")
+        "#;
+        let wf = GraphParser::parse(input).unwrap();
+        assert!(wf.node_map.contains_key("a"));
+        assert!(wf.node_map.contains_key("b"));
+    }
+
+    #[test]
+    fn test_triple_quoted_assignment() {
+        let input = r#"
+            [setup]: cmd = """curl -H "Auth: key" https://api.com"""
+        "#;
+        let wf = GraphParser::parse(input).unwrap();
+        assert!(wf.node_map.contains_key("setup"));
     }
 }

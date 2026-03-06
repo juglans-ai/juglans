@@ -262,7 +262,7 @@ pub async fn run_agent_for_message(
     executor.load_mcp_tools(config).await;
 
     // 提前解析 workflow（在 Arc 包装前），以便调用 init_python_runtime / load_tools
-    let parsed_workflow = if let Some(wf_ref) = &agent_meta.workflow {
+    let parsed_workflow = if let Some(wf_ref) = &agent_meta.source {
         let is_file_path = wf_ref.ends_with(".jg")
             || wf_ref.ends_with(".jgflow")
             || wf_ref.starts_with("./")

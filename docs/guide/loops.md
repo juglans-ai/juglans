@@ -17,16 +17,17 @@ Iterates over each element in an array or collection.
 
 ### Basic Syntax
 
-```yaml
+```juglans
 [loop_node]: foreach($item in $input.items) {
   [process]: some_tool(data=$item)
-  [process]
+  [save]: set_context(last=$output)
+  [process] -> [save]
 }
 ```
 
 ### Complete Example
 
-```yaml
+```juglans
 name: "Batch Processing"
 
 entry: [init]
@@ -73,7 +74,7 @@ Available within the loop body:
 | `loop.first` | boolean | Whether this is the first iteration |
 | `loop.last` | boolean | Whether this is the last iteration |
 
-```yaml
+```juglans
 [process]: foreach($doc in $input.docs) {
   [log]: notify(
     status="[" + (loop.index + 1) + "/" + len($input.docs) + "] " +
@@ -89,16 +90,18 @@ Available within the loop body:
 
 ### Nested Loops
 
-```yaml
+```juglans
 [outer]: foreach($category in $input.categories) {
   [inner]: foreach($item in $category.items) {
     [process]: chat(
       agent="handler",
       message=$category.name + ": " + $item.name
     )
-    [process]
+    [save]: set_context(last=$output)
+    [process] -> [save]
   }
-  [inner]
+  [log]: notify(status="Category done: " + $category.name)
+  [inner] -> [log]
 }
 ```
 
@@ -108,9 +111,9 @@ A condition-based loop.
 
 ### Basic Syntax
 
-```yaml
+```juglans
 [loop_node]: while($ctx.count < $ctx.max) {
-  [body]: some_tool(...)
+  [body]: some_tool(data=$ctx.count)
   [update]: set_context(count=$ctx.count + 1)
   [body] -> [update]
 }
@@ -118,7 +121,7 @@ A condition-based loop.
 
 ### Complete Example
 
-```yaml
+```juglans
 name: "Iterative Refinement"
 
 entry: [init]
@@ -171,16 +174,17 @@ exit: [final]
 
 Always ensure the loop condition will eventually become false:
 
-```yaml
+```juglans
 # Good: has a clear termination condition
-[loop]: while($ctx.count < 10) {
+[loop1]: while($ctx.count < 10) {
   [inc]: set_context(count=$ctx.count + 1)
-  [inc]
+  [log]: notify(status="count: " + $ctx.count)
+  [inc] -> [log]
 }
 
 # Good: has a maximum iteration limit
-[loop]: while($ctx.not_done && $ctx.attempts < 100) {
-  [try]: some_operation()
+[loop2]: while($ctx.not_done && $ctx.attempts < 100) {
+  [try]: notify(status="attempt " + $ctx.attempts)
   [update]: set_context(
     not_done=!$output.success,
     attempts=$ctx.attempts + 1
@@ -193,7 +197,7 @@ Always ensure the loop condition will eventually become false:
 
 ### Batch API Calls
 
-```yaml
+```juglans
 name: "Batch API Calls"
 
 entry: [init]
@@ -210,9 +214,6 @@ exit: [done]
     method=$request.method
   )
 
-  [call] -> [save_result]
-  [call] on error -> [save_error]
-
   [save_result]: set_context(
     results=append($ctx.results, {
       "id": $request.id,
@@ -226,6 +227,9 @@ exit: [done]
       "error": "Request failed"
     })
   )
+
+  [call] -> [save_result]
+  [call] on error -> [save_error]
 }
 
 [done]: notify(
@@ -237,7 +241,7 @@ exit: [done]
 
 ### Paginated Fetching
 
-```yaml
+```juglans
 name: "Paginated Fetch"
 
 entry: [init]
@@ -272,7 +276,7 @@ exit: [done]
 
 ### Recursive Processing
 
-```yaml
+```juglans
 name: "Tree Processing"
 
 entry: [process_root]
@@ -280,10 +284,11 @@ exit: [done]
 
 [process_root]: set_context(
   queue=$input.nodes,
-  processed=[]
+  processed=[],
+  has_items=true
 )
 
-[process_queue]: while(len($ctx.queue) > 0) {
+[process_queue]: while($ctx.has_items) {
   # Dequeue the first element
   [dequeue]: set_context(
     current=first($ctx.queue),
@@ -302,7 +307,8 @@ exit: [done]
       "node": $ctx.current,
       "result": $output
     }),
-    queue=concat($ctx.queue, $ctx.current.children)
+    queue=concat($ctx.queue, $ctx.current.children),
+    has_items=$ctx.queue != []
   )
 
   [dequeue] -> [handle] -> [update]
@@ -315,7 +321,7 @@ exit: [done]
 
 ### Convergence Iteration
 
-```yaml
+```juglans
 name: "Convergence Loop"
 
 entry: [init]
@@ -325,10 +331,11 @@ exit: [converged]
   value=0,
   prev_value=-999,
   tolerance=0.01,
-  iteration=0
+  iteration=0,
+  converging=true
 )
 
-[iterate]: while(abs($ctx.value - $ctx.prev_value) > $ctx.tolerance && $ctx.iteration < 1000) {
+[iterate]: while($ctx.converging && $ctx.iteration < 1000) {
   [compute]: chat(
     agent="calculator",
     message="Next iteration from: " + $ctx.value,
@@ -338,13 +345,13 @@ exit: [converged]
   [update]: set_context(
     prev_value=$ctx.value,
     value=$output.result,
-    iteration=$ctx.iteration + 1
+    iteration=$ctx.iteration + 1,
+    converging=$ctx.value != $ctx.prev_value
   )
 
   [log]: notify(
     status="Iteration " + $ctx.iteration +
-           ": " + $ctx.value +
-           " (delta: " + abs($ctx.value - $ctx.prev_value) + ")"
+           ": " + $ctx.value
   )
 
   [compute] -> [update] -> [log]
@@ -360,7 +367,7 @@ exit: [converged]
 
 ### Batch Processing with Progress Tracking
 
-```yaml
+```juglans
 name: "Progress Tracking"
 
 entry: [init]
@@ -402,11 +409,12 @@ exit: [complete]
 
 Loops are sequential by default. For independent operations, consider:
 
-```yaml
+```juglans
 # Sequential (default) - suitable for operations with dependencies
 [process]: foreach($item in $input.items) {
   [handle]: chat(agent="processor", message=$item)
-  [handle]
+  [save]: set_context(last=$output)
+  [handle] -> [save]
 }
 
 # For parallel execution, consider splitting into multiple independent workflows
@@ -416,19 +424,23 @@ Loops are sequential by default. For independent operations, consider:
 
 Avoid unbounded accumulation in large loops:
 
-```yaml
+```juglans
 # Good: periodic cleanup
 [process]: foreach($item in $input.large_list) {
   [handle]: chat(agent="processor", message=$item)
 
-  # Save every 100 items and clear memory
-  [maybe_flush] if loop.index % 100 == 99 -> [flush]
-  [handle] -> [maybe_flush]
+  [collect]: set_context(
+    batch_results=append($ctx.batch_results, $output)
+  )
 
+  # Save every 100 items and clear memory
   [flush]: set_context(
-    batch_results=[],  # Clear
+    batch_results=[],
     total_processed=$ctx.total_processed + 100
   )
+
+  [handle] -> [collect]
+  [collect] if $ctx.total_processed % 100 == 99 -> [flush]
 }
 ```
 

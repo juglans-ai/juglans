@@ -12,6 +12,13 @@ pub struct Action {
 #[derive(Debug, Clone)]
 pub enum NodeType {
     Task(Action),
+    /// Assert keyword: evaluates expression, fails if falsy
+    Assert(String),
+    /// Assign call: executes tool and stores result in variable
+    AssignCall {
+        var: String,
+        action: Action,
+    },
     Foreach {
         item: String,
         list: String,
@@ -111,6 +118,8 @@ pub struct WorkflowGraph {
     pub lib_auto_namespaces: HashSet<String>,
     // 资源可见性
     pub is_public: Option<bool>,
+    // Cron 调度表达式 (e.g. "0 9 * * *")
+    pub schedule: Option<String>,
     // Class 定义 (class_name -> ClassDef)
     pub classes: HashMap<String, ClassDef>,
 }
@@ -140,6 +149,11 @@ pub struct ClassDef {
     pub methods: HashMap<String, FunctionDef>,
 }
 
+/// Check if a node ID belongs to the test framework (`test_*` prefix)
+pub fn is_test_node_id(id: &str) -> bool {
+    id.starts_with("test_")
+}
+
 impl Default for WorkflowGraph {
     fn default() -> Self {
         WorkflowGraph {
@@ -166,6 +180,7 @@ impl Default for WorkflowGraph {
             lib_imports: HashMap::new(),
             lib_auto_namespaces: HashSet::new(),
             is_public: None,
+            schedule: None,
             classes: HashMap::new(),
         }
     }

@@ -25,7 +25,13 @@ pub mod registry;
 pub mod runtime;
 
 #[cfg(not(target_arch = "wasm32"))]
+pub mod lsp;
+
+#[cfg(not(target_arch = "wasm32"))]
 pub mod testing;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod doctest;
 
 // ============================================================================
 // 公共导出 (Public Exports)

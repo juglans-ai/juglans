@@ -531,6 +531,23 @@ fn prefix_node_type(
                 args: prefixed_args,
             }
         }
+        NodeType::Assert(expr_str) => {
+            NodeType::Assert(prefix_variables(expr_str, prefix, child_node_ids))
+        }
+        NodeType::AssignCall { var, action } => {
+            let prefixed_params: std::collections::HashMap<String, String> = action
+                .params
+                .iter()
+                .map(|(k, v)| (k.clone(), prefix_variables(v, prefix, child_node_ids)))
+                .collect();
+            NodeType::AssignCall {
+                var: var.clone(),
+                action: Action {
+                    name: action.name.clone(),
+                    params: prefixed_params,
+                },
+            }
+        }
     }
 }
 

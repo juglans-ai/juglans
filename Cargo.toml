@@ -79,6 +79,8 @@ arboard = "3"
 tui-textarea = "0.7"
 unicode-width = "0.2"
 sqlx = { version = "0.8.1", features = ["runtime-tokio-rustls", "postgres", "sqlite", "mysql", "any", "json", "chrono", "uuid"] }
+tower-lsp = "0.20"
+cron = "0.15"
 
 [features]
 default = ["native"]

@@ -17,7 +17,8 @@ pub struct AgentResource {
     pub temperature: Option<f64>,
     pub system_prompt: String,
     pub system_prompt_slug: Option<String>,
-    pub workflow: Option<String>,
+    pub source: Option<String>,
+    pub endpoint: Option<String>,
     pub tools: Option<String>,
     pub mcp: Vec<String>,
     pub skills: Vec<String>,
@@ -48,7 +49,8 @@ impl AgentParser {
                 Rule::key_name => agent.name = Self::parse_string(pair),
                 Rule::key_desc => agent.description = Some(Self::parse_string(pair)),
                 Rule::key_model => agent.model = Self::parse_string(pair),
-                Rule::key_workflow => agent.workflow = Some(Self::parse_string(pair)),
+                Rule::key_source => agent.source = Some(Self::parse_string(pair)),
+                Rule::key_endpoint => agent.endpoint = Some(Self::parse_string(pair)),
                 Rule::key_tools => {
                     // 支持三种格式：JSON 数组（内联）、字符串（单个引用）、list（多个引用）
                     let inner = pair.into_inner().next().unwrap();

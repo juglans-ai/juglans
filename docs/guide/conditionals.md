@@ -4,8 +4,11 @@ This guide provides a detailed introduction to conditional branching and routing
 
 ## Basic Conditional Syntax
 
-```yaml
-[node] if <expression> -> [target]
+```juglans
+[node]: set_context(ready=$input.ready)
+[target]: print(msg="Condition met")
+
+[node] if $ctx.ready -> [target]
 ```
 
 When the condition is true, execution flow jumps from `[node]` to `[target]`.
@@ -14,14 +17,22 @@ When the condition is true, execution flow jumps from `[node]` to `[target]`.
 
 ### Comparison Operations
 
-```yaml
+```juglans
 # Equal to
+[router]: print(msg="stub")
+[admin_panel]: print(msg="stub")
 [router] if $ctx.type == "admin" -> [admin_panel]
 
 # Not equal to
+[check]: print(msg="stub")
+[error_handler]: print(msg="stub")
 [check] if $output.status != "success" -> [error_handler]
 
 # Numeric comparison
+[score]: print(msg="stub")
+[high_tier]: print(msg="stub")
+[mid_tier]: print(msg="stub")
+[low_tier]: print(msg="stub")
 [score] if $output.score > 80 -> [high_tier]
 [score] if $output.score >= 60 -> [mid_tier]
 [score] if $output.score < 60 -> [low_tier]
@@ -29,31 +40,48 @@ When the condition is true, execution flow jumps from `[node]` to `[target]`.
 
 ### String Comparison
 
-```yaml
+```juglans
 # Exact match
+[lang]: print(msg="stub")
+[chinese_handler]: print(msg="stub")
+[english_handler]: print(msg="stub")
 [lang] if $input.language == "zh" -> [chinese_handler]
 [lang] if $input.language == "en" -> [english_handler]
 
 # Contains check (using chat classification)
 [classify]: chat(agent="classifier", format="json")
+[code_handler]: print(msg="stub")
 [classify] if $output.contains_code == true -> [code_handler]
 ```
 
 ### Boolean Values
 
-```yaml
+```juglans
 # true/false
+[validate]: print(msg="stub")
+[proceed]: print(msg="stub")
+[reject]: print(msg="stub")
 [validate] if $output.is_valid -> [proceed]
 [validate] if !$output.is_valid -> [reject]
 
 # Non-empty check
+[check]: print(msg="stub")
+[process]: print(msg="stub")
+[fetch_data]: print(msg="stub")
 [check] if $ctx.data -> [process]
 [check] if !$ctx.data -> [fetch_data]
 ```
 
 ### Logical Operations
 
-```yaml
+```juglans
+[check]: print(msg="stub")
+[admin_route]: print(msg="stub")
+[premium_route]: print(msg="stub")
+[allow]: print(msg="stub")
+[auth]: print(msg="stub")
+[access]: print(msg="stub")
+
 # AND
 [check] if $ctx.logged_in && $ctx.is_admin -> [admin_route]
 
@@ -71,7 +99,7 @@ When the condition is true, execution flow jumps from `[node]` to `[target]`.
 
 ### Mutually Exclusive Branches
 
-```yaml
+```juglans
 name: "Multi-way Router"
 
 entry: [classify]
@@ -83,18 +111,18 @@ exit: [done]
   format="json"
 )
 
-# Multiple mutually exclusive conditions
-[classify] if $output.intent == "question" -> [qa_handler]
-[classify] if $output.intent == "task" -> [task_handler]
-[classify] if $output.intent == "chat" -> [chat_handler]
-[classify] -> [fallback]  # Default path
-
 [qa_handler]: chat(agent="qa-expert", message=$input.query)
 [task_handler]: chat(agent="task-executor", message=$input.query)
 [chat_handler]: chat(agent="conversational", message=$input.query)
 [fallback]: chat(agent="general", message=$input.query)
 
 [done]: notify(status="Complete")
+
+# Multiple mutually exclusive conditions
+[classify] if $output.intent == "question" -> [qa_handler]
+[classify] if $output.intent == "task" -> [task_handler]
+[classify] if $output.intent == "chat" -> [chat_handler]
+[classify] -> [fallback]  # Default path
 
 [qa_handler] -> [done]
 [task_handler] -> [done]
@@ -109,15 +137,15 @@ exit: [done]
 - The convergence node executes as soon as **any one** predecessor node completes
 - It does **not** wait for all predecessor nodes to complete (not AND semantics)
 
-```yaml
+```juglans
 # Branching then converging
-[router] if $ctx.type == "A" -> [handler_a]
-[router] if $ctx.type == "B" -> [handler_b]
-
+[router]: print(msg="stub")
 [handler_a]: chat(agent="agent-a", message=$input)
 [handler_b]: chat(agent="agent-b", message=$input)
-
 [final]: notify(status="Done")
+
+[router] if $ctx.type == "A" -> [handler_a]
+[router] if $ctx.type == "B" -> [handler_b]
 
 # final node has two predecessors, but only one will execute
 # The execution engine automatically detects unexecuted branches and marks them as unreachable
@@ -131,7 +159,13 @@ This ensures the intuitive behavior of conditional branches: branch paths are mu
 
 Conditions are evaluated in definition order; the first true branch is executed:
 
-```yaml
+```juglans
+[score]: print(msg="stub")
+[excellent]: print(msg="stub")
+[good]: print(msg="stub")
+[pass]: print(msg="stub")
+[fail]: print(msg="stub")
+
 # From high to low priority
 [score] if $output.score >= 90 -> [excellent]   # Checked first
 [score] if $output.score >= 70 -> [good]        # Checked second
@@ -143,7 +177,12 @@ Conditions are evaluated in definition order; the first true branch is executed:
 
 An unconditional edge serves as the default path:
 
-```yaml
+```juglans
+[router]: print(msg="stub")
+[path_a]: print(msg="stub")
+[path_b]: print(msg="stub")
+[default]: print(msg="stub")
+
 [router] if $ctx.a -> [path_a]
 [router] if $ctx.b -> [path_b]
 [router] -> [default]  # If both a and b are false
@@ -153,20 +192,25 @@ An unconditional edge serves as the default path:
 
 ### on error Path
 
-```yaml
-[risky_call] -> [success]
-[risky_call] on error -> [error_handler]
-
+```juglans
+[risky_call]: print(msg="stub")
+[success]: print(msg="stub")
 [error_handler]: notify(status="Error occurred, using fallback")
 [fallback]: chat(agent="fallback", message=$input.query)
 
+[risky_call] -> [success]
+[risky_call] on error -> [error_handler]
 [error_handler] -> [fallback]
 ```
 
 ### Conditional + Error Handling
 
-```yaml
+```juglans
 [api_call]: fetch_url(url=$input.api_url)
+[process]: print(msg="stub")
+[wait_retry]: print(msg="stub")
+[error_handler]: print(msg="stub")
+
 [api_call] if $output.status == "ok" -> [process]
 [api_call] if $output.status == "rate_limited" -> [wait_retry]
 [api_call] on error -> [error_handler]
@@ -176,7 +220,7 @@ An unconditional edge serves as the default path:
 
 ### Intent Router
 
-```yaml
+```juglans
 name: "Intent Router"
 
 entry: [classify]
@@ -209,7 +253,7 @@ exit: [response]
 
 ### Validation Pipeline
 
-```yaml
+```juglans
 name: "Validation Pipeline"
 
 entry: [validate_input]
@@ -221,16 +265,15 @@ exit: [success, failure]
   format="json"
 )
 
-[validate_input] if !$output.valid -> [reject]
-[validate_input] if $output.needs_review -> [human_review]
-[validate_input] -> [process]
-
 [reject]: set_context(error=$output.reason)
 [human_review]: notify(status="Needs human review")
 [process]: chat(agent="processor", message=$input.data)
-
 [success]: notify(status="Validation passed")
 [failure]: notify(status="Validation failed: " + $ctx.error)
+
+[validate_input] if !$output.valid -> [reject]
+[validate_input] if $output.needs_review -> [human_review]
+[validate_input] -> [process]
 
 [reject] -> [failure]
 [human_review] -> [success]  # Assuming human review passes
@@ -239,34 +282,30 @@ exit: [success, failure]
 
 ### Retry Logic
 
-```yaml
+```juglans
 name: "Retry Pattern"
 
 entry: [init]
 exit: [success, give_up]
 
 [init]: set_context(attempt=0, max_attempts=3)
-
 [try]: fetch_url(url=$input.url)
-[try] if $output.ok -> [success]
-[try] on error -> [check_retry]
-
-[check_retry]: set_context(attempt=$ctx.attempt + 1)
-[check_retry] if $ctx.attempt < $ctx.max_attempts -> [wait]
-[check_retry] -> [give_up]
-
-[wait]: timer(ms=1000)
-[wait] -> [try]
-
 [success]: notify(status="Success!")
+[check_retry]: set_context(attempt=$ctx.attempt + 1)
+[wait]: timer(ms=1000)
 [give_up]: notify(status="Failed after " + $ctx.max_attempts + " attempts")
 
 [init] -> [try]
+[try] if $output.ok -> [success]
+[try] on error -> [check_retry]
+[check_retry] if $ctx.attempt < $ctx.max_attempts -> [wait]
+[check_retry] -> [give_up]
+[wait] -> [try]
 ```
 
 ### Quality Check
 
-```yaml
+```juglans
 name: "Quality Check"
 
 entry: [generate]
@@ -280,23 +319,22 @@ exit: [output]
   format="json"
 )
 
-[check_quality] if $output.score < 7 -> [regenerate]
-[check_quality] -> [output]
-
 [regenerate]: chat(
   agent="writer",
   message="Improve this: " + $ctx.content + "\nFeedback: " + $output.feedback
 )
-[regenerate] -> [check_quality]
 
 [output]: set_context(final=$output)
 
 [generate] -> [check_quality]
+[check_quality] if $output.score < 7 -> [regenerate]
+[check_quality] -> [output]
+[regenerate] -> [check_quality]
 ```
 
 ### A/B Testing
 
-```yaml
+```juglans
 name: "A/B Test"
 
 entry: [assign_group]
@@ -306,9 +344,6 @@ exit: [collect]
   group=if(random() > 0.5, "A", "B")
 )
 
-[assign_group] if $ctx.group == "A" -> [variant_a]
-[assign_group] if $ctx.group == "B" -> [variant_b]
-
 [variant_a]: chat(agent="model-a", message=$input.query)
 [variant_b]: chat(agent="model-b", message=$input.query)
 
@@ -317,6 +352,8 @@ exit: [collect]
   variant=$ctx.group
 )
 
+[assign_group] if $ctx.group == "A" -> [variant_a]
+[assign_group] if $ctx.group == "B" -> [variant_b]
 [variant_a] -> [collect]
 [variant_b] -> [collect]
 ```
@@ -325,17 +362,18 @@ exit: [collect]
 
 ### Printing Condition Values
 
-```yaml
+```juglans
 [debug]: notify(status="Type: " + $ctx.type + ", Score: " + $ctx.score)
-[debug] -> [router]
+[router]: print(msg="stub")
+[path_a]: print(msg="stub")
 
+[debug] -> [router]
 [router] if $ctx.type == "a" -> [path_a]
-...
 ```
 
 ### Logging Routing Decisions
 
-```yaml
+```juglans
 [router]: chat(agent="classifier", format="json")
 [log_decision]: set_context(
   route_log=append($ctx.route_log, {
@@ -344,10 +382,10 @@ exit: [collect]
     "timestamp": now()
   })
 )
+[path_a]: print(msg="stub")
 
 [router] -> [log_decision]
 [log_decision] if $output.intent == "a" -> [path_a]
-...
 ```
 
 ## Best Practices

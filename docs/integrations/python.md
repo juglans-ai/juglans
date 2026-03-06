@@ -26,7 +26,7 @@ Juglans 2.0 supports directly calling the Python ecosystem, eliminating the need
 
 Declare the Python modules you need in the workflow header:
 
-```yaml
+```juglans
 name: "Data Analysis"
 
 # Python module imports
@@ -45,23 +45,29 @@ exit: [done]
 
 After importing, you can call module functions directly:
 
-```yaml
+```juglans
+entry: [load]
+exit: [result]
+
 # Call pandas.read_csv
-[load]: pandas.read_csv("data.csv")
+[load]: pandas.read_csv(path="data.csv")
 
 # Call methods on returned objects
 [stats]: $load.describe()
 
-# Chained calls
-[clean]: $load.dropna().reset_index()
+# Step-by-step method calls
+[dropped]: $load.dropna()
+[clean]: $dropped.reset_index()
 
 # Local module calls
-[result]: utils.process($clean)
+[result]: utils.process(data=$clean)
+
+[load] -> [stats] -> [dropped] -> [clean] -> [result]
 ```
 
 ### 3. Complete Example
 
-```yaml
+```juglans
 name: "Sales Analysis"
 
 python: ["pandas", "json"]
@@ -71,7 +77,7 @@ entry: [load]
 exit: [report]
 
 # Load CSV data
-[load]: pandas.read_csv("sales.csv")
+[load]: pandas.read_csv(path="sales.csv")
 
 # Data preprocessing
 [clean]: $load.dropna()
@@ -94,29 +100,38 @@ exit: [report]
 
 ### System Modules
 
-```yaml
+```juglans
+entry: [start]
+exit: [start]
 python: ["pandas", "numpy", "json"]
+[start]: notify(status="ready")
 ```
 
 ### Submodules
 
-```yaml
+```juglans
+entry: [start]
+exit: [start]
 python: ["sklearn.ensemble", "sklearn.preprocessing"]
+[start]: notify(status="ready")
 ```
 
 Usage:
-```yaml
+```juglans
 [model]: sklearn.ensemble.RandomForestClassifier(n_estimators=100)
 ```
 
 ### Local .py Files
 
-```yaml
+```juglans
+entry: [start]
+exit: [start]
 python: [
     "./utils.py",           # Relative to the .jg file
     "./lib/helpers.py",     # Subdirectory
     "/absolute/path.py"     # Absolute path
 ]
+[start]: notify(status="ready")
 ```
 
 Functions in the file can be called directly:
@@ -127,14 +142,19 @@ def process_data(df, threshold=0.5):
     return df[df['score'] > threshold]
 ```
 
-```yaml
-[result]: utils.process_data($input, threshold=0.8)
+```juglans
+entry: [result]
+exit: [result]
+[result]: utils.process_data(data=$input, threshold=0.8)
 ```
 
 ### Glob Patterns
 
-```yaml
+```juglans
+entry: [start]
+exit: [start]
 python: ["./processors/*.py"]  # Import all .py files in the directory
+[start]: notify(status="ready")
 ```
 
 ## Object Reference System
@@ -161,17 +181,22 @@ Juglans uses an object reference system:
 
 ### Example
 
-```yaml
-[df]: pandas.read_csv("large_file.csv")
+```juglans
+entry: [df]
+exit: [result]
+
+[df]: pandas.read_csv(path="large_file.csv")
 # Python returns: {"ref": "ref:obj:001", "type": "DataFrame"}
 # Juglans stores: $df = Ref("ref:obj:001")
 
-[filtered]: $df.query("score > 0.5")
+[filtered]: $df.query(expr="score > 0.5")
 # Juglans sends: {"target": "ref:obj:001", "method": "query", "args": ["score > 0.5"]}
 # Python returns: {"ref": "ref:obj:002"}
 
 [result]: $filtered.to_dict()
 # Returns actual JSON data, no longer needs a reference
+
+[df] -> [filtered] -> [result]
 ```
 
 ### Lifecycle
@@ -236,14 +261,17 @@ timeout = 30000      # Timeout (ms)
 
 Python exceptions are caught and converted to workflow errors:
 
-```yaml
+```juglans
+entry: [risky]
+exit: [done]
 python: ["risky_module"]
 
-[risky]: risky_module.might_fail($input)
-[risky] -> [next]
-[risky] on error -> [handle]
-
+[risky]: risky_module.might_fail(data=$input)
+[done]: notify(message="Success")
 [handle]: notify(message="Python error: " + $error.message)
+
+[risky] -> [done]
+[risky] on error -> [handle]
 ```
 
 The error object contains:
@@ -273,12 +301,14 @@ The error object contains:
 
 ### 1. Only Import Modules You Need
 
-```yaml
+```juglans
+entry: [start]
+exit: [start]
+
 # Good: Explicit imports
 python: ["pandas", "json"]
 
-# Avoid: Too many imports
-python: ["pandas", "numpy", "scipy", "sklearn", ...]
+[start]: notify(status="ready")
 ```
 
 ### 2. Encapsulate Complex Logic in Local Modules
@@ -293,22 +323,31 @@ def preprocess(df):
     return df
 ```
 
-```yaml
+```juglans
+entry: [clean]
+exit: [clean]
 python: ["./processors/data.py"]
 
-[clean]: data.preprocess($raw)  # Concise call
+[clean]: data.preprocess(df=$raw)  # Concise call
 ```
 
 ### 3. Avoid Frequent Calls in Loops
 
-```yaml
+```juglans
+entry: [process]
+exit: [batch]
+
 # Bad: Calls Python on every iteration
 [process]: foreach($item in $input.items) {
-    [call]: utils.process($item)  # Multiple inter-process communications
+    [call]: utils.process(data=$item)  # Multiple inter-process communications
+    [save]: set_context(last=$output)
+    [call] -> [save]
 }
 
 # Good: Batch processing
-[batch]: utils.process_batch($input.items)  # Single call
+[batch]: utils.process_batch(items=$input.items)  # Single call
+
+[process] -> [batch]
 ```
 
 ### 4. Use Type Hints (Local Modules)

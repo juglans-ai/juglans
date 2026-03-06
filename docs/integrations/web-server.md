@@ -87,7 +87,7 @@ Writes to `$response.status`, `$response.body`, `$response.headers` which the we
 
 ### Example: HTTP API Workflow
 
-```yaml
+```juglans
 slug: "serve-test"
 name: "HTTP Backend Test"
 description: "Simple HTTP backend using serve() builtin"

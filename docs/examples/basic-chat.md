@@ -6,7 +6,7 @@ The simplest chat workflow example.
 
 ### chat.jg
 
-```yaml
+```juglans
 name: "Basic Chat"
 description: "Simple chat workflow"
 
@@ -25,7 +25,7 @@ exit: [respond]
 
 ### src/agents/assistant.jgagent
 
-```yaml
+```jgagent
 name: "assistant"
 description: "A helpful assistant"
 
@@ -54,7 +54,7 @@ juglans chat.jg --input '{"message": "Explain quantum computing in simple terms"
 
 ### chat-with-persona.jg
 
-```yaml
+```juglans
 name: "Chat with Persona"
 
 entry: [chat]
@@ -85,7 +85,7 @@ juglans chat-with-persona.jg --input '{
 
 ### chat-json.jg
 
-```yaml
+```juglans
 name: "Chat with JSON Output"
 
 entry: [analyze]
@@ -106,7 +106,7 @@ exit: [result]
 
 ### src/agents/analyzer.jgagent
 
-```yaml
+```jgagent
 name: "analyzer"
 model: "claude-3-sonnet"
 
@@ -134,7 +134,7 @@ juglans chat-json.jg --input '{
 
 ### multi-turn.jg
 
-```yaml
+```juglans
 name: "Multi-turn Chat"
 
 entry: [load_history]

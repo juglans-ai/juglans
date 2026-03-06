@@ -96,9 +96,14 @@ impl BuiltinRegistry {
         reg!(ai::Prompt::new(prompts.clone(), runtime.clone()));
         reg!(ai::MemorySearch::new(runtime.clone()));
         reg!(ai::History::new(runtime.clone()));
+        reg!(ai::VectorCreateSpace::new(runtime.clone()));
+        reg!(ai::VectorUpsert::new(runtime.clone()));
+        reg!(ai::VectorSearch::new(runtime.clone()));
+        reg!(ai::VectorListSpaces::new(runtime.clone()));
+        reg!(ai::VectorDeleteSpace::new(runtime.clone()));
+        reg!(ai::VectorDelete::new(runtime.clone()));
 
         // Testing tools
-        reg!(testing::Assert);
         reg!(testing::Config);
 
         // Database ORM

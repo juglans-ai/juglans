@@ -55,4 +55,40 @@ pub trait JuglansRuntime: Send + Sync {
     /// 更新消息状态（workflow 节点回溯控制用户消息可见性）
     async fn update_message_state(&self, chat_id: &str, message_id: i32, state: &str)
         -> Result<()>;
+
+    // ─── Vector Storage & Search ─────────────────────────────
+
+    /// Create a vector space
+    async fn vector_create_space(
+        &self,
+        space: &str,
+        model: Option<&str>,
+        public: bool,
+    ) -> Result<Value>;
+
+    /// Upsert vectors into a space
+    async fn vector_upsert(
+        &self,
+        space: &str,
+        points: Vec<Value>,
+        model: Option<&str>,
+    ) -> Result<Value>;
+
+    /// Search vectors in a space
+    async fn vector_search(
+        &self,
+        space: &str,
+        query: &str,
+        limit: u64,
+        model: Option<&str>,
+    ) -> Result<Vec<Value>>;
+
+    /// List all vector spaces
+    async fn vector_list_spaces(&self) -> Result<Vec<Value>>;
+
+    /// Delete a vector space
+    async fn vector_delete_space(&self, space: &str) -> Result<Value>;
+
+    /// Delete specific vectors by ID from a space
+    async fn vector_delete(&self, space: &str, ids: Vec<String>) -> Result<Value>;
 }

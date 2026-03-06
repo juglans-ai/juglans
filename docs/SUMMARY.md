@@ -16,6 +16,7 @@
 * [Conditionals](guide/conditionals.md)
 * [Loops](guide/loops.md)
 * [Error Handling](guide/error-handling.md)
+* [Testing](guide/juglans-test.md)
 
 ## Examples
 * [Overview](examples/README.md)
@@ -35,3 +36,6 @@
 * [CLI](reference/cli.md)
 * [Config](reference/config.md)
 * [Context](reference/context.md)
+
+## Deployment
+* [Docker](deployment/docker.md)

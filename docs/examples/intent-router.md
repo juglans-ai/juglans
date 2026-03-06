@@ -6,7 +6,7 @@ Route to different processing flows based on the user input's intent.
 
 ### intent-router.jg
 
-```yaml
+```juglans
 name: "Intent Router"
 description: "Classify user intent and route to appropriate handler"
 
@@ -22,13 +22,6 @@ exit: [respond]
   message=$input.message,
   format="json"
 )
-
-# Route to different handlers
-[classify] if $output.intent == "question" -> [handle_question]
-[classify] if $output.intent == "task" -> [handle_task]
-[classify] if $output.intent == "greeting" -> [handle_greeting]
-[classify] if $output.intent == "feedback" -> [handle_feedback]
-[classify] -> [handle_general]
 
 # Question handling
 [handle_question]: chat(
@@ -67,6 +60,13 @@ exit: [respond]
   intent=$ctx.classified_intent
 )
 
+# Route to different handlers
+[classify] if $output.intent == "question" -> [handle_question]
+[classify] if $output.intent == "task" -> [handle_task]
+[classify] if $output.intent == "greeting" -> [handle_greeting]
+[classify] if $output.intent == "feedback" -> [handle_feedback]
+[classify] -> [handle_general]
+
 [handle_question] -> [respond]
 [handle_task] -> [respond]
 [handle_greeting] -> [respond]
@@ -78,7 +78,7 @@ exit: [respond]
 
 ### src/agents/classifier.jgagent
 
-```yaml
+```jgagent
 name: "classifier"
 description: "Intent classification agent"
 
@@ -106,7 +106,7 @@ system_prompt: |
 
 ### src/agents/qa-expert.jgagent
 
-```yaml
+```jgagent
 name: "qa-expert"
 description: "Question answering specialist"
 
@@ -122,7 +122,7 @@ system_prompt: |
 
 ### src/agents/task-executor.jgagent
 
-```yaml
+```jgagent
 name: "task-executor"
 description: "Task execution agent"
 
@@ -148,7 +148,7 @@ system_prompt: |
 
 ### src/agents/support.jgagent
 
-```yaml
+```jgagent
 name: "support"
 description: "Customer support agent"
 
@@ -168,7 +168,7 @@ system_prompt: |
 
 ### src/prompts/greeting-response.jgprompt
 
-```yaml
+```jgprompt
 name: "greeting-response"
 
 template: |
@@ -210,7 +210,7 @@ juglans intent-router.jg --input '{"message": "The app keeps crashing when I try
 
 ### advanced-router.jg
 
-```yaml
+```juglans
 name: "Advanced Multi-level Router"
 
 entry: [classify_primary]
@@ -223,10 +223,6 @@ exit: [respond]
   format="json"
 )
 
-[classify_primary] if $output.intent == "question" -> [classify_question_type]
-[classify_primary] if $output.intent == "task" -> [classify_task_type]
-[classify_primary] -> [handle_general]
-
 # Secondary classification: Question type
 [classify_question_type]: chat(
   agent="question-classifier",
@@ -234,22 +230,12 @@ exit: [respond]
   format="json"
 )
 
-[classify_question_type] if $output.type == "factual" -> [factual_qa]
-[classify_question_type] if $output.type == "opinion" -> [opinion_qa]
-[classify_question_type] if $output.type == "how_to" -> [howto_qa]
-[classify_question_type] -> [general_qa]
-
 # Secondary classification: Task type
 [classify_task_type]: chat(
   agent="task-classifier",
   message=$input.message,
   format="json"
 )
-
-[classify_task_type] if $output.type == "create" -> [create_handler]
-[classify_task_type] if $output.type == "edit" -> [edit_handler]
-[classify_task_type] if $output.type == "search" -> [search_handler]
-[classify_task_type] -> [general_task]
 
 # Specific handlers...
 [factual_qa]: chat(agent="fact-checker", message=$input.message)
@@ -266,6 +252,21 @@ exit: [respond]
 
 # Aggregate
 [respond]: set_context(response=$output)
+
+# Routing edges
+[classify_primary] if $output.intent == "question" -> [classify_question_type]
+[classify_primary] if $output.intent == "task" -> [classify_task_type]
+[classify_primary] -> [handle_general]
+
+[classify_question_type] if $output.type == "factual" -> [factual_qa]
+[classify_question_type] if $output.type == "opinion" -> [opinion_qa]
+[classify_question_type] if $output.type == "how_to" -> [howto_qa]
+[classify_question_type] -> [general_qa]
+
+[classify_task_type] if $output.type == "create" -> [create_handler]
+[classify_task_type] if $output.type == "edit" -> [edit_handler]
+[classify_task_type] if $output.type == "search" -> [search_handler]
+[classify_task_type] -> [general_task]
 
 [factual_qa] -> [respond]
 [opinion_qa] -> [respond]

@@ -4,7 +4,7 @@
 
 ## File Structure
 
-```yaml
+```jgprompt
 ---
 slug: "prompt_identifier"
 name: "Display Name"
@@ -32,7 +32,7 @@ Define metadata using YAML format, enclosed by `---`:
 
 ### Input Parameters
 
-```yaml
+```jgprompt
 ---
 slug: "analysis"
 inputs:
@@ -152,7 +152,7 @@ Apply transformations to variables:
 
 ### Simple Prompt
 
-```yaml
+```jgprompt
 ---
 slug: "greeting"
 name: "Greeting"
@@ -167,7 +167,7 @@ Please respond in {{ language }}.
 
 ### Analysis Prompt
 
-```yaml
+```jgprompt
 ---
 slug: "analyze-data"
 name: "Data Analysis Prompt"
@@ -205,7 +205,7 @@ Analyze the following topic: {{ topic }}
 
 ### Multi-Turn Conversation Prompt
 
-```yaml
+```jgprompt
 ---
 slug: "conversation"
 name: "Conversation Context"
@@ -234,7 +234,7 @@ User: {{ current_message }}
 
 ### Code Generation Prompt
 
-```yaml
+```jgprompt
 ---
 slug: "code-generator"
 name: "Code Generator"
@@ -271,7 +271,7 @@ Provide only the code, wrapped in appropriate markdown code blocks.
 
 ### Few-Shot Prompt
 
-```yaml
+```jgprompt
 ---
 slug: "few-shot"
 name: "Few-Shot Learning"
@@ -298,13 +298,13 @@ Output:
 
 ### Basic Call
 
-```yaml
+```juglans
 [render]: p(slug="greeting", name="Alice")
 ```
 
 ### Passing Variables
 
-```yaml
+```juglans
 [render]: p(
   slug="analyze-data",
   topic=$input.topic,
@@ -315,7 +315,7 @@ Output:
 
 ### Combined with Chat
 
-```yaml
+```juglans
 [prompt]: p(slug="analysis", data=$input)
 [chat]: chat(agent="analyst", message=$output)
 

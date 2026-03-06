@@ -11,14 +11,16 @@ number  = { float | integer }
 
 string_inner  = @{ (string_escape | (!(("\"" | "\\") | ("'" | "\\")) ~ ANY))* }
 string_escape = @{ "\\" ~ ANY }
+triple_quoted = @{ "\"\"\"" ~ (!"\"\"\"" ~ ANY)* ~ "\"\"\"" }
 double_quoted = @{ "\"" ~ (string_escape | (!("\"" | "\\") ~ ANY))* ~ "\"" }
 single_quoted = @{ "'" ~ (string_escape | (!("'" | "\\") ~ ANY))* ~ "'" }
-string        = { double_quoted | single_quoted }
+string        = { triple_quoted | double_quoted | single_quoted }
 
 // ========== F-String (interpolated strings) ==========
 
-fstring_body = @{ (string_escape | !("\"" | "\\") ~ ANY)* }
-fstring      = { "f\"" ~ fstring_body ~ "\"" }
+fstring_body        = @{ (string_escape | !("\"" | "\\") ~ ANY)* }
+fstring_triple_body = @{ (!"\"\"\"" ~ ANY)* }
+fstring             = { "f\"\"\"" ~ fstring_triple_body ~ "\"\"\"" | "f\"" ~ fstring_body ~ "\"" }
 
 true_lit  = { "True" | "true" }
 false_lit = { "False" | "false" }

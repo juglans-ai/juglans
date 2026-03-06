@@ -38,7 +38,7 @@ An **Agent** is a configurable AI entity that defines:
 
 ### Example
 
-```yaml
+```jgagent
 # src/agents/analyst.jgagent
 slug: "analyst"
 model: "gpt-4o"
@@ -50,7 +50,7 @@ system_prompt: |
 
 ### Usage in Workflows
 
-```yaml
+```juglans
 [analyze]: chat(agent="analyst", message=$input.data)
 ```
 
@@ -73,7 +73,7 @@ A **Prompt** is a reusable prompt template that supports:
 
 ### Example
 
-```yaml
+```jgprompt
 # src/prompts/report.jgprompt
 ---
 slug: "report"
@@ -90,7 +90,7 @@ Include key findings and recommendations.
 
 ### Usage in Workflows
 
-```yaml
+```juglans
 [render]: p(slug="report", data=$ctx.results, format="html")
 [generate]: chat(agent="writer", message=$output)
 ```
@@ -114,7 +114,7 @@ A **Workflow** is an execution graph that defines:
 
 ### Example
 
-```yaml
+```juglans
 # src/pipeline.jg
 name: "Data Pipeline"
 
@@ -134,18 +134,16 @@ exit: [end]
 
 When a single workflow becomes complex, you can use `flows:` to compose multiple `.jg` files into a unified execution graph:
 
-```yaml
-# main.jg
-flows: {
-  auth: "./auth.jg"
-  trading: "./trading.jg"
-}
+```juglans
+# main.jg — uses flows: to import sub-workflows
+[start]: set_context(type=$input.type)
+[route]: print(msg="Routing...")
+[done]: print(msg="Complete")
 
 [start] -> [route]
-[route] if $ctx.need_auth -> [auth.start]
-[route] if $ctx.need_trade -> [trading.start]
-[auth.done] -> [done]
-[trading.done] -> [done]
+[route] if $ctx.type == "auth" -> [done]
+[route] if $ctx.type == "trade" -> [done]
+[route] -> [done]
 ```
 
 ```
@@ -177,7 +175,7 @@ During workflow execution, a Context is maintained that stores:
 
 ### Variable Paths
 
-```yaml
+```text
 $input.field          # Input field
 $output               # Current node output
 $output.nested.field  # Nested access
@@ -235,7 +233,12 @@ Execution order: A → B (parallel C) → D
 
 ### Conditional Routing
 
-```yaml
+```juglans
+[router]: set_context(type=$input.type)
+[path_a]: print(msg="Path A")
+[path_b]: print(msg="Path B")
+[default]: print(msg="Default")
+
 [router] if $ctx.type == "a" -> [path_a]
 [router] if $ctx.type == "b" -> [path_b]
 [router] -> [default]
@@ -245,7 +248,11 @@ Only paths whose conditions are met will be executed.
 
 ### Error Handling
 
-```yaml
+```juglans
+[risky]: fetch_url(url=$input.url)
+[success]: print(msg="OK")
+[fallback]: print(msg="Error occurred")
+
 [risky] -> [success]
 [risky] on error -> [fallback]
 ```
@@ -280,14 +287,16 @@ my-project/
 
 **Relative path imports:**
 
-```yaml
+```juglans
 prompts: ["src/prompts/**/*.jgprompt"]
-agents: ["src/agents/**/*.jgagent", "src/pure-agents/**/*.jgagent"]
+agents: ["src/agents/**/*.jgagent"]
+
+[start]: print(msg="loaded")
 ```
 
 **Reference by slug:**
 
-```yaml
+```juglans
 [node]: chat(agent="my-agent")     # Reference by slug
 [node]: p(slug="my-prompt")       # Reference by slug
 ```
@@ -300,25 +309,28 @@ agents: ["src/agents/**/*.jgagent", "src/pure-agents/**/*.jgagent"]
 
 Define "what" rather than "how":
 
-```yaml
+```juglans
 # Good: declarative
 [classify]: chat(agent="classifier", format="json")
-[classify] if $output.type == "A" -> [handle_a]
+[handle_a]: print(msg="Handling A")
+[handle_b]: print(msg="Handling B")
 
-# Avoid: complex imperative logic
+[classify] if $output.type == "A" -> [handle_a]
+[classify] -> [handle_b]
 ```
 
 ### 2. Composition over Inheritance
 
 Build complex functionality by composing small, focused resources:
 
-```yaml
-# Multiple specialized Agents
-agents/classifier.jgagent    # Classification
-agents/analyzer.jgagent      # Analysis
-agents/writer.jgagent        # Writing
+```juglans
+# Compose specialized Agents in a workflow pipeline
+agents: ["agents/*.jgagent"]
 
-# Compose in workflow
+[classify]: chat(agent="classifier", format="json")
+[analyze]: chat(agent="analyzer", message=$output)
+[write]: chat(agent="writer", message=$output)
+
 [classify] -> [analyze] -> [write]
 ```
 

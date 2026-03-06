@@ -249,22 +249,6 @@ impl Jug0Client {
         Ok(body.id)
     }
 
-    pub async fn get_workflow_id(&self, slug: &str) -> Result<Uuid> {
-        let url = self.build_resource_url(slug, "workflows");
-        let res = self
-            .build_auth_request(reqwest::Method::GET, &url)
-            .send()
-            .await?;
-        if !res.status().is_success() {
-            return Err(anyhow!(
-                "Remote Resource Not Found: Workflow '{}' is missing.",
-                slug
-            ));
-        }
-        let body: IdResponse = res.json().await?;
-        Ok(body.id)
-    }
-
     /// Generic upsert: GET by slug → PATCH by id → fallback POST to create.
     /// Returns a success message string.
     async fn upsert_resource(
@@ -441,37 +425,6 @@ impl Jug0Client {
             self.get_prompt_id("system-default").await?
         };
 
-        // Resolve workflow_id if workflow reference is provided
-        // Supports both file path format ("../workflows/trading.jg") and slug format ("trading")
-        let workflow_id = if let Some(workflow_ref) = &agent.workflow {
-            let slug = if workflow_ref.ends_with(".jg")
-                || workflow_ref.ends_with(".jgflow")
-                || workflow_ref.contains('/')
-                || workflow_ref.contains('\\')
-            {
-                std::path::Path::new(workflow_ref)
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or(workflow_ref)
-            } else {
-                workflow_ref.as_str()
-            };
-
-            match self.get_workflow_id(slug).await {
-                Ok(id) => Some(id),
-                Err(_) => {
-                    tracing::warn!(
-                        "Agent '{}': workflow '{}' not found on server, skipping binding.",
-                        agent.slug,
-                        slug
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
         let mut payload = json!({
             "name": agent.name,
             "description": agent.description,
@@ -514,27 +467,24 @@ impl Jug0Client {
             payload["avatar"] = json!(avatar_url);
         }
 
-        // Add workflow_id: set UUID if resolved, explicit null to unlink, or warning if unresolved
-        let workflow_suffix = if let Some(wf_id) = workflow_id {
-            payload["workflow_id"] = json!(wf_id);
-            let wf_ref = agent.workflow.as_deref().unwrap_or("?");
-            format!(" (workflow: {} → {})", wf_ref, wf_id)
-        } else if agent.workflow.is_some() {
-            let wf_ref = agent.workflow.as_deref().unwrap_or("?");
-            format!(
-                " (⚠️ workflow '{}' not bound - not found on server)",
-                wf_ref
-            )
+        // Add endpoint_url if provided (tells jug0 where to forward requests)
+        let endpoint_suffix = if let Some(ref ep) = agent.endpoint {
+            let base = ep.trim_end_matches('/');
+            let url = if base.ends_with("/api/chat") {
+                base.to_string()
+            } else {
+                format!("{}/api/chat", base)
+            };
+            payload["endpoint_url"] = json!(url);
+            format!(" (endpoint: {})", url)
         } else {
-            // No workflow field → explicitly unlink
-            payload["workflow_id"] = json!(null);
             String::new()
         };
 
         let result = self
             .upsert_resource(&agent.slug, "agents", payload, force)
             .await?;
-        Ok(format!("{}{}", result, workflow_suffix))
+        Ok(format!("{}{}", result, endpoint_suffix))
     }
 
     /// Pull a resource from the server
@@ -709,6 +659,13 @@ impl Jug0Client {
             payload["is_public"] = json!(public);
         }
 
+        if let Some(ref schedule) = workflow.schedule {
+            payload["trigger_config"] = json!({
+                "type": "cron",
+                "schedule": schedule,
+            });
+        }
+
         self.upsert_resource(&workflow.slug, "workflows", payload, force)
             .await
     }
@@ -857,6 +814,146 @@ impl JuglansRuntime for Jug0Client {
         }
 
         Ok(())
+    }
+
+    // ─── Vector Storage & Search ─────────────────────────────
+
+    async fn vector_create_space(
+        &self,
+        space: &str,
+        model: Option<&str>,
+        public: bool,
+    ) -> Result<Value> {
+        let url = format!("{}/api/vectors/spaces", self.base_url);
+        let mut payload = json!({ "space": space, "public": public });
+        if let Some(m) = model {
+            payload["model"] = json!(m);
+        }
+
+        let res = self
+            .build_auth_request(reqwest::Method::POST, &url)
+            .json(&payload)
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            let status = res.status();
+            let txt = res.text().await.unwrap_or_default();
+            return Err(anyhow!("Vector create_space failed: {} - {}", status, txt));
+        }
+
+        let result: Value = res.json().await?;
+        Ok(result)
+    }
+
+    async fn vector_upsert(
+        &self,
+        space: &str,
+        points: Vec<Value>,
+        model: Option<&str>,
+    ) -> Result<Value> {
+        let url = format!("{}/api/vectors/upsert", self.base_url);
+        let mut payload = json!({ "space": space, "points": points });
+        if let Some(m) = model {
+            payload["model"] = json!(m);
+        }
+
+        let res = self
+            .build_auth_request(reqwest::Method::POST, &url)
+            .json(&payload)
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            let status = res.status();
+            let txt = res.text().await.unwrap_or_default();
+            return Err(anyhow!("Vector upsert failed: {} - {}", status, txt));
+        }
+
+        let result: Value = res.json().await?;
+        Ok(result)
+    }
+
+    async fn vector_search(
+        &self,
+        space: &str,
+        query: &str,
+        limit: u64,
+        model: Option<&str>,
+    ) -> Result<Vec<Value>> {
+        let url = format!("{}/api/vectors/search", self.base_url);
+        let mut payload = json!({ "space": space, "query": query, "limit": limit });
+        if let Some(m) = model {
+            payload["model"] = json!(m);
+        }
+
+        let res = self
+            .build_auth_request(reqwest::Method::POST, &url)
+            .json(&payload)
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            let status = res.status();
+            let txt = res.text().await.unwrap_or_default();
+            return Err(anyhow!("Vector search failed: {} - {}", status, txt));
+        }
+
+        let results: Vec<Value> = res.json().await?;
+        Ok(results)
+    }
+
+    async fn vector_list_spaces(&self) -> Result<Vec<Value>> {
+        let url = format!("{}/api/vectors/spaces", self.base_url);
+        let res = self
+            .build_auth_request(reqwest::Method::GET, &url)
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            let status = res.status();
+            let txt = res.text().await.unwrap_or_default();
+            return Err(anyhow!("Vector list_spaces failed: {} - {}", status, txt));
+        }
+
+        let results: Vec<Value> = res.json().await?;
+        Ok(results)
+    }
+
+    async fn vector_delete_space(&self, space: &str) -> Result<Value> {
+        let url = format!("{}/api/vectors/spaces/{}", self.base_url, space);
+        let res = self
+            .build_auth_request(reqwest::Method::DELETE, &url)
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            let status = res.status();
+            let txt = res.text().await.unwrap_or_default();
+            return Err(anyhow!("Vector delete_space failed: {} - {}", status, txt));
+        }
+
+        let result: Value = res.json().await?;
+        Ok(result)
+    }
+
+    async fn vector_delete(&self, space: &str, ids: Vec<String>) -> Result<Value> {
+        let url = format!("{}/api/vectors/delete", self.base_url);
+        let payload = json!({ "space": space, "ids": ids });
+        let res = self
+            .build_auth_request(reqwest::Method::POST, &url)
+            .json(&payload)
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            let status = res.status();
+            let txt = res.text().await.unwrap_or_default();
+            return Err(anyhow!("Vector delete failed: {} - {}", status, txt));
+        }
+
+        let result: Value = res.json().await?;
+        Ok(result)
     }
 
     async fn chat(&self, req: ChatRequest) -> Result<ChatOutput> {

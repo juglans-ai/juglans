@@ -22,7 +22,7 @@ Conduct a conversation with an AI Agent.
 
 **Examples:**
 
-```yaml
+```juglans
 # Basic conversation
 [chat]: chat(agent="assistant", message="Hello!")
 
@@ -98,7 +98,7 @@ Controls the visibility and persistence of `chat()` output:
 - **Writes to Context**: Whether the result is stored in `$reply.output`, affecting whether subsequent nodes can read it
 - **SSE Output**: Whether generated tokens are streamed to the frontend via SSE
 
-```yaml
+```juglans
 # Background analysis, not displayed to user, but results available to subsequent nodes
 [bg_analyze]: chat(
   agent="analyst",
@@ -142,7 +142,7 @@ Render a Prompt template.
 
 **Examples:**
 
-```yaml
+```juglans
 # Basic rendering
 [prompt]: p(slug="greeting")
 
@@ -177,7 +177,7 @@ Search for relevant content in memory storage (RAG).
 
 **Examples:**
 
-```yaml
+```juglans
 [search]: memory_search(
   query=$input.question,
   limit=5,
@@ -205,7 +205,7 @@ Send a status notification.
 
 **Examples:**
 
-```yaml
+```juglans
 [start]: notify(status="Starting workflow...")
 [progress]: notify(status="Processing item " + $ctx.index)
 [done]: notify(status="Completed!")
@@ -227,7 +227,7 @@ Any key-value pairs, supports nested paths.
 
 **Examples:**
 
-```yaml
+```juglans
 # Simple assignment
 [init]: set_context(count=0)
 
@@ -238,8 +238,8 @@ Any key-value pairs, supports nested paths.
   config={"timeout": 30}
 )
 
-# Nested paths
-[update]: set_context(user.name="Alice", user.score=100)
+# Multiple variables at once
+[update]: set_context(name="Alice", score=100)
 
 # Using expressions
 [increment]: set_context(count=$ctx.count + 1)
@@ -268,7 +268,7 @@ Delay execution.
 
 **Examples:**
 
-```yaml
+```juglans
 # Wait 1 second
 [wait]: timer(ms=1000)
 
@@ -288,7 +288,7 @@ No return value. Execution pauses for the specified duration.
 
 **Old syntax still works:**
 
-```yaml
+```juglans
 [files]: sh(cmd="ls -la")    # Equivalent to bash(command="ls -la")
 ```
 
@@ -298,8 +298,14 @@ No return value. Execution pauses for the specified duration.
 
 A Claude Code-style set of code operation tools, registered under the `"devtools"` slug. Can be called directly in .jg files, or used automatically by LLMs via `tools: ["devtools"]` in .jgagent.
 
-```yaml
-# Enable in an Agent
+```juglans
+# Use devtools in a workflow node
+[run]: bash(command="echo hello")
+```
+
+In `.jgagent` files, enable devtools with:
+
+```text
 slug: "code-agent"
 tools: ["devtools"]
 
@@ -323,7 +329,7 @@ Read file contents, returned with line numbers.
 
 **Examples:**
 
-```yaml
+```juglans
 # Read entire file
 [read]: read_file(file_path="./src/main.rs")
 
@@ -364,7 +370,7 @@ Write to a file (overwrite), automatically creates parent directories.
 
 **Examples:**
 
-```yaml
+```juglans
 [write]: write_file(file_path="./output/result.json", content=$ctx.result)
 ```
 
@@ -396,7 +402,7 @@ Exact string replacement. `old_string` must be unique in the file, otherwise `re
 
 **Examples:**
 
-```yaml
+```juglans
 # Exact replacement
 [edit]: edit_file(
   file_path="./src/config.rs",
@@ -442,7 +448,7 @@ File pattern matching, returns a list of matching paths.
 
 **Examples:**
 
-```yaml
+```juglans
 [find]: glob(pattern="**/*.rs")
 [find_src]: glob(pattern="*.ts", path="./src")
 ```
@@ -475,7 +481,7 @@ Regex search of file contents. Recursively searches files in a directory and ret
 
 **Examples:**
 
-```yaml
+```juglans
 # Search for TODOs
 [todos]: grep(pattern="TODO|FIXME", path="./src")
 
@@ -517,7 +523,7 @@ Execute a shell command with timeout control and output truncation. Replaces the
 
 **Examples:**
 
-```yaml
+```juglans
 # Execute a command
 [build]: bash(command="cargo build --release")
 
@@ -550,7 +556,7 @@ Execute a shell command with timeout control and output truncation. Replaces the
 
 Avoid directly executing user-provided commands to prevent command injection attacks:
 
-```yaml
+```juglans
 # Dangerous: do not do this
 [bad]: bash(command=$input.user_command)
 
@@ -583,7 +589,7 @@ At runtime, `serve()` is a pass-through that reads pre-injected request data and
 
 **Example:**
 
-```yaml
+```juglans
 slug: "my-api"
 name: "HTTP API"
 entry: [request]
@@ -621,7 +627,7 @@ Sets the HTTP response for a `serve()` workflow. Writes to `$response.*` which t
 
 **Example:**
 
-```yaml
+```juglans
 # Simple response
 [ok]: response(status=200, body={"message": "Success"})
 
@@ -656,7 +662,7 @@ HTTP request tool (recommended).
 
 **Examples:**
 
-```yaml
+```juglans
 # GET request
 [get]: fetch(url="https://api.example.com/data")
 
@@ -699,12 +705,13 @@ HTTP request tool (recommended).
 
 **Error Handling:**
 
-```yaml
+```juglans
 [api]: fetch(url=$input.api_url)
+[process]: notify(status="Processing response...")
+[handle_error]: notify(status="API request failed")
+
 [api] -> [process]
 [api] on error -> [handle_error]
-
-[handle_error]: notify(message="API request failed: " + $error.message)
 ```
 
 ---
@@ -724,7 +731,7 @@ Fetch URL content (legacy compatible, `fetch()` is recommended).
 
 **Examples:**
 
-```yaml
+```juglans
 # GET request
 [fetch]: fetch_url(url="https://api.example.com/data")
 
@@ -755,7 +762,7 @@ The following functions can be used in parameters:
 
 ### Data Transformation
 
-```yaml
+```text
 # JSON serialization
 json($ctx.data)              # Object -> JSON string
 
@@ -768,7 +775,7 @@ append($ctx.list, $item)     # Append element to array
 
 ### Arithmetic Operations
 
-```yaml
+```text
 $ctx.count + 1               # Addition
 $ctx.total - $ctx.used       # Subtraction
 $ctx.price * $ctx.quantity   # Multiplication
@@ -777,7 +784,7 @@ $ctx.total / $ctx.count      # Division
 
 ### Comparison Operations
 
-```yaml
+```text
 $ctx.score > 80              # Greater than
 $ctx.count <= 10             # Less than or equal
 $ctx.status == "done"        # Equal to
@@ -786,7 +793,7 @@ $ctx.value != null           # Not equal to
 
 ### Logical Operations
 
-```yaml
+```text
 $ctx.a && $ctx.b             # AND
 $ctx.a || $ctx.b             # OR
 !$ctx.flag                   # NOT
@@ -798,7 +805,7 @@ $ctx.a || $ctx.b             # OR
 
 ### Complete Example
 
-```yaml
+```juglans
 name: "Data Processing"
 version: "0.1.0"
 

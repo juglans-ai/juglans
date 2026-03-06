@@ -17,7 +17,7 @@ Workflow-level configuration overrides the Agent's default configuration.
 
 #### tool-router.jg
 
-```yaml
+```juglans
 name: "AI Router with Tooling"
 description: "Route simple vs complex questions, use tools for complex ones"
 
@@ -103,7 +103,7 @@ exit: [final_notify]
 
 ### src/agents/classifier.jgagent
 
-```yaml
+```jgagent
 slug: "classifier"
 name: "Intent Classifier"
 model: "gpt-3.5-turbo"
@@ -123,7 +123,7 @@ system_prompt: |
 
 ### src/agents/tool-agent.jgagent (with default tools)
 
-```yaml
+```jgagent
 slug: "tool-agent"
 name: "Tool-enabled Agent"
 model: "gpt-4o"
@@ -158,7 +158,7 @@ tools: [
 
 ### src/agents/assistant.jgagent
 
-```yaml
+```jgagent
 slug: "assistant"
 name: "General Assistant"
 model: "gpt-3.5-turbo"
@@ -173,7 +173,7 @@ system_prompt: |
 
 ### src/prompts/router.jgprompt
 
-```yaml
+```jgprompt
 slug: "router"
 name: "Complexity Router Prompt"
 
@@ -185,7 +185,7 @@ template: |
 
 ### src/prompts/solver.jgprompt
 
-```yaml
+```jgprompt
 slug: "solver"
 name: "Complex Problem Solver Prompt"
 
@@ -232,7 +232,7 @@ Output:
 
 ### Scenario 1: Using Agent Default Tools
 
-```yaml
+```juglans
 # Agent has default tools configured
 [step]: chat(
   agent="tool-agent",
@@ -243,7 +243,7 @@ Output:
 
 ### Scenario 2: Workflow Overrides Tools
 
-```yaml
+```juglans
 # Tools specified in the workflow override Agent defaults
 [step]: chat(
   agent="tool-agent",
@@ -263,7 +263,7 @@ Output:
 
 ### Scenario 3: No Tool Calls
 
-```yaml
+```juglans
 # Agent has no default tools, workflow doesn't specify any either
 [step]: chat(
   agent="assistant",

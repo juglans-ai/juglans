@@ -1,5 +1,6 @@
 // src/core/validator.rs
 use petgraph::algo::{is_cyclic_directed, toposort};
+use petgraph::visit::EdgeRef;
 use petgraph::Direction;
 use regex::Regex;
 use serde::Serialize;
@@ -7,7 +8,8 @@ use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use crate::core::graph::{NodeType, WorkflowGraph};
+use crate::core::graph::{self, NodeType, WorkflowGraph};
+use petgraph::graph::NodeIndex;
 
 /// 项目级资源上下文（跨文件校验用）
 /// 由 handle_check 两遍扫描后构建，传入 validate_with_project
@@ -209,7 +211,7 @@ impl WorkflowValidator {
             Self::check_flow_imports(graph, project, &mut result);
 
             // Check 17: Resource glob patterns
-            Self::check_resource_patterns(graph, &mut result);
+            Self::check_resource_patterns(graph, project, &mut result);
 
             // Check 18: Lib import paths
             Self::check_lib_imports(graph, project, &mut result);
@@ -296,10 +298,18 @@ impl WorkflowValidator {
                 }
             }
 
-            // Check which nodes are unreachable
+            // Check which nodes are unreachable (exempt test nodes and their descendants)
             for idx in graph.graph.node_indices() {
                 if !reachable.contains(&idx) {
                     let node = &graph.graph[idx];
+                    // Skip test_* nodes — they are intentionally disconnected
+                    if graph::is_test_node_id(&node.id) {
+                        continue;
+                    }
+                    // Skip nodes only reachable from test_* roots
+                    if Self::is_test_only_descendant(graph, idx) {
+                        continue;
+                    }
                     result.add_warning(
                         "W002",
                         &format!("Node '{}' is not reachable from entry node", node.id),
@@ -308,6 +318,32 @@ impl WorkflowValidator {
                 }
             }
         }
+    }
+
+    /// Check if a node is only reachable from test_* root nodes (reverse BFS)
+    fn is_test_only_descendant(wf: &WorkflowGraph, idx: NodeIndex) -> bool {
+        let mut stack = vec![idx];
+        let mut visited = HashSet::new();
+        while let Some(current) = stack.pop() {
+            if !visited.insert(current) {
+                continue;
+            }
+            let in_edges: Vec<_> = wf
+                .graph
+                .edges_directed(current, Direction::Incoming)
+                .collect();
+            if in_edges.is_empty() {
+                // Root node — must be a test node for this to qualify
+                if !graph::is_test_node_id(&wf.graph[current].id) {
+                    return false;
+                }
+            } else {
+                for edge in in_edges {
+                    stack.push(edge.source());
+                }
+            }
+        }
+        true
     }
 
     /// Check if exit nodes exist and are reachable
@@ -371,11 +407,13 @@ impl WorkflowValidator {
             "timer",
             "notify",
             "reply",
+            "print",
+            "return",
             "set_context",
             "feishu_webhook",
             // HTTP backend tools
-            "http_serve",
-            "http_response",
+            "serve",
+            "response",
             // Devtools
             "read_file",
             "write_file",
@@ -384,6 +422,38 @@ impl WorkflowValidator {
             "grep",
             "bash",
             "sh",
+            // Testing
+            "assert",
+            "config",
+            // Database ORM
+            "db.connect",
+            "db.disconnect",
+            "db.query",
+            "db.exec",
+            "db.find",
+            "db.find_one",
+            "db.create",
+            "db.create_many",
+            "db.upsert",
+            "db.update",
+            "db.delete",
+            "db.count",
+            "db.aggregate",
+            "db.begin",
+            "db.commit",
+            "db.rollback",
+            "db.create_table",
+            "db.drop_table",
+            "db.alter_table",
+            "db.tables",
+            "db.columns",
+            // Vector
+            "vector_create_space",
+            "vector_upsert",
+            "vector_search",
+            "vector_list_spaces",
+            "vector_delete_space",
+            "vector_delete",
         ]
         .iter()
         .copied()
@@ -400,7 +470,10 @@ impl WorkflowValidator {
 
             if let NodeType::Task(action) = &node.node_type {
                 // Check if tool is known (warning only, as custom tools are allowed)
-                if !known_tools.contains(action.name.as_str()) {
+                // Skip W004 for struct/class instantiation (Name(field=value) style)
+                if !known_tools.contains(action.name.as_str())
+                    && !graph.classes.contains_key(&action.name)
+                {
                     result.add_warning(
                         "W004",
                         &format!(
@@ -965,7 +1038,11 @@ impl WorkflowValidator {
     }
 
     /// Check 17: Validate resource glob patterns match at least one file
-    fn check_resource_patterns(graph: &WorkflowGraph, result: &mut ValidationResult) {
+    fn check_resource_patterns(
+        graph: &WorkflowGraph,
+        project: &ProjectContext,
+        result: &mut ValidationResult,
+    ) {
         let all_patterns: Vec<(&str, &str)> = graph
             .prompt_patterns
             .iter()
@@ -979,7 +1056,15 @@ impl WorkflowValidator {
             if pattern.starts_with('$') || pattern.starts_with("@/") {
                 continue;
             }
-            match glob::glob(pattern) {
+            // Resolve relative patterns against the .jg file's directory
+            let resolved = if !std::path::Path::new(pattern).is_absolute()
+                && !project.file_dir.as_os_str().is_empty()
+            {
+                project.file_dir.join(pattern).to_string_lossy().to_string()
+            } else {
+                pattern.to_string()
+            };
+            match glob::glob(&resolved) {
                 Ok(paths) => {
                     if paths.count() == 0 {
                         result.add_warning(
@@ -1425,14 +1510,15 @@ entry: [start]
 
     #[test]
     fn test_known_tools_no_false_positive() {
-        // execute_workflow, http_serve, http_response should be known
+        // execute_workflow, serve, response, db.find should be known
         let content = r#"
 name: "Test"
 entry: [start]
 [start]: execute_workflow(path="x")
-[serve]: http_serve(port="8080")
-[resp]: http_response(body="ok")
-[start] -> [serve] -> [resp]
+[srv]: serve(port="8080")
+[resp]: response(body="ok")
+[db]: db.find(table="users", where={})
+[start] -> [srv] -> [resp] -> [db]
 "#;
         let graph = GraphParser::parse(content).unwrap();
         let result = WorkflowValidator::validate(&graph);
@@ -1443,7 +1529,7 @@ entry: [start]
             .collect();
         assert!(
             unknown_w004.is_empty(),
-            "execute_workflow/http_serve/http_response should be known. W004s: {:?}",
+            "execute_workflow/serve/response/db.find should be known. W004s: {:?}",
             unknown_w004
         );
     }
