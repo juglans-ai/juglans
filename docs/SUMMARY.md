@@ -6,36 +6,38 @@
 * [Installation](getting-started/installation.md)
 * [Quick Start](getting-started/quickstart.md)
 
-## Guide
-* [Concepts](guide/concepts.md)
-* [Workflow Syntax](guide/workflow-syntax.md)
-* [Workflow Composition](guide/workflow-composition.md)
-* [Agent Syntax](guide/agent-syntax.md)
-* [Prompt Syntax](guide/prompt-syntax.md)
-* [Tools](guide/tools.md)
-* [Conditionals](guide/conditionals.md)
-* [Loops](guide/loops.md)
-* [Error Handling](guide/error-handling.md)
-* [Testing](guide/juglans-test.md)
+## Tutorials
+* [Hello Workflow](tutorials/hello-workflow.md)
+* [Variables & Data Flow](tutorials/variables.md)
+* [Branching & Routing](tutorials/branching.md)
+* [Loops](tutorials/loops.md)
+* [Error Handling](tutorials/error-handling.md)
+* [AI Chat](tutorials/ai-chat.md)
+* [Prompt Templates](tutorials/prompts.md)
+* [Workflow Composition](tutorials/composition.md)
+* [Full Project: AI Assistant](tutorials/full-project.md)
 
-## Examples
-* [Overview](examples/README.md)
-* [Basic Chat](examples/basic-chat.md)
-* [Intent Router](examples/intent-router.md)
-* [RAG Pipeline](examples/rag-pipeline.md)
-* [Tool Calling](examples/tool-calling.md)
-
-## Integrations
-* [Jug0](integrations/jug0.md)
-* [MCP](integrations/mcp.md)
-* [Python](integrations/python.md)
-* [Web Server](integrations/web-server.md)
+## How-to Guides
+* [Core Concepts](guide/concepts.md)
+* [Connect AI Models](guide/connect-ai.md)
+* [Use MCP Tools](guide/use-mcp.md)
+* [Integrate Python](guide/integrate-python.md)
+* [Build Web APIs](guide/build-web-api.md)
+* [Debug & Troubleshoot](guide/debugging.md)
+* [Deploy with Docker](guide/deploy-docker.md)
+* [Testing Workflows](guide/testing.md)
 
 ## Reference
-* [Builtins](reference/builtins.md)
-* [CLI](reference/cli.md)
-* [Config](reference/config.md)
-* [Context](reference/context.md)
+* [Workflow (.jg) Spec](reference/workflow-spec.md)
+* [Agent (.jgagent) Spec](reference/agent-spec.md)
+* [Prompt (.jgprompt) Spec](reference/prompt-spec.md)
+* [Built-in Tools](reference/builtins.md)
+* [Variables & Expressions](reference/expressions.md)
+* [Context System](reference/context.md)
+* [CLI Commands](reference/cli.md)
+* [Configuration](reference/config.md)
 
-## Deployment
-* [Docker](deployment/docker.md)
+## Appendix
+* [Juglans vs Alternatives](appendix/comparisons.md)
+* [Troubleshooting](appendix/troubleshooting.md)
+* [Glossary](appendix/glossary.md)

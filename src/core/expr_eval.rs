@@ -2593,6 +2593,31 @@ fn call_builtin(name: &str, args: &[Value]) -> Result<Value> {
             Ok(json!(pretty))
         }
 
+        "review" => {
+            if args.is_empty() {
+                return Err(anyhow!("review() requires at least 1 argument"));
+            }
+            let content = &args[0];
+            let prompt = args.get(1).and_then(|v| v.as_str()).unwrap_or("Pass?");
+
+            println!("\n  ┌─ Review");
+            let display =
+                serde_json::to_string_pretty(content).unwrap_or_else(|_| format!("{:?}", content));
+            for line in display.lines() {
+                println!("  │ {}", line);
+            }
+            print!("  └─ {} (y/n): ", prompt);
+            std::io::Write::flush(&mut std::io::stdout())?;
+
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input)?;
+
+            match input.trim().to_lowercase().as_str() {
+                "y" | "yes" | "" => Ok(json!(true)),
+                _ => Ok(json!(false)),
+            }
+        }
+
         _ => Err(anyhow!("Unknown function: {}()", name)),
     }
 }

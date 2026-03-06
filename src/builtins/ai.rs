@@ -971,8 +971,16 @@ impl Tool for Chat {
         };
 
         // 从 context 获取 Token 和 Meta 适配器（根据 state 决定是否 SSE 输出）
-        let token_sender = context.get_token_sender_adapter();
-        let effective_token_sender = if should_stream { token_sender } else { None };
+        let effective_token_sender = if should_stream {
+            context.get_token_sender_adapter()
+        } else if context.has_event_sender() {
+            // TUI/web mode: provide a dummy sender to prevent the runtime
+            // from falling back to stdout printing (which corrupts the TUI).
+            let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+            Some(tx)
+        } else {
+            None
+        };
         let meta_sender = context.get_meta_sender_adapter();
         let effective_meta_sender = if should_stream { meta_sender } else { None };
 

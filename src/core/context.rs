@@ -237,6 +237,11 @@ impl WorkflowContext {
         }
     }
 
+    /// 是否有事件发送器（TUI 模式下为 true，CLI 模式下为 false）
+    pub fn has_event_sender(&self) -> bool {
+        self.event_sender.is_some()
+    }
+
     /// 发送 client tool call 并等待前端返回结果
     pub async fn emit_tool_call_and_wait(
         &self,

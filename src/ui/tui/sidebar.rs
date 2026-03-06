@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Paragraph, Widget},
 };
 
-use super::app::App;
+use super::app::{App, TuiMode};
 use super::theme::Theme;
 
 pub struct SidebarWidget<'a> {
@@ -72,17 +72,50 @@ impl<'a> Widget for SidebarWidget<'a> {
 
         lines.push(Line::raw(""));
 
-        // LSP section
-        lines.push(Line::from(Span::styled(
-            "LSP",
-            Style::default()
-                .fg(self.theme.fg)
-                .add_modifier(Modifier::BOLD),
-        )));
-        lines.push(Line::from(Span::styled(
-            "LSPs will activate as files are read",
-            Style::default().fg(self.theme.muted),
-        )));
+        // Mode section
+        match self.app.mode {
+            TuiMode::Agent => {
+                lines.push(Line::from(Span::styled(
+                    "Agent",
+                    Style::default()
+                        .fg(self.theme.fg)
+                        .add_modifier(Modifier::BOLD),
+                )));
+                if let Some(name) = &self.app.agent_name {
+                    lines.push(Line::from(Span::styled(
+                        name.clone(),
+                        Style::default().fg(self.theme.accent),
+                    )));
+                    if let Some(state) = &self.app.agent_state {
+                        lines.push(Line::from(Span::styled(
+                            state.agent_resource.model.clone(),
+                            Style::default().fg(self.theme.muted),
+                        )));
+                    }
+                } else {
+                    lines.push(Line::from(Span::styled(
+                        "No agent loaded",
+                        Style::default().fg(self.theme.muted),
+                    )));
+                    lines.push(Line::from(Span::styled(
+                        "Press Tab to select",
+                        Style::default().fg(self.theme.muted),
+                    )));
+                }
+            }
+            TuiMode::ClaudeCode => {
+                lines.push(Line::from(Span::styled(
+                    "Claude Code",
+                    Style::default()
+                        .fg(self.theme.fg)
+                        .add_modifier(Modifier::BOLD),
+                )));
+                lines.push(Line::from(Span::styled(
+                    self.app.model_name.clone(),
+                    Style::default().fg(self.theme.muted),
+                )));
+            }
+        }
 
         // Top content
         let top_paragraph = Paragraph::new(lines);

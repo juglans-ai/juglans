@@ -1,16 +1,14 @@
 # Configuration File Reference
 
-Juglans uses a `juglans.toml` file for configuration.
-
 ## File Location
 
-Searched by priority:
+Searched by priority (first found wins):
 
-1. `./juglans.toml` - Current directory (project configuration)
-2. `~/.config/juglans/juglans.toml` - User configuration
-3. `/etc/juglans/juglans.toml` - System configuration
+1. `./juglans.toml` -- project directory
+2. `~/.config/juglans/juglans.toml` -- user configuration
+3. `/etc/juglans/juglans.toml` -- system configuration
 
-Can also be specified via environment variable:
+Override via environment variable:
 
 ```bash
 JUGLANS_CONFIG=/path/to/juglans.toml juglans ...
@@ -19,276 +17,200 @@ JUGLANS_CONFIG=/path/to/juglans.toml juglans ...
 ## Complete Configuration Example
 
 ```toml
-# juglans.toml
-
-# Account configuration
 [account]
 id = "user_123"
 name = "John Doe"
 role = "admin"
 api_key = "jug0_sk_..."
 
-# Workspace configuration (optional)
 [workspace]
-id = "workspace_456"
+id = "ws_default"
 name = "My Workspace"
 members = ["user_123", "user_789"]
-
-# Resource paths (supports glob patterns)
-agents = ["src/agents/**/*.jgagent", "src/pure-agents/**/*.jgagent"]
+agents = ["src/agents/**/*.jgagent"]
 workflows = ["src/**/*.jg", "src/workflows/**/*.jgflow"]
 prompts = ["src/prompts/**/*.jgprompt"]
 tools = ["src/tools/**/*.json"]
+exclude = ["**/*.backup", "**/test_*"]
 
-# Exclude rules
-exclude = ["**/*.backup", "**/.draft", "**/test_*"]
-
-# Jug0 backend configuration
 [jug0]
 base_url = "http://localhost:3000"
 
-# Web server configuration
 [server]
 host = "127.0.0.1"
-port = 8080
+port = 3000
+endpoint_url = "https://agent.juglans.ai"
 
-# Environment variables (optional)
+[debug]
+show_nodes = false
+show_context = false
+show_conditions = false
+show_variables = false
+
+[limits]
+max_loop_iterations = 100
+max_execution_depth = 10
+http_timeout_secs = 120
+python_workers = 1
+
+[paths]
+base = "."
+
 [env]
 DATABASE_URL = "postgresql://localhost/mydb"
 CUSTOM_VAR = "value"
 
-# MCP server configuration (HTTP connection method)
 [[mcp_servers]]
 name = "filesystem"
 base_url = "http://localhost:3001/mcp/filesystem"
 alias = "fs"
-token = "optional_token"
 
 [[mcp_servers]]
 name = "github"
 base_url = "http://localhost:3001/mcp/github"
 token = "${GITHUB_TOKEN}"
-```
 
-## Configuration Sections Explained
+[bot.telegram]
+token = "bot_token_here"
+agent = "default"
 
-### [account] - Account Configuration
+[bot.feishu]
+app_id = "cli_xxx"
+app_secret = "secret"
+agent = "default"
+port = 9000
+base_url = "https://open.feishu.cn"
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `id` | string | Yes | User ID |
-| `name` | string | Yes | User name |
-| `role` | string | No | User role (e.g., admin, user) |
-| `api_key` | string | No | API key |
-
-```toml
-[account]
-id = "user_123"
-name = "John Doe"
-role = "admin"
-api_key = "jug0_sk_abcdef123456"
-```
-
-**Environment variable override:**
-
-```bash
-export JUGLANS_API_KEY="jug0_sk_..."
+[registry]
+url = "https://jgr.juglans.ai"
 ```
 
 ---
 
-### [workspace] - Workspace Configuration
+## [account]
 
-Workspaces are used for multi-user collaboration and batch resource management.
+User account credentials.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `id` | string | Yes | Workspace ID |
-| `name` | string | Yes | Workspace name |
-| `members` | array | No | Member user ID list |
-| `agents` | array | No | Agent file path patterns |
-| `workflows` | array | No | Workflow file path patterns |
-| `prompts` | array | No | Prompt file path patterns |
-| `tools` | array | No | Tool definition file path patterns |
-| `exclude` | array | No | Exclude file path patterns |
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `id` | string | Yes | | User ID |
+| `name` | string | Yes | | Display name |
+| `role` | string | No | | Role (e.g., `admin`, `user`) |
+| `api_key` | string | No | | Jug0 API key (prefix `jug0_sk_`) |
 
-```toml
-[workspace]
-id = "workspace_456"
-name = "My Team Workspace"
-members = ["user_123", "user_789", "user_456"]
-
-# Resource path configuration (supports glob patterns)
-agents = ["src/agents/**/*.jgagent", "src/pure-agents/**/*.jgagent"]
-workflows = ["src/**/*.jg", "src/workflows/**/*.jgflow"]
-prompts = ["src/prompts/**/*.jgprompt"]
-tools = ["src/tools/**/*.json"]
-
-# Exclude rules
-exclude = [
-  "**/*.backup",
-  "**/.draft",
-  "**/test_*",
-  "**/private_*"
-]
-```
-
-#### Resource Path Configuration
-
-Resource paths support **glob patterns**, used for automatic file discovery during batch operations.
-
-**Common patterns:**
-
-- `**/*.jg` - Recursively match all .jg files
-- `src/*.jg` - Match only .jg files in the src directory (non-recursive)
-- `src/**/*.jgagent` - Recursively match all agents under src
-
-**Use cases:**
-
-```bash
-# Batch apply using workspace configuration
-juglans push                    # Apply all configured resources
-juglans push --type workflow    # Apply only workflows
-juglans push --dry-run          # Preview
-```
-
-**Exclude rules:**
-
-Use the `exclude` field to ignore specific files:
-
-```toml
-[workspace]
-exclude = [
-  "**/*.backup",        # All backup files
-  "**/.draft",          # Draft files
-  "**/test_*",          # Test files
-  "**/private_*",       # Private files
-  "src/experimental/**" # Experimental directory
-]
-```
+`api_key` can be overridden by `JUGLANS_API_KEY` environment variable.
 
 ---
 
-### [jug0] - Backend Configuration
+## [workspace]
+
+Workspace for multi-user collaboration and batch resource management.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `id` | string | Yes | | Workspace ID |
+| `name` | string | Yes | | Workspace name |
+| `members` | string[] | No | `[]` | Member user IDs |
+| `agents` | string[] | No | `[]` | Agent file glob patterns |
+| `workflows` | string[] | No | `[]` | Workflow file glob patterns |
+| `prompts` | string[] | No | `[]` | Prompt file glob patterns |
+| `tools` | string[] | No | `[]` | Tool file glob patterns |
+| `exclude` | string[] | No | `[]` | Exclude patterns |
+
+Resource paths support glob: `*` matches filenames, `**` matches directories recursively.
+
+Used by `juglans push` (without arguments) for batch operations.
+
+---
+
+## [jug0]
+
+Jug0 backend server connection.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `base_url` | string | No | `https://api.jug0.com` | API base URL |
+
+---
+
+## [server]
+
+Local web server configuration (for `juglans web`).
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `host` | string | No | `127.0.0.1` | Bind address |
+| `port` | u16 | No | `3000` | Port number |
+| `endpoint_url` | string | No | | Public endpoint URL for Jug0 registration |
+
+---
+
+## [debug]
+
+Debug output control.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `base_url` | string | https://api.jug0.com | API address |
-
-```toml
-[jug0]
-base_url = "https://api.jug0.com"
-```
-
-**Different environment configurations:**
-
-```toml
-# Development environment
-[jug0]
-base_url = "http://localhost:3000"
-
-# Production environment
-# [jug0]
-# base_url = "https://api.jug0.com"
-```
+| `show_nodes` | bool | `false` | Show node execution info |
+| `show_context` | bool | `false` | Show context variables |
+| `show_conditions` | bool | `false` | Show condition evaluation details |
+| `show_variables` | bool | `false` | Show variable resolution process |
 
 ---
 
-### [server] - Web Server
+## [limits]
+
+Runtime limits to prevent runaway execution.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `host` | string | 127.0.0.1 | Bind address |
-| `port` | number | 3000 | Port number |
-
-```toml
-[server]
-host = "0.0.0.0"
-port = 8080
-```
+| `max_loop_iterations` | usize | `100` | Maximum loop iterations |
+| `max_execution_depth` | usize | `10` | Maximum nested execution depth |
+| `http_timeout_secs` | u64 | `120` | HTTP request timeout (seconds) |
+| `python_workers` | usize | `1` | Python worker pool size |
 
 ---
 
-### [env] - Environment Variables
+## [paths]
 
-Custom environment variable dictionary, accessible in workflows.
+Path alias configuration.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `base` | string | (disabled) | Base directory for `@` path alias, relative to project root |
+
+When set to `"."`, `@/agents/foo.jgagent` resolves to `<project_root>/agents/foo.jgagent`.
+
+---
+
+## [env]
+
+Custom environment variables available during workflow execution.
 
 ```toml
 [env]
 DATABASE_URL = "postgresql://localhost/mydb"
 API_ENDPOINT = "https://api.example.com"
-CUSTOM_SETTING = "value"
 ```
 
-These environment variables can be accessed during workflow execution via `$env.DATABASE_URL` and similar paths.
-
-**Use cases:**
-- Database connection strings
-- API endpoint configuration
-- Custom configuration items
-- Development/production environment switching
+Accessible in workflows via `$env.DATABASE_URL`.
 
 ---
 
-### [logging] - Logging Configuration
+## [[mcp_servers]]
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `level` | string | info | Log level |
-| `format` | string | pretty | Output format |
+MCP (Model Context Protocol) server connections. Juglans connects via HTTP/JSON-RPC -- you must start the MCP server separately.
 
-**Log levels:**
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `name` | string | Yes | | Server name (used in tool namespace) |
+| `base_url` | string | Yes | | MCP server HTTP address |
+| `alias` | string | No | | Short alias |
+| `token` | string | No | | Authentication token |
 
-- `error` - Errors only
-- `warn` - Warnings and errors
-- `info` - Info, warnings, and errors
-- `debug` - Debug information
-- `trace` - Detailed tracing
+Token values support `${ENV_VAR}` syntax for environment variable interpolation.
 
-**Output formats:**
-
-- `pretty` - Colorized readable format
-- `json` - JSON format (suitable for log collection)
-- `compact` - Compact single-line format
-
-```toml
-[logging]
-level = "debug"
-format = "json"
-```
-
-**Environment variable override:**
-
-```bash
-export JUGLANS_LOG_LEVEL=debug
-```
-
----
-
-### [[mcp_servers]] - MCP Servers
-
-Configure Model Context Protocol servers to extend tool capabilities.
-
-**Important:** Juglans uses HTTP/JSON-RPC to connect to MCP servers and does not support process launching. You need to start the MCP server first, then connect via HTTP.
-
-#### Configuration Format
-
-```toml
-[[mcp_servers]]
-name = "filesystem"
-base_url = "http://localhost:3001/mcp/filesystem"
-alias = "fs"
-token = "optional_token"
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `name` | string | Yes | Server name (used for tool naming) |
-| `base_url` | string | Yes | MCP server HTTP address |
-| `alias` | string | No | Alias |
-| `token` | string | No | Authentication token |
-
-#### Multiple MCP Servers
+Multiple servers use TOML array-of-tables syntax:
 
 ```toml
 [[mcp_servers]]
@@ -300,41 +222,64 @@ alias = "fs"
 name = "github"
 base_url = "http://localhost:3001/mcp/github"
 token = "${GITHUB_TOKEN}"
-
-[[mcp_servers]]
-name = "database"
-base_url = "http://localhost:5000/mcp"
-token = "db_mcp_key"
 ```
+
+---
+
+## [bot]
+
+Bot adapter configuration for messaging platforms.
+
+### [bot.telegram]
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `token` | string | | Telegram bot token |
+| `agent` | string | `"default"` | Agent slug to use |
+
+### [bot.feishu]
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `app_id` | string | | Feishu app ID (event subscription mode) |
+| `app_secret` | string | | Feishu app secret |
+| `webhook_url` | string | | Webhook URL (one-way push mode) |
+| `agent` | string | `"default"` | Agent slug to use |
+| `port` | u16 | `9000` | Webhook listener port |
+| `base_url` | string | `https://open.feishu.cn` | API base (`https://open.larksuite.com` for Lark) |
+| `approvers` | string[] | `[]` | Approver open_ids |
+| `mode` | string | (auto) | `"local"` or `"jug0"` |
+
+---
+
+## [registry]
+
+Package registry configuration.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `url` | string | `https://jgr.juglans.ai` | Registry URL |
+| `port` | u16 | | Server port (when running registry locally) |
+| `data_dir` | string | | Server data directory |
 
 ---
 
 ## Environment Variables
 
-| Variable | Description |
-|----------|-------------|
-| `JUGLANS_API_KEY` | API key |
-| `JUGLANS_CONFIG` | Config file path |
-| `JUGLANS_LOG_LEVEL` | Log level |
-| `JUGLANS_JUG0_URL` | Jug0 API address |
-
-**Referencing environment variables in configuration:**
-
-```toml
-[mcp.github]
-env = { GITHUB_TOKEN = "${GITHUB_TOKEN}" }
-```
+| Variable | Description | Overrides |
+|----------|-------------|-----------|
+| `JUGLANS_API_KEY` | API key | `account.api_key` |
+| `JUGLANS_CONFIG` | Config file path | Search order |
+| `JUGLANS_LOG_LEVEL` | Log level: `debug`, `info`, `warn`, `error` | `logging.level` |
+| `JUGLANS_JUG0_URL` | Jug0 API address | `jug0.base_url` |
 
 ---
 
-## Project Configuration vs User Configuration
+## Project vs User Configuration
 
-### Project Configuration (./juglans.toml)
-
-Project-specific settings, should be committed to version control (without sensitive information):
+**Project config** (`./juglans.toml`) -- committed to version control, no secrets:
 
 ```toml
-# Project configuration example
 [jug0]
 base_url = "http://localhost:3000"
 
@@ -346,74 +291,17 @@ name = "filesystem"
 base_url = "http://localhost:3001/mcp/filesystem"
 ```
 
-### User Configuration (~/.config/juglans/juglans.toml)
-
-Personal settings and sensitive information:
+**User config** (`~/.config/juglans/juglans.toml`) -- personal settings and secrets:
 
 ```toml
-# User configuration example
 [account]
 id = "my_user_id"
-api_key = "jug0_sk_my_secret_key"
-
-[logging]
-level = "debug"
+name = "My Name"
+api_key = "jug0_sk_secret"
 ```
 
----
-
-## Configuration Validation
-
-Check if configuration is valid:
+Environment variables override both:
 
 ```bash
-juglans config --check
-```
-
-View active configuration:
-
-```bash
-juglans config --show
-```
-
----
-
-## Best Practices
-
-### 1. Separate Sensitive Information
-
-```toml
-# juglans.toml (committed to git)
-[jug0]
-base_url = "http://localhost:3000"
-
-# Use environment variables for sensitive information
-# export JUGLANS_API_KEY="..."
-```
-
-### 2. Use .env Files
-
-Create a `.env` file (add to .gitignore):
-
-```bash
-JUGLANS_API_KEY=jug0_sk_...
-GITHUB_TOKEN=ghp_...
-```
-
-### 3. Environment-Specific Configuration
-
-```toml
-# juglans.dev.toml
-[jug0]
-base_url = "http://localhost:3000"
-
-# juglans.prod.toml
-[jug0]
-base_url = "https://api.jug0.com"
-```
-
-Usage:
-
-```bash
-JUGLANS_CONFIG=juglans.prod.toml juglans ...
+export JUGLANS_API_KEY="jug0_sk_..."
 ```

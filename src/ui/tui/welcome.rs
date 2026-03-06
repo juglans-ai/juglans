@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Paragraph, Widget},
 };
 
-use super::app::App;
+use super::app::{App, TuiMode};
 use super::editor::EditorWidget;
 
 // ASCII art logo for Juglans — "jug" dim, "lans" bright
@@ -109,24 +109,43 @@ impl<'a> Widget for WelcomeWidget<'a> {
         };
         editor.render(editor_rect, buf);
 
-        // --- Keyboard shortcuts (centered) ---
-        let shortcuts_spans = vec![
-            Span::styled(
-                "ctrl+t",
-                Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" variants   ", Style::default().fg(theme.muted)),
-            Span::styled(
-                "tab",
-                Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" agents   ", Style::default().fg(theme.muted)),
-            Span::styled(
-                "ctrl+p",
-                Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" commands", Style::default().fg(theme.muted)),
-        ];
+        // --- Keyboard shortcuts (centered, mode-aware) ---
+        let shortcuts_spans = match self.app.mode {
+            TuiMode::Agent => vec![
+                Span::styled(
+                    "tab",
+                    Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(" select agent   ", Style::default().fg(theme.muted)),
+                Span::styled(
+                    "ctrl+t",
+                    Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(" claude mode   ", Style::default().fg(theme.muted)),
+                Span::styled(
+                    "ctrl+h",
+                    Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(" help", Style::default().fg(theme.muted)),
+            ],
+            TuiMode::ClaudeCode => vec![
+                Span::styled(
+                    "ctrl+o",
+                    Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(" model   ", Style::default().fg(theme.muted)),
+                Span::styled(
+                    "ctrl+t",
+                    Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(" agent mode   ", Style::default().fg(theme.muted)),
+                Span::styled(
+                    "ctrl+h",
+                    Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(" help", Style::default().fg(theme.muted)),
+            ],
+        };
         let sc_len: usize = shortcuts_spans.iter().map(|s| s.width()).sum();
         let sc_pad = width.saturating_sub(sc_len) / 2;
         let mut sc_line = vec![Span::raw(" ".repeat(sc_pad))];

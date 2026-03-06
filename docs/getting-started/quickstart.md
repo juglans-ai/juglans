@@ -1,202 +1,172 @@
 # Quick Start
 
-This guide will help you create and run your first Juglans workflow in 5 minutes.
+By the end of this page, you'll have written and run your first Juglans workflow. It takes about 5 minutes.
 
 ## Prerequisites
 
-- Rust 1.70+ (for compilation)
-- An LLM API Key (DeepSeek, OpenAI, etc.)
+- Juglans installed ([Installation Guide](./installation.md))
 
-## 1. Install Juglans
+That's it. No API keys needed for this tutorial — we'll use only offline tools.
 
-```bash
-# Clone the repository
-git clone https://github.com/juglans-ai/juglans.git
-cd juglans
+## Step 1: Your First Workflow
 
-# Build
-cargo build --release
-
-# Add to PATH (optional)
-export PATH="$PATH:$(pwd)/target/release"
-```
-
-## 2. Initialize a Project
-
-```bash
-# Create a new project
-juglans init my-ai-project
-cd my-ai-project
-```
-
-This creates the following structure:
-```
-my-ai-project/
-├── juglans.toml        # Configuration file
-└── src/                # All source files
-    ├── prompts/        # Prompt templates
-    ├── agents/         # Agent configurations (entry agents with workflow field)
-    ├── pure-agents/    # Pure agents (no workflow, called by workflows)
-    ├── workflows/      # .jgflow metadata manifests
-    └── tools/          # Tool definitions
-```
-.jg source files are placed directly in the `src/` root directory.
-
-## 3. Configure the API
-
-Edit `juglans.toml`:
-
-```toml
-[account]
-id = "your_user_id"
-api_key = "your_api_key"
-
-[jug0]
-base_url = "http://localhost:3000"  # Or your Jug0 service address
-```
-
-## 4. Create an Agent
-
-Create `src/agents/assistant.jgagent`:
-
-```jgagent
-slug: "assistant"
-name: "AI Assistant"
-model: "deepseek-chat"
-temperature: 0.7
-system_prompt: |
-  You are a helpful AI assistant.
-  Be concise and accurate in your responses.
-```
-
-## 5. Create a Prompt Template
-
-Create `src/prompts/analyze.jgprompt`:
-
-```jgprompt
----
-slug: "analyze"
-name: "Analysis Prompt"
-description: "Analyze user input and provide a structured response"
-inputs:
-  topic: ""
-  style: "professional"
----
-Please analyze the following topic: {{ topic }}
-
-Requirements:
-- Style: {{ style }}
-- Provide key insights
-- Be structured and clear
-
-{% if style == "casual" %}
-Feel free to use informal language.
-{% endif %}
-```
-
-## 6. Create a Workflow
-
-Create `src/main.jg`:
+Create a file called `hello.jg`:
 
 ```juglans
-# Import resources
-prompts: ["./prompts/*.jgprompt"]
-agents: ["./agents/*.jgagent"]
-
-# Entry and exit nodes
-entry: [init]
-exit: [complete]
-
-# Node definitions
-[init]: notify(status="Starting analysis...")
-
-[render_prompt]: p(
-  slug="analyze",
-  topic=$input.topic,
-  style=$input.style
-)
-
-[analyze]: chat(
-  agent="assistant",
-  message=$output
-)
-
-[complete]: notify(status="Analysis complete!")
-
-# Execution flow
-[init] -> [render_prompt] -> [analyze] -> [complete]
+[greet]: print(message="Hello, Juglans!")
+[done]: print(message="Workflow complete.")
+[greet] -> [done]
 ```
 
-## 7. Run the Workflow
+Run it:
 
 ```bash
-# Run the workflow
-juglans src/main.jg --input '{
-  "topic": "AI workflow orchestration",
-  "style": "professional"
-}'
+juglans hello.jg
 ```
 
-Example output:
+You should see:
+
 ```
-[init] Starting analysis...
-[render_prompt] Rendered prompt: analyze
-[analyze] Calling agent: assistant
-[analyze] Response: AI workflow orchestration is a systematic approach...
-[complete] Analysis complete!
+Hello, Juglans!
+Workflow complete.
 ```
 
-## 8. Interactive Agent
+**What just happened?** You defined two **nodes** (`[greet]` and `[done]`), each calling the `print()` tool. The arrow `->` is an **edge** that says "run `[done]` after `[greet]`".
 
-Chat directly with an Agent:
+## Step 2: Add Input
+
+Workflows become useful when they accept input. Edit `hello.jg`:
+
+```juglans
+[greet]: print(message="Hello, " + $input.name + "!")
+[info]: print(message="You are " + $input.role)
+[greet] -> [info]
+```
+
+Run with `--input`:
 
 ```bash
-juglans src/agents/assistant.jgagent
+juglans hello.jg --input '{"name": "Alice", "role": "developer"}'
 ```
 
-Entering interactive mode:
+Output:
+
 ```
-> What is Juglans?
-Juglans is a Rust-based AI workflow orchestration framework...
-
-> Tell me more about its features
-Juglans offers several key features:
-1. Declarative DSL for defining workflows
-2. Support for conditional branching and loops
-...
-
-> exit
-Goodbye!
+Hello, Alice!
+You are developer
 ```
 
-## Next Steps
+**`$input`** refers to the JSON data you pass via `--input`. Use dot notation to access fields: `$input.name`, `$input.role`.
 
-- [Core Concepts](../guide/concepts.md) - Deep dive into Agent, Prompt, and Workflow
-- [Workflow Syntax](../guide/workflow-syntax.md) - Complete .jg syntax
-- [Built-in Tools](../reference/builtins.md) - Detailed guide to chat, p, notify, and other tools
-- [Conditionals and Branching](../guide/conditionals.md) - Implementing complex logic
+## Step 3: Use Context Variables
 
-## FAQ
+Nodes can store data in the workflow **context** and pass it to later nodes:
 
-### Q: How do I debug a workflow?
+```juglans
+[init]: set_context(greeting="Good morning", count=3)
+[show]: print(message=$ctx.greeting + " — count is " + str($ctx.count))
+[init] -> [show]
+```
 
-Use the `--verbose` flag to see detailed logs:
 ```bash
-juglans src/main.jg --verbose
+juglans hello.jg
 ```
 
-### Q: How do I use a local model?
+Output:
 
-Configure a local endpoint in `juglans.toml`:
-```toml
-[jug0]
-base_url = "http://localhost:11434/v1"  # Ollama example
+```
+Good morning — count is 3
 ```
 
-### Q: Which models are supported?
+**`$ctx`** is the shared context. `set_context()` writes to it, `$ctx.key` reads from it. The `str()` function converts a number to string for concatenation.
 
-Any model compatible with the OpenAI API is supported:
-- DeepSeek (deepseek-chat, deepseek-coder)
-- OpenAI (gpt-4o, gpt-4-turbo)
-- Anthropic (claude-3-opus, claude-3-sonnet)
-- Local models (Ollama, vLLM)
+## Step 4: Branching
+
+Make your workflow take different paths based on conditions:
+
+```juglans
+[check]: set_context(score=85)
+[pass]: print(message="Passed!")
+[fail]: print(message="Failed.")
+[done]: print(message="Evaluation complete.")
+
+[check] if $ctx.score >= 60 -> [pass]
+[check] if $ctx.score < 60 -> [fail]
+[pass] -> [done]
+[fail] -> [done]
+```
+
+```bash
+juglans hello.jg
+```
+
+Output:
+
+```
+Passed!
+Evaluation complete.
+```
+
+Try changing the score to `50` and run again — you'll see `Failed.` instead.
+
+**`if` conditions** on edges control which path the workflow takes. Only edges whose conditions are true will be followed.
+
+## Step 5: A Realistic Workflow
+
+Let's combine everything into a workflow that processes a task:
+
+```juglans
+name: "Task Processor"
+entry: [start]
+exit: [done]
+
+[start]: set_context(status="received")
+[validate]: set_context(status="validated")
+[process]: print(message="Processing task: " + $input.task)
+[success]: print(message="Task completed successfully")
+[error]: print(message="Task validation failed")
+[done]: print(message="Final status: " + $ctx.status)
+
+[start] -> [validate]
+[validate] if $input.priority == "high" -> [process]
+[validate] if $input.priority != "high" -> [error]
+[process] -> [success]
+[success] -> [done]
+[error] -> [done]
+```
+
+```bash
+juglans hello.jg --input '{"task": "deploy v2.0", "priority": "high"}'
+```
+
+Output:
+
+```
+Processing task: deploy v2.0
+Task completed successfully
+Final status: validated
+```
+
+## What's Next?
+
+You've learned the core building blocks:
+
+| Concept | Syntax | You learned |
+|---------|--------|-------------|
+| **Node** | `[name]: tool(params)` | Step 1 |
+| **Edge** | `[a] -> [b]` | Step 1 |
+| **Input** | `$input.field` | Step 2 |
+| **Context** | `set_context()` / `$ctx.key` | Step 3 |
+| **Conditionals** | `[a] if expr -> [b]` | Step 4 |
+| **Metadata** | `name:`, `entry:`, `exit:` | Step 5 |
+
+Continue with the tutorials to learn the language in depth:
+
+- **[Tutorial 1: Hello Workflow](../tutorials/hello-workflow.md)** — Deeper dive into nodes and edges
+- **[Tutorial 2: Variables & Data Flow](../tutorials/variables.md)** — Master `$input`, `$output`, `$ctx`
+- **[Tutorial 3: Branching & Routing](../tutorials/branching.md)** — `if`, `switch`, complex routing
+
+Or jump to the reference if you want to explore on your own:
+
+- **[Built-in Tools](../reference/builtins.md)** — All available tools: `chat`, `print`, `bash`, `fetch`, etc.
+- **[CLI Commands](../reference/cli.md)** — Everything `juglans` can do

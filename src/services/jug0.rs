@@ -1200,14 +1200,18 @@ impl JuglansRuntime for Jug0Client {
                         let _ = sender.send(t.to_string());
                     }
 
-                    // 2. 【补回】CLI 流式输出
-                    print!("{}", t);
-                    use std::io::Write;
-                    std::io::stdout().flush().ok();
+                    // 2. CLI 流式输出（仅在无 token_sender 时，避免 TUI 模式下污染终端）
+                    if token_sender.is_none() {
+                        print!("{}", t);
+                        use std::io::Write;
+                        std::io::stdout().flush().ok();
+                    }
                 }
             }
         }
-        println!();
+        if token_sender.is_none() {
+            println!();
+        }
 
         if !tool_calls.is_empty() {
             Ok(ChatOutput::ToolCalls {

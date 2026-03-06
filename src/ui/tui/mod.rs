@@ -11,15 +11,29 @@ pub mod theme;
 pub mod ui;
 pub mod welcome;
 
-use anyhow::Result;
-use app::App;
+use anyhow::{Context, Result};
+use app::{AgentState, App};
 use crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use event::EventHandler;
+use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::mpsc;
+
+use crate::core::agent_parser::AgentParser;
+use crate::core::context::WorkflowContext;
+use crate::core::executor::WorkflowExecutor;
+use crate::core::parser::GraphParser;
+use crate::core::resolver;
+use crate::services::agent_loader::AgentRegistry;
+use crate::services::config::JuglansConfig;
+use crate::services::interface::JuglansRuntime;
+use crate::services::jug0::Jug0Client;
+use crate::services::prompt_loader::PromptRegistry;
 
 pub async fn run(mut app: App) -> Result<()> {
     let mut terminal = ratatui::init();
@@ -41,7 +55,32 @@ pub async fn run(mut app: App) -> Result<()> {
     while !app.should_quit {
         terminal.draw(|f| ui::draw(f, &app))?;
 
-        // Handle pending message: spawn new subprocess or send to existing one
+        // Handle pending agent load
+        if let Some(path) = app.pending_agent_load.take() {
+            match load_agent(&path).await {
+                Ok((state, name)) => {
+                    app.agent_name = Some(name);
+                    app.agent_state = Some(state);
+                    app.status_message = Some((
+                        format!("Agent loaded: {}", app.agent_name.as_deref().unwrap_or("?")),
+                        std::time::Instant::now(),
+                    ));
+                }
+                Err(e) => {
+                    app.status_message = Some((
+                        format!("Failed to load agent: {}", e),
+                        std::time::Instant::now(),
+                    ));
+                }
+            }
+        }
+
+        // Handle pending agent message: execute agent
+        if let Some(text) = app.pending_agent_message.take() {
+            app.do_execute_agent(text).await;
+        }
+
+        // Handle pending claude message: spawn new subprocess or send to existing one
         if let Some(msg) = app.pending_send_message.take() {
             if app.claude_process.is_some() {
                 app.send_user_message_to_subprocess(msg).await;
@@ -59,49 +98,91 @@ pub async fn run(mut app: App) -> Result<()> {
             }
         }
 
-        // Multiplex UI events and Claude Code subprocess events
-        if let Some(mut claude_rx) = app.claude_rx.take() {
-            tokio::select! {
-                ui_event = events.next() => {
-                    match ui_event {
-                        Ok(event) => app.update(event),
-                        Err(_) => {
-                            app.claude_rx = Some(claude_rx);
-                            break;
+        // Triple-multiplex: UI events + Claude events + Agent events
+        let has_claude_rx = app.claude_rx.is_some();
+        let has_agent_rx = app
+            .agent_state
+            .as_ref()
+            .is_some_and(|s| s.event_rx.is_some());
+
+        match (has_claude_rx, has_agent_rx) {
+            (true, _) => {
+                // Claude Code mode: select UI + Claude events
+                let mut claude_rx = app.claude_rx.take().unwrap();
+                tokio::select! {
+                    ui_event = events.next() => {
+                        match ui_event {
+                            Ok(event) => app.update(event),
+                            Err(_) => {
+                                app.claude_rx = Some(claude_rx);
+                                break;
+                            }
+                        }
+                    }
+                    claude_event = claude_rx.recv() => {
+                        match claude_event {
+                            Some(ev) => app.handle_claude_event(ev),
+                            None => {
+                                app.handle_claude_event(
+                                    claude_code::ClaudeEvent::ProcessExited {
+                                        _success: true,
+                                        error: None,
+                                    }
+                                );
+                            }
                         }
                     }
                 }
-                claude_event = claude_rx.recv() => {
-                    match claude_event {
-                        Some(ev) => app.handle_claude_event(ev),
-                        None => {
-                            // Channel closed without ProcessExited
-                            app.handle_claude_event(
-                                claude_code::ClaudeEvent::ProcessExited {
-                                    _success: true,
-                                    error: None,
-                                }
-                            );
+                // Drain remaining Claude events
+                while let Ok(ev) = claude_rx.try_recv() {
+                    app.handle_claude_event(ev);
+                }
+                app.claude_rx = Some(claude_rx);
+            }
+            (false, true) => {
+                // Agent mode: select UI + Agent events
+                let mut agent_rx = app.agent_state.as_mut().unwrap().event_rx.take().unwrap();
+                tokio::select! {
+                    ui_event = events.next() => {
+                        match ui_event {
+                            Ok(event) => app.update(event),
+                            Err(_) => {
+                                app.agent_state.as_mut().unwrap().event_rx = Some(agent_rx);
+                                break;
+                            }
+                        }
+                    }
+                    agent_event = agent_rx.recv() => {
+                        if let Some(ev) = agent_event {
+                            app.handle_agent_event(ev);
                         }
                     }
                 }
+                // Drain remaining Agent events
+                while let Ok(ev) = agent_rx.try_recv() {
+                    app.handle_agent_event(ev);
+                }
+                if let Some(state) = app.agent_state.as_mut() {
+                    state.event_rx = Some(agent_rx);
+                }
             }
-            // Drain all remaining Claude events before next draw.
-            // This ensures streaming text appears in bulk per frame
-            // rather than one token per frame.
-            while let Ok(ev) = claude_rx.try_recv() {
-                app.handle_claude_event(ev);
+            _ => {
+                // No active stream: just poll UI events
+                let event = events.next().await?;
+                app.update(event);
             }
-            app.claude_rx = Some(claude_rx);
-        } else {
-            let event = events.next().await?;
-            app.update(event);
         }
     }
 
     // Cleanup: kill any running subprocess
     if let Some(mut proc) = app.claude_process.take() {
         proc.kill();
+    }
+    // Cleanup: abort any running agent task
+    if let Some(state) = &mut app.agent_state {
+        if let Some(handle) = state.current_task.take() {
+            handle.abort();
+        }
     }
 
     if keyboard_enhanced {
@@ -112,4 +193,123 @@ pub async fn run(mut app: App) -> Result<()> {
     let _ = execute!(std::io::stdout(), crossterm::terminal::SetTitle(""));
     ratatui::restore();
     Ok(())
+}
+
+/// Resolve import patterns: expand @ prefixes and make paths absolute
+fn resolve_patterns(base_dir: &Path, patterns: &[String], at_base: Option<&Path>) -> Vec<String> {
+    let expanded = resolver::expand_at_prefixes(patterns, at_base);
+    expanded
+        .iter()
+        .map(|p| {
+            if Path::new(p).is_absolute() {
+                p.clone()
+            } else {
+                base_dir.join(p).to_string_lossy().to_string()
+            }
+        })
+        .collect()
+}
+
+/// Load a .jgagent file and create an AgentState for TUI use
+async fn load_agent(path: &Path) -> Result<(AgentState, String)> {
+    let source = std::fs::read_to_string(path)
+        .with_context(|| format!("Cannot read agent file: {:?}", path))?;
+    let agent_resource = AgentParser::parse(&source)
+        .with_context(|| format!("Failed to parse agent: {:?}", path))?;
+
+    let name = agent_resource.name.clone();
+    let config = JuglansConfig::load()?;
+
+    let base_dir = path.parent().unwrap_or(Path::new("."));
+
+    // Compute @ path alias base directory
+    let at_base: Option<std::path::PathBuf> = config.paths.base.as_ref().map(|b| base_dir.join(b));
+
+    let mut prompt_registry = PromptRegistry::new();
+    let mut agent_registry = AgentRegistry::new();
+
+    // Register this agent
+    agent_registry.register(agent_resource.clone(), path.to_path_buf());
+
+    let mut workflow = None;
+
+    if let Some(wf_path_str) = &agent_resource.source {
+        let wf_path = base_dir.join(wf_path_str);
+        let wf_source = std::fs::read_to_string(&wf_path)
+            .with_context(|| format!("Linked workflow missing: {:?}", wf_path))?;
+
+        let mut wf_parsed = GraphParser::parse(&wf_source)?;
+        let wf_dir = wf_path.parent().unwrap_or(Path::new("."));
+
+        // Resolve lib imports
+        let wf_canonical = std::fs::canonicalize(&wf_path).unwrap_or_else(|_| wf_path.clone());
+        let mut import_stack = vec![wf_canonical.clone()];
+        resolver::resolve_lib_imports(
+            &mut wf_parsed,
+            wf_dir,
+            &mut import_stack,
+            at_base.as_deref(),
+        )?;
+
+        // Resolve flow imports
+        import_stack = vec![wf_canonical];
+        resolver::resolve_flow_imports(
+            &mut wf_parsed,
+            wf_dir,
+            &mut import_stack,
+            at_base.as_deref(),
+        )?;
+
+        // Load prompt/agent/tool patterns
+        let p_paths = resolve_patterns(wf_dir, &wf_parsed.prompt_patterns, at_base.as_deref());
+        let a_paths = resolve_patterns(wf_dir, &wf_parsed.agent_patterns, at_base.as_deref());
+
+        prompt_registry.load_from_paths(&p_paths)?;
+        agent_registry.load_from_paths(&a_paths)?;
+
+        // Update tool patterns
+        wf_parsed.tool_patterns =
+            resolve_patterns(wf_dir, &wf_parsed.tool_patterns, at_base.as_deref());
+
+        workflow = Some(Arc::new(wf_parsed));
+    }
+
+    // Build executor (inlined from main::build_executor)
+    let runtime: Arc<dyn JuglansRuntime> = Arc::new(Jug0Client::new(&config));
+    let mut executor = WorkflowExecutor::new_with_debug(
+        Arc::new(prompt_registry),
+        Arc::new(agent_registry),
+        runtime,
+        config.debug.clone(),
+    )
+    .await;
+
+    executor.load_mcp_tools(&config).await;
+    executor.apply_limits(&config.limits);
+
+    if let Some(wf) = &workflow {
+        executor.load_tools(wf).await;
+        if let Err(e) = executor.init_python_runtime(wf, config.limits.python_workers) {
+            tracing::warn!("Failed to initialize Python runtime: {}", e);
+        }
+    }
+
+    let shared = Arc::new(executor);
+    shared.get_registry().set_executor(Arc::downgrade(&shared));
+
+    let (tx, rx) = mpsc::unbounded_channel();
+    let context = WorkflowContext::with_sender(tx.clone());
+
+    Ok((
+        AgentState {
+            executor: shared,
+            context,
+            agent_resource,
+            workflow,
+            event_rx: Some(rx),
+            event_tx: tx,
+            current_task: None,
+        },
+        name,
+    ))
 }

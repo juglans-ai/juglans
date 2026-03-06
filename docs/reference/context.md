@@ -1,301 +1,337 @@
 # Context Variable Reference
 
-During workflow execution, a context object is maintained for storing and passing data.
+The workflow context is a shared data store maintained throughout execution. All variables are accessed via dollar-sign prefix and dot-notation paths.
+
+---
 
 ## Variable Types
 
-| Prefix | Description | Writable |
-|------|------|------|
-| `$input` | Workflow input | No |
-| `$output` | Current node output | No |
-| `$ctx` | Custom context | Yes |
-| `$reply` | AI reply metadata | No |
-| `$alias.node.field` | Subworkflow node output (produced by `flows:` imports) | No |
+| Prefix | Source | Writable | Scope | Description |
+|--------|--------|----------|-------|-------------|
+| `$input` | CLI `--input` / API body / web server injection | No | Entire workflow | Workflow input data |
+| `$output` | Previous node's return value | No | Overwritten after each node | Current node output |
+| `$ctx` | `set_context()` tool | Yes | Entire workflow | User-defined variable storage |
+| `$reply` | AI runtime / `chat()` / `reply()` | Partially | Entire workflow | AI reply metadata |
+| `$error` | Executor on node failure | No | Set on error, persists | Error information |
+| `$config` | `juglans.toml` | No | Entire workflow | Configuration from config file |
+| `$response` | `response()` tool | Yes | HTTP workflows only | HTTP response control |
 
-## $input - Input Variables
+---
 
-Data passed in when the workflow starts.
+## $input -- Workflow Input
+
+Data passed when the workflow starts. Read-only throughout execution.
 
 ### Sources
 
+**CLI:**
 ```bash
-# CLI
 juglans workflow.jg --input '{"query": "hello", "count": 5}'
+juglans workflow.jg --input-file data.json
+```
 
-# API
+**API (juglans web):**
+```
 POST /api/workflows/my-flow/execute
 {"query": "hello", "count": 5}
 ```
 
-### Access
+**HTTP handler (serve()):** The web server pre-injects `$input.method`, `$input.path`, `$input.query`, `$input.body`, `$input.headers`, and `$input.route`.
+
+### Path Access
 
 ```text
 $input              # Entire input object
-$input.query        # String: "hello"
-$input.count        # Number: 5
-$input.nested.field # Nested access
+$input.query        # Top-level field
+$input.user.name    # Nested object field
+$input.items.0      # Array element by index
 ```
 
-### Examples
+### Example
 
 ```juglans
-[process]: chat(
-  agent="assistant",
-  message=$input.query
-)
-
-[loop]: foreach($item in $input.items) {
-  [handle]: chat(message=$item.content)
-}
+[greet]: print(message="Hello, " + $input.name)
 ```
 
 ---
 
-## $output - Node Output
+## $output -- Node Output
 
-The execution result of the most recent node.
+The return value of the most recently executed node. Overwritten after each node completes.
 
-### Characteristics
+### Output Types by Tool
 
-- Updated after each node executes
-- Only valid within the current execution chain
-- Type depends on the node's return value
-
-### Output from Different Tools
-
-| Tool | Output Type |
-|------|----------|
-| `chat()` | string or object (format="json") |
+| Tool | `$output` Type |
+|------|---------------|
+| `chat()` | string (or object if `format="json"`) |
 | `p()` | string |
-| `notify()` | null |
+| `fetch()` | `{status, ok, data}` |
+| `fetch_url()` | `{status, ok, method, url, content}` |
+| `bash()` | `{stdout, stderr, exit_code, ok}` |
+| `read_file()` | `{content, total_lines, lines_returned, offset}` |
+| `write_file()` | `{status, file_path, lines_written, bytes_written}` |
+| `glob()` | `{matches, count, pattern}` |
+| `grep()` | `{matches, total_matches, files_searched, truncated}` |
 | `set_context()` | null |
-| `fetch_url()` | string or object |
-| `timer()` | null |
+| `notify()` | `{status, content}` |
+| `print()` | string (the printed message) |
+| `reply()` | `{content, status}` |
+| `return()` | the evaluated value |
+| `timer()` | `{status, duration_ms}` |
 
-### Examples
+### Path Access
+
+```text
+$output             # Entire output value
+$output.status      # Field access (when output is object)
+$output.data.items  # Nested field access
+$output.items.0     # Array element by index
+```
+
+### Example
 
 ```juglans
-# String output
 [ask]: chat(agent="assistant", message="Hello")
-[log]: notify(status="Response: " + $output)
+[log]: print(message="Response: " + $output)
 
-# JSON output
-[classify]: chat(agent="classifier", format="json")
-[route]: notify(status="Category: " + $output.category)
+[ask] -> [log]
+```
 
-# Chained usage
-[render]: p(slug="template", data=$input)
-[process]: chat(agent="processor", message=$output)
-[save]: set_context(result=$output)
+```juglans
+[api]: fetch(url="https://api.example.com/data")
+[check]: print(message="Status: " + str($output.status))
+
+[api] -> [check]
 ```
 
 ---
 
-## $ctx - Custom Context
+## $ctx -- Custom Context
 
-User-defined variable storage, set via `set_context()`.
+User-defined variable storage. Set via `set_context()`. Persists for the entire workflow execution.
 
 ### Setting Variables
 
 ```juglans
-# Simple values
-[init]: set_context(count=0, status="ready")
-
-# Objects
-[setup]: set_context(config={"timeout": 30, "retries": 3})
-
-# Arrays
-[prepare]: set_context(results=[], history=[])
-
-# From output
-[update]: set_context(name=$output.name, score=$output.score)
+[init]: set_context(count=0, status="ready", items=[])
 ```
 
-### Reading Variables
+```juglans
+[update]: set_context(count=$ctx.count + 1)
+```
+
+```juglans
+[collect]: set_context(results=append($ctx.results, $output))
+```
+
+### Path Access
 
 ```text
 $ctx.count           # Number
 $ctx.status          # String
-$ctx.config.timeout  # Nested access
+$ctx.config.timeout  # Nested object field
 $ctx.results         # Array
-$ctx.user.name       # Nested object
+$ctx.results.0       # Array element by index
+$ctx.user.name       # Deeply nested field
 ```
 
-### Updating Variables
+### Lifecycle
+
+`$ctx` variables persist from the moment they are set until the workflow terminates. Subsequent calls to `set_context()` with the same key overwrite the previous value.
 
 ```juglans
-# Increment
-[inc]: set_context(count=$ctx.count + 1)
+[a]: set_context(total=0)
+[b]: set_context(total=$ctx.total + 10)
+[c]: set_context(total=$ctx.total + 20)
+[d]: print(message="Total: " + str($ctx.total))
 
-# Append to array
-[add]: set_context(results=append($ctx.results, $output))
+[a] -> [b] -> [c] -> [d]
+```
 
-# Conditional update
-[update]: set_context(
-  status=if($ctx.count > 10, "complete", "running")
+The final output is `Total: 30`.
+
+---
+
+## $reply -- AI Reply Metadata
+
+Metadata from AI interactions. Updated by `chat()` and `reply()`.
+
+### Available Fields
+
+| Field | Type | Source | Description |
+|-------|------|--------|-------------|
+| `$reply.output` | string | `chat()`, `reply()` | Accumulated AI response text |
+| `$reply.chat_id` | string | `chat()` | Conversation session ID |
+| `$reply.status` | string | `notify()` | Latest status message |
+| `$reply.user_message_id` | integer | Web server | ID of the user message that triggered execution |
+
+### Example
+
+```juglans
+[ask]: chat(agent="assistant", message=$input.question)
+[followup]: chat(
+  agent="assistant",
+  chat_id=$reply.chat_id,
+  message="Can you elaborate?"
 )
-```
 
-### Scope
-
-`$ctx` persists throughout the entire workflow execution:
-
-```juglans
-[init]: set_context(total=0)
-[step1]: set_context(total=$ctx.total + 10)  # total=10
-[step2]: set_context(total=$ctx.total + 20)  # total=30
-[final]: notify(status="Total: " + $ctx.total)  # "Total: 30"
+[ask] -> [followup]
 ```
 
 ---
 
-## $reply - Reply Metadata
+## $error -- Error Information
 
-Metadata information from AI replies.
+Set automatically by the executor when a node fails. Contains the error details.
 
-### Available Fields
+### Structure
 
-| Field | Type | Description |
-|------|------|------|
-| `$reply.content` | string | Reply content |
-| `$reply.tokens` | number | Number of tokens used |
-| `$reply.model` | string | Model used |
-| `$reply.finish_reason` | string | Finish reason |
+```json
+{"node": "failed_node_id", "message": "Error description"}
+```
 
-### Examples
+Per-node error is also available as `$<node_id>.error`.
+
+### Usage in Error Edges
 
 ```juglans
-[ask]: chat(agent="assistant", message=$input.query)
-[log]: notify(status="Used " + $reply.tokens + " tokens")
-[save]: set_context(
-  last_response=$reply.content,
-  token_count=$reply.tokens
-)
+[api]: fetch(url="https://api.example.com/data")
+[ok]: print(message="Success")
+[fail]: print(message="Error: " + $error.message)
+
+[api] -> [ok]
+[api] on error -> [fail]
 ```
+
+---
+
+## $config -- Configuration
+
+The parsed `juglans.toml` configuration, injected at workflow start. Read-only.
+
+### Example
+
+```juglans
+[info]: print(message="Server port: " + str($config.server.port))
+```
+
+---
+
+## $response -- HTTP Response
+
+Used exclusively in `serve()` workflows. Written by the `response()` tool.
+
+### Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `$response.status` | integer | HTTP status code |
+| `$response.body` | any | Response body |
+| `$response.headers` | object | Custom response headers |
+| `$response.file` | string | File path to serve |
 
 ---
 
 ## Namespaced Variables (Flow Imports)
 
-When using `flows:` to import subworkflows, variable references to internal subworkflow nodes are automatically prefixed with the namespace.
+When using `flows:` to import subworkflows, internal node references are automatically prefixed with the namespace.
 
 ### Transformation Rules
 
-Only variables whose first segment matches a subworkflow internal node ID get prefixed. Global variables (`$ctx`, `$input`, `$output`) are not affected:
+Only variables whose first segment matches a subworkflow internal node ID get prefixed. Global variables (`$ctx`, `$input`, `$output`, `$reply`) are unchanged:
 
 ```text
-# Assume the auth subworkflow has two internal nodes: verify and extract
+# Assume flows: { auth: "auth.jg" }
+# auth.jg has internal nodes: verify, extract
 
-# Syntax inside subworkflow           →  Actual variable after merging
-$verify.output              →  $auth.verify.output
-$extract.output.intent      →  $auth.extract.output.intent
-$ctx.some_var               →  $ctx.some_var          # Unchanged
-$input.message              →  $input.message          # Unchanged
-$output                     →  $output                 # Unchanged
+# Inside subworkflow          After merge
+$verify.output         ->     $auth.verify.output
+$extract.output.name   ->     $auth.extract.output.name
+$ctx.token             ->     $ctx.token              # Unchanged
+$input.message         ->     $input.message           # Unchanged
 ```
-
-### Usage in the Parent Workflow
-
-```juglans
-# After flow import merging, subworkflow node outputs are accessed via namespace
-[next]: chat(message=$ctx.auth_result)
-
-# Conditions can use any context variable
-[check]: set_context(intent=$output.intent)
-[trade]: print(msg="Trading")
-[done]: print(msg="Done")
-
-[check] if $ctx.intent == "trade" -> [trade]
-[check] -> [done]
-```
-
-See [Workflow Composition Guide](../guide/workflow-composition.md) for details.
 
 ---
 
 ## Loop Context
 
-Available in `foreach` and `while` loops:
+Available inside `foreach` and `while` blocks:
 
 | Variable | Type | Description |
-|------|------|------|
-| `loop.index` | number | Current index (0-based) |
-| `loop.first` | boolean | Whether this is the first iteration |
-| `loop.last` | boolean | Whether this is the last iteration |
+|----------|------|-------------|
+| `loop.index` | number | Current iteration index (0-based) |
+| `loop.first` | boolean | True on first iteration |
+| `loop.last` | boolean | True on last iteration |
 
-### Examples
+### Example
 
 ```juglans
 [init]: set_context(results=[])
 
 [process]: foreach($item in $input.items) {
-  [log]: notify(
-    status="Processing " + (loop.index + 1) + "/" + len($input.items)
-  )
-
+  [log]: notify(status="Processing " + str(loop.index + 1) + "/" + str(len($input.items)))
   [handle]: chat(agent="processor", message=$item)
   [collect]: set_context(results=append($ctx.results, $output))
 
   [log] -> [handle] -> [collect]
 }
 
-[done]: notify(status="All items processed! Count: " + len($ctx.results))
+[done]: print(message="Processed " + str(len($ctx.results)) + " items")
 
 [init] -> [process] -> [done]
 ```
 
 ---
 
-## Expression Syntax
+## Path Access Syntax
 
-### Arithmetic Operations
+All variable types use the same dot-notation path syntax:
 
-```juglans
-[add]: set_context(result=$ctx.a + $ctx.b)       # Addition
-[sub]: set_context(result=$ctx.a - $ctx.b)       # Subtraction
-[mul]: set_context(result=$ctx.a * $ctx.b)       # Multiplication
-[div]: set_context(result=$ctx.a / $ctx.b)       # Division
-[mod]: set_context(result=$ctx.a % $ctx.b)       # Modulo
+```text
+$prefix                    # Entire value
+$prefix.field              # Object field
+$prefix.nested.field       # Nested object field
+$prefix.array.0            # Array element (0-based index)
+$prefix.array.0.field      # Field of array element
 ```
 
-### Comparison Operations
+### Behavior in Different Positions
+
+**Node parameters** -- Variables are resolved before passing to the tool:
 
 ```juglans
-[eq]: set_context(result=$ctx.a == $ctx.b)       # Equal to
-[ne]: set_context(result=$ctx.a != $ctx.b)       # Not equal to
-[gt]: set_context(result=$ctx.a > $ctx.b)        # Greater than
-[lt]: set_context(result=$ctx.a < $ctx.b)        # Less than
-[ge]: set_context(result=$ctx.a >= $ctx.b)       # Greater than or equal to
-[le]: set_context(result=$ctx.a <= $ctx.b)       # Less than or equal to
+[step]: chat(agent=$input.agent, message=$ctx.prompt)
 ```
 
-### Logical Operations
+**Conditional edges** -- Variables are resolved and compared:
 
 ```juglans
-[and]: set_context(result=$ctx.a && $ctx.b)      # AND
-[or]: set_context(result=$ctx.a || $ctx.b)       # OR
-[not]: set_context(result=!$ctx.a)               # NOT
+[check]: set_context(status="done")
+[next]: print(message="Moving on")
+[retry]: print(message="Retrying")
+
+[check] if $ctx.status == "done" -> [next]
+[check] if $ctx.status == "error" -> [retry]
 ```
 
-### String Operations
+**Switch routing** -- The switch subject is resolved to a string for branch matching:
 
 ```juglans
-[greet]: notify(status="Hello, " + $input.name)
-[info]: notify(status=$input.text + " (length: " + len($input.text) + ")")
+[classify]: chat(agent="classifier", message=$input.text, format="json")
+[handle_a]: print(message="Category A")
+[handle_b]: print(message="Category B")
+[handle_other]: print(message="Unknown")
+
+[classify] -> switch $output.category {
+  "a": [handle_a]
+  "b": [handle_b]
+  default: [handle_other]
+}
 ```
-
-### Built-in Functions
-
-| Function | Description | Example |
-|------|------|------|
-| `len(x)` | Length | `len($ctx.items)` |
-| `json(x)` | Convert to JSON | `json($ctx.data)` |
-| `append(arr, item)` | Append | `append($ctx.list, $output)` |
-| `if(cond, a, b)` | Conditional | `if($ctx.ok, "yes", "no")` |
 
 ---
 
-## Complete Example
+## Comprehensive Example
 
 ```juglans
 name: "Context Demo"
@@ -304,7 +340,6 @@ version: "0.1.0"
 entry: [init]
 exit: [summary]
 
-# Initialize context
 [init]: set_context(
   processed=0,
   successes=0,
@@ -312,10 +347,9 @@ exit: [summary]
   results=[]
 )
 
-# Process input items
 [process]: foreach($item in $input.items) {
   [log_start]: notify(
-    status="[" + (loop.index + 1) + "/" + len($input.items) + "] Processing: " + $item.name
+    status="[" + str(loop.index + 1) + "/" + str(len($input.items)) + "] Processing: " + $item.name
   )
 
   [analyze]: chat(
@@ -324,25 +358,20 @@ exit: [summary]
     format="json"
   )
 
-  # Update counts based on results
   [update]: set_context(
     processed=$ctx.processed + 1,
     successes=$ctx.successes + if($output.success, 1, 0),
-    failures=$ctx.failures + if(!$output.success, 1, 0),
-    results=append($ctx.results, {
-      "name": $item.name,
-      "result": $output
-    })
+    failures=$ctx.failures + if(not $output.success, 1, 0),
+    results=append($ctx.results, {"name": $item.name, "result": $output})
   )
 
   [log_start] -> [analyze] -> [update]
 }
 
-# Summary
-[summary]: notify(
-  status="Complete! Processed: " + $ctx.processed +
-         ", Successes: " + $ctx.successes +
-         ", Failures: " + $ctx.failures
+[summary]: print(
+  message="Complete! Processed: " + str($ctx.processed) +
+         ", Successes: " + str($ctx.successes) +
+         ", Failures: " + str($ctx.failures)
 )
 
 [init] -> [process] -> [summary]
@@ -352,23 +381,25 @@ exit: [summary]
 
 ## Debugging Tips
 
-### Print Context
+**Print entire context:**
 
 ```juglans
-[debug]: notify(status="Context: " + json($ctx))
+[debug]: print(message="Ctx: " + json($ctx))
 ```
 
-### Check Variable Type
+**Check variable type:**
 
 ```juglans
-[check]: notify(status="Type: " + type($ctx.value))
+[check]: print(message="Type: " + type($ctx.value))
 ```
 
-### Conditional Breakpoint
+**Conditional breakpoint:**
 
 ```juglans
-[breakpoint]: notify(status="count=" + $ctx.count)
-[error_handler]: notify(status="Count exceeded 100!")
+[step]: set_context(count=50)
+[ok]: print(message="Count is fine")
+[warn]: print(message="Count exceeded limit!")
 
-[breakpoint] if $ctx.count > 100 -> [error_handler]
+[step] if $ctx.count > 100 -> [warn]
+[step] -> [ok]
 ```

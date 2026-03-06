@@ -34,7 +34,7 @@ impl Tool for Timer {
     async fn execute(
         &self,
         params: &HashMap<String, String>,
-        _context: &WorkflowContext,
+        context: &WorkflowContext,
     ) -> Result<Option<Value>> {
         // Support both 'ms' (preferred) and 'seconds' (backward compatible)
         let duration_ms: u64 = if let Some(ms) = params.get("ms") {
@@ -45,7 +45,9 @@ impl Tool for Timer {
             1000 // default 1 second
         };
 
-        println!("⏳ Sleeping for {} ms...", duration_ms);
+        if !context.has_event_sender() {
+            println!("⏳ Sleeping for {} ms...", duration_ms);
+        }
         tokio::time::sleep(tokio::time::Duration::from_millis(duration_ms)).await;
         Ok(Some(
             json!({ "status": "finished", "duration_ms": duration_ms }),
@@ -102,12 +104,16 @@ impl Tool for Notify {
         // 如果传入 status，则更新 ctx.reply.status，实现透明思维流
         if let Some(status) = params.get("status") {
             context.set("reply.status".to_string(), json!(status))?;
-            println!("💡 [Status] {}", status);
+            if !context.has_event_sender() {
+                println!("💡 [Status] {}", status);
+            }
         }
 
         let msg = params.get("message").map(|s| s.as_str()).unwrap_or("");
         if !msg.is_empty() {
-            println!("🔔 [Notification] {}", msg);
+            if !context.has_event_sender() {
+                println!("🔔 [Notification] {}", msg);
+            }
         }
 
         Ok(Some(json!({ "status": "sent", "content": msg })))
@@ -125,14 +131,16 @@ impl Tool for Print {
     async fn execute(
         &self,
         params: &HashMap<String, String>,
-        _context: &WorkflowContext,
+        context: &WorkflowContext,
     ) -> Result<Option<Value>> {
         let msg = params
             .get("message")
             .or_else(|| params.get("value"))
             .map(|s| s.as_str())
             .unwrap_or("");
-        println!("{}", msg);
+        if !context.has_event_sender() {
+            println!("{}", msg);
+        }
         Ok(Some(json!(msg)))
     }
 }

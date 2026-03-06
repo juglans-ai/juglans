@@ -1,589 +1,334 @@
 # Builtin Tools Reference
 
-Juglans provides multiple builtin tools for various operations within workflows.
+Complete reference for all built-in tools available in Juglans workflows.
+
+---
 
 ## AI Tools
 
 ### chat()
 
-Conduct a conversation with an AI Agent.
+Conduct a conversation with an AI agent.
 
-**Parameters:**
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `agent` | string | No | `"default"` | Agent slug |
+| `message` | string | Yes | - | Message to send |
+| `format` | string | No | `"text"` | Output format: `"text"` or `"json"` |
+| `state` | string | No | `"context_visible"` | Message state control (see below) |
+| `chat_id` | string | No | - | Conversation ID for reusing session context |
+| `tools` | array/string | No | - | Tool definitions or slug references |
+| `system_prompt` | string | No | - | Override agent's system prompt |
+| `model` | string | No | - | Override agent's model |
+| `temperature` | number | No | - | Override agent's temperature |
+| `history` | string | No | - | History retrieval mode |
+| `on_tool` | string | No | - | Route unresolved tool calls to a workflow node: `on_tool=[node]` |
+| `on_tool_call` | string | No | - | Route unresolved tool calls to an external workflow file |
+| `stream_tool_events` | boolean | No | `false` | Emit SSE events for tool call start/complete |
 
-| Parameter | Type | Required | Description |
-|------|------|------|------|
-| `agent` | string | Yes | Agent slug |
-| `message` | string | Yes | Message to send |
-| `format` | string | No | Output format ("text", "json") |
-| `state` | string | No | Message state control (see table below) |
-| `stateless` | string | No | Deprecated, use `state="silent"` instead |
-| `chat_id` | string | No | Conversation ID for reusing session context |
-| `tools` | array | No | Custom tool definitions (overrides Agent default configuration) |
+**`state` values:**
 
-**Examples:**
+| state | Writes to Context | SSE Output | Description |
+|-------|-------------------|------------|-------------|
+| `context_visible` | Yes | Yes | Default. Normal message |
+| `context_hidden` | Yes | No | AI-visible in subsequent turns, not streamed to user |
+| `display_only` | No | Yes | Streamed to user, not visible to AI |
+| `silent` | No | No | Neither stored nor streamed |
+
+Composite syntax: `state="input_state:output_state"` controls input and output independently.
+
+**`tools` resolution:**
+
+- Inline JSON array: `tools=[{...}]`
+- Single slug reference: `tools="@devtools"`
+- Multiple slugs: `tools=["devtools", "web-tools"]`
+- If omitted, falls back to the agent's configured `tools` field
+
+**Example:**
 
 ```juglans
-# Basic conversation
-[chat]: chat(agent="assistant", message="Hello!")
+[ask]: chat(agent="assistant", message="Hello!")
+```
 
-# Using variables
-[chat]: chat(agent="assistant", message=$input.question)
-
-# JSON output
+```juglans
 [classify]: chat(
   agent="classifier",
   message=$input.text,
   format="json"
 )
+```
 
-# Stateless call (deprecated, use state instead)
-[analyze]: chat(
-  agent="analyst",
-  message=$input.data,
-  stateless="true"
-)
-
-# Using the state parameter
+```juglans
 [hidden]: chat(
   agent="analyst",
   message=$input.data,
   state="context_hidden"
 )
+```
 
-# Reusing conversation context
+```juglans
 [reply]: chat(
   agent="assistant",
   chat_id=$reply.chat_id,
   message=$input.followup
 )
-
-# With tools
-[solver]: chat(
-  agent="assistant",
-  message=$input.question,
-  tools=[
-    {
-      "type": "function",
-      "function": {
-        "name": "search_web",
-        "description": "Search internet content",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "query": {"type": "string", "description": "Search keywords"}
-          },
-          "required": ["query"]
-        }
-      }
-    }
-  ]
-)
 ```
-
-**Output:**
-
-Returns the AI response text. If `format="json"`, returns a parsed JSON object.
-
-**`state` Parameter Description:**
-
-Controls the visibility and persistence of `chat()` output:
-
-| state | Writes to Context | SSE Output | Description |
-|-------|-----------|---------|------|
-| `context_visible` | Yes | Yes | Default value, normal message |
-| `context_hidden` | Yes | No | Visible to AI in subsequent turns, not pushed to user |
-| `display_only` | No | Yes | Pushed to user, not visible to AI in subsequent turns |
-| `silent` | No | No | Neither |
-
-- **Writes to Context**: Whether the result is stored in `$reply.output`, affecting whether subsequent nodes can read it
-- **SSE Output**: Whether generated tokens are streamed to the frontend via SSE
-
-```juglans
-# Background analysis, not displayed to user, but results available to subsequent nodes
-[bg_analyze]: chat(
-  agent="analyst",
-  message=$input.data,
-  state="context_hidden"
-)
-
-# Displayed to user, but does not affect subsequent AI context
-[greeting]: chat(
-  agent="greeter",
-  message="Welcome!",
-  state="display_only"
-)
-
-# Completely silent
-[silent_check]: chat(
-  agent="validator",
-  message=$input.data,
-  state="silent"
-)
-```
-
-**Tool Configuration Notes:**
-
-- If `tools` parameter is specified in the workflow, the workflow configuration is used
-- Otherwise, if the Agent configuration has a `tools` field, the Agent's default tools are used
-- Tool configuration follows the OpenAI Function Calling format
 
 ---
 
 ### p()
 
-Render a Prompt template.
+Render a Prompt template (`.jgprompt` file). Template variables use `{{ name }}` syntax.
 
-**Parameters:**
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `slug` | string | Yes | - | Prompt slug (or `file` alias) |
+| `...` | any | No | - | Template variable key-value pairs |
 
-| Parameter | Type | Required | Description |
-|------|------|------|------|
-| `slug` | string | Yes | Prompt slug |
-| `...` | any | No | Template variables |
-
-**Examples:**
+**Example:**
 
 ```juglans
-# Basic rendering
-[prompt]: p(slug="greeting")
-
-# Passing variables
 [prompt]: p(slug="greeting", name="Alice", language="Chinese")
-
-# Using input variables
-[prompt]: p(
-  slug="analysis",
-  topic=$input.topic,
-  data=$ctx.collected_data
-)
 ```
-
-**Output:**
-
-Returns the rendered Prompt text.
 
 ---
 
 ### memory_search()
 
-Search for relevant content in memory storage (RAG).
+Search for relevant content in memory storage (semantic/RAG search via Jug0).
 
-**Parameters:**
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `query` | string | Yes | - | Search query text |
+| `limit` | number | No | `5` | Maximum number of results |
 
-| Parameter | Type | Required | Description |
-|------|------|------|------|
-| `query` | string | Yes | Search query |
-| `limit` | number | No | Result count limit |
-| `threshold` | number | No | Similarity threshold |
-
-**Examples:**
+**Example:**
 
 ```juglans
-[search]: memory_search(
-  query=$input.question,
-  limit=5,
-  threshold=0.7
-)
+[search]: memory_search(query=$input.question, limit=5)
 ```
 
-**Output:**
+---
 
-Returns an array of matching memory entries.
+### history()
+
+Fetch chat history for a conversation session.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `chat_id` | string | Yes | - | Conversation session ID |
+| `include_all` | boolean | No | `false` | Include hidden/silent messages |
+
+**Example:**
+
+```juglans
+[msgs]: history(chat_id=$reply.chat_id, include_all="true")
+```
 
 ---
 
 ## System Tools
 
+### print()
+
+Print a message to stdout. No prefix, no context modification. Suitable for debugging and simple output.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `message` | string | No | `""` | Text to print (also accepts `value` alias) |
+
+**Example:**
+
+```juglans
+[hello]: print(message="Hello, world!")
+```
+
+---
+
 ### notify()
 
-Send a status notification.
+Send a status notification. Updates `$reply.status` and displays in console/UI.
 
-**Parameters:**
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `status` | string | No | - | Status text (updates `$reply.status`) |
+| `message` | string | No | `""` | Notification message |
 
-| Parameter | Type | Required | Description |
-|------|------|------|------|
-| `status` | string | Yes | Notification message |
-
-**Examples:**
+**Example:**
 
 ```juglans
 [start]: notify(status="Starting workflow...")
-[progress]: notify(status="Processing item " + $ctx.index)
-[done]: notify(status="Completed!")
 ```
-
-**Output:**
-
-No return value. The message is displayed in the console or UI.
 
 ---
 
 ### set_context()
 
-Set context variables.
+Set one or more context variables. Supports two modes.
 
-**Parameters:**
+**Multi-field mode** (recommended):
 
-Any key-value pairs, supports nested paths.
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `<key>` | any | Yes | - | Any key-value pairs to set on `$ctx` |
 
-**Examples:**
+**Legacy mode:**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `path` | string | Yes | - | Context key path |
+| `value` | any | Yes | - | Value to assign |
+
+**Example:**
 
 ```juglans
-# Simple assignment
-[init]: set_context(count=0)
-
-# Multiple variables
-[setup]: set_context(
-  status="running",
-  items=[],
-  config={"timeout": 30}
-)
-
-# Multiple variables at once
-[update]: set_context(name="Alice", score=100)
-
-# Using expressions
-[increment]: set_context(count=$ctx.count + 1)
-
-# Append to array
-[collect]: set_context(
-  results=append($ctx.results, $output)
-)
+[init]: set_context(count=0, status="ready")
 ```
 
-**Output:**
+```juglans
+[inc]: set_context(count=$ctx.count + 1)
+```
 
-No return value. Variables are accessible via `$ctx.*`.
+```juglans
+[add]: set_context(results=append($ctx.results, $output))
+```
 
 ---
 
 ### timer()
 
-Delay execution.
+Delay execution for a specified duration.
 
-**Parameters:**
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `ms` | number | No | `1000` | Delay in milliseconds |
+| `seconds` | number | No | - | Delay in seconds (backward compatible) |
 
-| Parameter | Type | Required | Description |
-|------|------|------|------|
-| `ms` | number | Yes | Delay in milliseconds |
-
-**Examples:**
-
-```juglans
-# Wait 1 second
-[wait]: timer(ms=1000)
-
-# Dynamic delay
-[delay]: timer(ms=$ctx.delay_time)
-```
-
-**Output:**
-
-No return value. Execution pauses for the specified duration.
-
----
-
-### sh()
-
-> **Deprecated** — `sh()` is now an alias for `bash()`, maintained for backward compatibility. Use `bash()` instead. See [Developer Tools > bash()](#bash).
-
-**Old syntax still works:**
+**Example:**
 
 ```juglans
-[files]: sh(cmd="ls -la")    # Equivalent to bash(command="ls -la")
+[wait]: timer(ms=2000)
 ```
 
 ---
 
-## Developer Tools
+### reply()
 
-A Claude Code-style set of code operation tools, registered under the `"devtools"` slug. Can be called directly in .jg files, or used automatically by LLMs via `tools: ["devtools"]` in .jgagent.
+Return a text message directly without calling an AI model. Supports state control and SSE streaming, identical to `chat()` state semantics.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `message` | string | No | `""` | Text to return |
+| `state` | string | No | `"context_visible"` | Message state (same as `chat()` state) |
+
+**Example:**
 
 ```juglans
-# Use devtools in a workflow node
-[run]: bash(command="echo hello")
+[welcome]: reply(message="Welcome to the system!")
 ```
 
-In `.jgagent` files, enable devtools with:
-
-```text
-slug: "code-agent"
-tools: ["devtools"]
-
-# Can also be combined with other tool sets
-tools: ["devtools", "web-tools"]
+```juglans
+[silent_reply]: reply(message="Internal note", state="silent")
 ```
 
 ---
 
-### read_file()
+### return()
 
-Read file contents, returned with line numbers.
+Explicitly return a value as `$output`. Designed for use inside function definitions.
 
-**Parameters:**
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `value` | any | No | `null` | Expression to evaluate and return |
 
-| Parameter | Type | Required | Description |
-|------|------|------|------|
-| `file_path` | string | Yes | File path (absolute or relative) |
-| `offset` | integer | No | Starting line number, 1-based (default 1) |
-| `limit` | integer | No | Maximum number of lines to return (default 2000) |
-
-**Examples:**
+**Example:**
 
 ```juglans
-# Read entire file
-[read]: read_file(file_path="./src/main.rs")
+[add(a, b)]: {
+  result = return(value=$ctx.a + $ctx.b)
+}
 
-# Read a specific range
-[read]: read_file(file_path="./src/main.rs", offset=50, limit=100)
+[main]: add(a=1, b=2)
 ```
+
+---
+
+## HTTP Tools
+
+### fetch()
+
+Send an HTTP request. Recommended over `fetch_url()`.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `url` | string | Yes | - | Target URL |
+| `method` | string | No | `"GET"` | HTTP method: GET, POST, PUT, DELETE, PATCH |
+| `body` | object/string | No | - | Request body (auto-serialized as JSON) |
+| `headers` | object | No | - | Custom request headers |
 
 **Output:**
 
 ```json
-{
-  "content": "     1\tuse std::io;\n     2\tfn main() {...",
-  "total_lines": 150,
-  "lines_returned": 100,
-  "offset": 50
-}
+{"status": 200, "ok": true, "data": {...}}
 ```
 
-| Field | Type | Description |
-|------|------|------|
-| `content` | string | File content with line numbers (cat -n format, max 2000 characters per line) |
-| `total_lines` | number | Total number of lines in the file |
-| `lines_returned` | number | Actual number of lines returned |
-| `offset` | number | Starting line number |
-
----
-
-### write_file()
-
-Write to a file (overwrite), automatically creates parent directories.
-
-**Parameters:**
-
-| Parameter | Type | Required | Description |
-|------|------|------|------|
-| `file_path` | string | Yes | File path |
-| `content` | string | Yes | File content |
-
-**Examples:**
+**Example:**
 
 ```juglans
-[write]: write_file(file_path="./output/result.json", content=$ctx.result)
+[get]: fetch(url="https://api.example.com/data")
 ```
-
-**Output:**
-
-```json
-{
-  "status": "ok",
-  "file_path": "./output/result.json",
-  "lines_written": 25,
-  "bytes_written": 1024
-}
-```
-
----
-
-### edit_file()
-
-Exact string replacement. `old_string` must be unique in the file, otherwise `replace_all=true` is required.
-
-**Parameters:**
-
-| Parameter | Type | Required | Description |
-|------|------|------|------|
-| `file_path` | string | Yes | File path |
-| `old_string` | string | Yes | Text to replace (must be unique) |
-| `new_string` | string | Yes | Replacement text |
-| `replace_all` | boolean | No | Replace all matches (default false) |
-
-**Examples:**
 
 ```juglans
-# Exact replacement
-[edit]: edit_file(
-  file_path="./src/config.rs",
-  old_string="version = \"1.0\"",
-  new_string="version = \"2.0\""
-)
-
-# Global replacement
-[rename]: edit_file(
-  file_path="./src/main.rs",
-  old_string="old_name",
-  new_string="new_name",
-  replace_all="true"
+[post]: fetch(
+  url="https://api.example.com/submit",
+  method="POST",
+  body=$input.data
 )
 ```
 
-**Output:**
-
-```json
-{
-  "status": "ok",
-  "file_path": "./src/config.rs",
-  "replacements": 1
-}
-```
-
-**Error cases:**
-- `old_string` not found -> error
-- `old_string` appears multiple times and `replace_all=false` -> error (requires more context to make the match unique)
-
 ---
 
-### glob()
+### fetch_url()
 
-File pattern matching, returns a list of matching paths.
+HTTP request tool (legacy). `fetch()` is recommended instead.
 
-**Parameters:**
-
-| Parameter | Type | Required | Description |
-|------|------|------|------|
-| `pattern` | string | Yes | Glob pattern (e.g., `**/*.rs`, `src/**/*.json`) |
-| `path` | string | No | Search directory (defaults to current directory) |
-
-**Examples:**
-
-```juglans
-[find]: glob(pattern="**/*.rs")
-[find_src]: glob(pattern="*.ts", path="./src")
-```
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `url` | string | Yes | - | Target URL |
+| `method` | string | No | `"GET"` | HTTP method |
+| `headers` | object | No | - | Request headers |
+| `body` | string | No | - | Request body |
 
 **Output:**
 
 ```json
-{
-  "matches": ["./src/main.rs", "./src/lib.rs"],
-  "count": 2,
-  "pattern": "./**/*.rs"
-}
+{"status": 200, "ok": true, "method": "GET", "url": "...", "content": {...}}
+```
+
+**Example:**
+
+```juglans
+[api]: fetch_url(url="https://api.example.com/data")
 ```
 
 ---
-
-### grep()
-
-Regex search of file contents. Recursively searches files in a directory and returns matching lines with context.
-
-**Parameters:**
-
-| Parameter | Type | Required | Description |
-|------|------|------|------|
-| `pattern` | string | Yes | Regular expression |
-| `path` | string | No | Search path (file or directory, defaults to current directory) |
-| `include` | string | No | File filter glob (e.g., `*.rs`, `*.{ts,tsx}`) |
-| `context_lines` | integer | No | Number of context lines before and after matches (default 0) |
-| `max_matches` | integer | No | Maximum number of matches (default 50) |
-
-**Examples:**
-
-```juglans
-# Search for TODOs
-[todos]: grep(pattern="TODO|FIXME", path="./src")
-
-# Search specific file types
-[search]: grep(pattern="fn main", include="*.rs", context_lines=2)
-```
-
-**Output:**
-
-```json
-{
-  "matches": [
-    {
-      "file": "./src/main.rs",
-      "line": 10,
-      "match": "fn main() {",
-      "context": "     9\tuse std::io;\n    10\tfn main() {\n    11\t    println!(\"hello\");"
-    }
-  ],
-  "total_matches": 1,
-  "files_searched": 15,
-  "truncated": false
-}
-```
-
----
-
-### bash()
-
-Execute a shell command with timeout control and output truncation. Replaces the old `sh()` tool.
-
-**Parameters:**
-
-| Parameter | Type | Required | Description |
-|------|------|------|------|
-| `command` | string | Yes | Command to execute (also accepts `cmd` parameter for backward compatibility) |
-| `timeout` | integer | No | Timeout in milliseconds (default 120000, max 600000) |
-| `description` | string | No | Command description (for logging) |
-
-**Examples:**
-
-```juglans
-# Execute a command
-[build]: bash(command="cargo build --release")
-
-# With timeout
-[test]: bash(command="cargo test", timeout=300000)
-
-# Backward-compatible old syntax
-[files]: bash(cmd="ls -la")
-```
-
-**Output:**
-
-```json
-{
-  "stdout": "Command standard output...",
-  "stderr": "Error output (if any)...",
-  "exit_code": 0,
-  "ok": true
-}
-```
-
-| Field | Type | Description |
-|------|------|------|
-| `stdout` | string | Standard output (truncated beyond 30000 characters) |
-| `stderr` | string | Standard error output |
-| `exit_code` | number | Exit code (0 means success) |
-| `ok` | boolean | Whether the command executed successfully |
-
-**Security Note:**
-
-Avoid directly executing user-provided commands to prevent command injection attacks:
-
-```juglans
-# Dangerous: do not do this
-[bad]: bash(command=$input.user_command)
-
-# Safe: use fixed commands with parameter validation
-[safe]: bash(command="ls " + sanitize($input.directory))
-```
-
-> **Note**: `sh()` is an alias for `bash()`. `sh(cmd="ls")` is equivalent to `bash(command="ls")`.
-
----
-
-## HTTP Backend Tools
 
 ### serve()
 
-Marks a workflow node as the HTTP entry point. When `juglans web` starts, it scans all `.jg` files and registers the workflow containing a `serve()` node as the catch-all HTTP handler.
+Mark a workflow node as the HTTP entry point. When `juglans web` starts, it scans all `.jg` files and registers the workflow containing `serve()` as the catch-all HTTP handler. At runtime, `serve()` is a pass-through that reads pre-injected request data and computes `$input.route`.
 
-At runtime, `serve()` is a pass-through that reads pre-injected request data and computes `$input.route` for switch routing.
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| (none) | - | - | - | No parameters required |
 
-**Injected Variables** (set by web server before execution):
+**Injected variables** (set by web server before execution):
 
 | Variable | Type | Description |
 |----------|------|-------------|
 | `$input.method` | string | HTTP method (`GET`, `POST`, etc.) |
 | `$input.path` | string | Request path |
 | `$input.query` | object | Query parameters |
-| `$input.body` | any | Request body (JSON or string) |
+| `$input.body` | any | Request body |
 | `$input.headers` | object | HTTP headers |
 | `$input.route` | string | Auto-computed `"METHOD /path"` |
 
@@ -605,205 +350,464 @@ entry: [request]
 }
 ```
 
-**Output:**
-
-Returns a request summary: `{method, path, route, query, has_body}`.
-
-See [Web Server Guide](../integrations/web-server.md) for full documentation.
-
 ---
 
 ### response()
 
-Sets the HTTP response for a `serve()` workflow. Writes to `$response.*` which the web server reads after execution.
+Set the HTTP response for a `serve()` workflow. Writes to `$response.*` which the web server reads after execution.
 
-**Parameters:**
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `status` | integer | No | `200` | HTTP status code |
+| `body` | any | No | - | Response body (JSON) |
+| `headers` | object | No | - | Custom response headers |
+| `file` | string | No | - | File path to serve |
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `status` | int | No | HTTP status code (default: 200) |
-| `body` | any | No | Response body (JSON) |
-| `headers` | object | No | Custom response headers |
+If `response()` is never called, the web server returns status `200` with `$output` as body.
 
 **Example:**
 
 ```juglans
-# Simple response
 [ok]: response(status=200, body={"message": "Success"})
+```
 
-# Echo request data
-[echo]: response(status=200, body={"query": $input.query, "path": $input.path})
-
-# Error response
-[error]: response(status=500, body={"error": "Internal error"})
-
-# Custom headers
+```juglans
 [cors]: response(status=200, body=$output, headers={"X-Custom": "value"})
 ```
 
-**Default behavior:** If `response()` is never called, the web server returns status `200` with `$output` as body.
-
 ---
 
-## Network Tools
+## Developer Tools (Devtools)
 
-### fetch()
+A Claude Code-style set of code operation tools. Can be called directly in `.jg` files or used by LLMs via `tools: ["devtools"]` in `.jgagent`.
 
-HTTP request tool (recommended).
+### read_file()
 
-**Parameters:**
+Read file contents, returned with line numbers (cat -n format).
 
-| Parameter | Type | Required | Description |
-|------|------|------|------|
-| `url` | string | Yes | Target URL |
-| `method` | string | No | HTTP method (default "GET") |
-| `body` | object/string | No | Request body (automatically JSON-serialized) |
-| `headers` | object | No | Custom request headers |
-
-**Examples:**
-
-```juglans
-# GET request
-[get]: fetch(url="https://api.example.com/data")
-
-# POST request
-[post]: fetch(
-  url="https://api.example.com/submit",
-  method="POST",
-  body=$input.data
-)
-
-# With headers
-[auth_get]: fetch(
-  url="https://api.example.com/protected",
-  headers={"Authorization": "Bearer " + $ctx.token}
-)
-
-# PUT request
-[update]: fetch(
-  url="https://api.example.com/items/1",
-  method="PUT",
-  body={"name": "updated", "value": $input.value}
-)
-```
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `file_path` | string | Yes | - | Absolute or relative file path |
+| `offset` | integer | No | `1` | Starting line number (1-based) |
+| `limit` | integer | No | `2000` | Maximum lines to return |
 
 **Output:**
 
 ```json
-{
-  "status": 200,
-  "ok": true,
-  "data": { ... }
-}
+{"content": "     1\tline one\n     2\tline two", "total_lines": 150, "lines_returned": 100, "offset": 1}
 ```
 
-| Field | Type | Description |
-|------|------|------|
-| `status` | number | HTTP status code |
-| `ok` | boolean | True if status code is in the 200-299 range |
-| `data` | any | Response content (automatically parsed as JSON, otherwise returned as string) |
-
-**Error Handling:**
+**Example:**
 
 ```juglans
-[api]: fetch(url=$input.api_url)
-[process]: notify(status="Processing response...")
-[handle_error]: notify(status="API request failed")
+[read]: read_file(file_path="./src/main.rs")
+```
 
-[api] -> [process]
-[api] on error -> [handle_error]
+```juglans
+[read_range]: read_file(file_path="./src/main.rs", offset=50, limit=100)
 ```
 
 ---
 
-### fetch_url()
+### write_file()
 
-Fetch URL content (legacy compatible, `fetch()` is recommended).
+Write content to a file (overwrite). Automatically creates parent directories.
 
-**Parameters:**
-
-| Parameter | Type | Required | Description |
-|------|------|------|------|
-| `url` | string | Yes | Target URL |
-| `method` | string | No | HTTP method (default "GET") |
-| `headers` | object | No | Request headers |
-| `body` | string | No | Request body |
-
-**Examples:**
-
-```juglans
-# GET request
-[fetch]: fetch_url(url="https://api.example.com/data")
-
-# POST request
-[post]: fetch_url(
-  url="https://api.example.com/submit",
-  method="POST",
-  headers={"Content-Type": "application/json"},
-  body=json($input.data)
-)
-
-# With authentication
-[api]: fetch_url(
-  url="https://api.example.com/protected",
-  headers={"Authorization": "Bearer " + $ctx.token}
-)
-```
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `file_path` | string | Yes | - | File path |
+| `content` | string | Yes | - | Content to write |
 
 **Output:**
 
-Returns the response content. If it is JSON, it is automatically parsed into an object.
+```json
+{"status": "ok", "file_path": "...", "lines_written": 25, "bytes_written": 1024}
+```
+
+**Example:**
+
+```juglans
+[write]: write_file(file_path="./output/result.json", content=$ctx.result)
+```
+
+---
+
+### edit_file()
+
+Exact string replacement in a file. `old_string` must be unique unless `replace_all` is set.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `file_path` | string | Yes | - | File path |
+| `old_string` | string | Yes | - | Text to find (must be unique) |
+| `new_string` | string | Yes | - | Replacement text |
+| `replace_all` | boolean | No | `false` | Replace all occurrences |
+
+**Output:**
+
+```json
+{"status": "ok", "file_path": "...", "replacements": 1}
+```
+
+**Example:**
+
+```juglans
+[edit]: edit_file(
+  file_path="./src/config.rs",
+  old_string="version = \"1.0\"",
+  new_string="version = \"2.0\""
+)
+```
+
+---
+
+### bash()
+
+Execute a shell command with timeout control and output truncation.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `command` | string | Yes | - | Command to execute (also accepts `cmd` alias) |
+| `timeout` | integer | No | `120000` | Timeout in milliseconds (max 600000) |
+| `description` | string | No | - | Description for logging |
+
+**Output:**
+
+```json
+{"stdout": "...", "stderr": "...", "exit_code": 0, "ok": true}
+```
+
+`stdout` is truncated beyond 30000 characters.
+
+**Example:**
+
+```juglans
+[build]: bash(command="cargo build --release")
+```
+
+```juglans
+[test]: bash(command="cargo test", timeout=300000)
+```
+
+---
+
+### sh()
+
+Alias for `bash()`. Maintained for backward compatibility. `sh(cmd="ls")` is equivalent to `bash(command="ls")`.
+
+**Example:**
+
+```juglans
+[files]: sh(cmd="ls -la")
+```
+
+---
+
+### glob()
+
+File pattern matching. Returns a list of matching file paths.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `pattern` | string | Yes | - | Glob pattern (e.g., `**/*.rs`) |
+| `path` | string | No | `.` | Base directory to search in |
+
+**Output:**
+
+```json
+{"matches": ["./src/main.rs", "./src/lib.rs"], "count": 2, "pattern": "./**/*.rs"}
+```
+
+**Example:**
+
+```juglans
+[find]: glob(pattern="**/*.rs")
+```
+
+```juglans
+[find_src]: glob(pattern="*.ts", path="./src")
+```
+
+---
+
+### grep()
+
+Regex search of file contents. Recursively searches files and returns matching lines.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `pattern` | string | Yes | - | Regular expression pattern |
+| `path` | string | No | `.` | File or directory to search |
+| `include` | string | No | - | File filter glob (e.g., `*.rs`) |
+| `context_lines` | integer | No | `0` | Context lines before and after each match |
+| `max_matches` | integer | No | `50` | Maximum number of matches |
+
+**Output:**
+
+```json
+{"matches": [{"file": "./src/main.rs", "line": 10, "match": "fn main() {", "context": "..."}], "total_matches": 1, "files_searched": 15, "truncated": false}
+```
+
+**Example:**
+
+```juglans
+[todos]: grep(pattern="TODO|FIXME", path="./src")
+```
+
+```juglans
+[search]: grep(pattern="fn main", include="*.rs", context_lines=2)
+```
+
+---
+
+## Vector Tools
+
+Vector storage and search tools for building RAG pipelines. Backed by Jug0 vector API.
+
+### vector_create_space()
+
+Create a new vector space.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `space` | string | Yes | - | Space name |
+| `model` | string | No | - | Embedding model override |
+| `public` | boolean | No | `false` | Whether the space is publicly accessible |
+
+**Example:**
+
+```juglans
+[create]: vector_create_space(space="knowledge-base", public="true")
+```
+
+---
+
+### vector_upsert()
+
+Insert or update vector points in a space.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `space` | string | Yes | - | Space name |
+| `points` | array | Yes | - | Array of point objects (JSON) |
+| `model` | string | No | - | Embedding model override |
+
+**Example:**
+
+```juglans
+[store]: vector_upsert(
+  space="docs",
+  points=[{"id": "doc1", "content": "Hello world"}]
+)
+```
+
+---
+
+### vector_search()
+
+Search for similar vectors in a space.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `query` | string | Yes | - | Search query text |
+| `space` | string | No | `"default"` | Space name |
+| `limit` | number | No | `5` | Maximum number of results |
+| `model` | string | No | - | Embedding model override |
+
+**Example:**
+
+```juglans
+[results]: vector_search(query=$input.question, space="docs", limit=10)
+```
+
+---
+
+### vector_list_spaces()
+
+List all vector spaces. No parameters.
+
+**Example:**
+
+```juglans
+[spaces]: vector_list_spaces()
+```
+
+---
+
+### vector_delete_space()
+
+Delete an entire vector space.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `space` | string | Yes | - | Space name to delete |
+
+**Example:**
+
+```juglans
+[del]: vector_delete_space(space="old-space")
+```
+
+---
+
+### vector_delete()
+
+Delete specific vector points from a space.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `space` | string | Yes | - | Space name |
+| `ids` | array/string | Yes | - | Point IDs (JSON array or comma-separated string) |
+
+**Example:**
+
+```juglans
+[del]: vector_delete(space="docs", ids=["doc1", "doc2"])
+```
+
+---
+
+## Testing Tools
+
+### mock()
+
+Execute a workflow with injected node outputs. Nodes listed in `inject` are skipped during execution and their output is set to the injected value.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `workflow` | string | Yes | - | Workflow file path |
+| `inject` | object | No | - | Map of `node_id` to injected output value |
+
+**Example:**
+
+```juglans
+[test]: mock(
+  workflow="main.jg",
+  inject={"api_call": {"status": "ok", "data": "mocked"}}
+)
+```
+
+---
+
+### config()
+
+Store test configuration. Returns all parameters as a JSON value for the test runner to read.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `...` | any | No | - | Key-value pairs (known keys: `agent`, `budget`, `mock`, `timeout`) |
+
+**Example:**
+
+```juglans
+[setup]: config(agent="test-agent", timeout=30)
+```
+
+---
+
+## Adapter Tools
+
+### feishu_webhook()
+
+Send a message via Feishu (Lark) webhook.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `message` | string | Yes | - | Message text to send |
+| `webhook_url` | string | No | - | Webhook URL (falls back to `[bot.feishu]` config) |
+
+**Example:**
+
+```juglans
+[notify_feishu]: feishu_webhook(message="Deployment complete!")
+```
 
 ---
 
 ## Utility Functions
 
-The following functions can be used in parameters:
+Functions available in parameter expressions.
 
-### Data Transformation
+### Data Functions
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `len(x)` | Length of string, array, or object | `len($ctx.items)` |
+| `json(x)` | Serialize to JSON string | `json($ctx.data)` |
+| `append(arr, item)` | Append element to array | `append($ctx.list, $output)` |
+| `keys(obj)` | Get object keys as array | `keys($ctx.config)` |
+| `values(obj)` | Get object values as array | `values($ctx.config)` |
+| `flatten(arr)` | Flatten nested arrays | `flatten($ctx.nested)` |
+| `unique(arr)` | Remove duplicate elements | `unique($ctx.tags)` |
+| `sort(arr)` | Sort array | `sort($ctx.scores)` |
+| `reverse(arr)` | Reverse array | `reverse($ctx.items)` |
+| `slice(arr, start, end)` | Sub-array extraction | `slice($ctx.items, 0, 5)` |
+| `sum(arr)` | Sum numeric array | `sum($ctx.values)` |
+| `range(n)` | Generate `[0, 1, ..., n-1]` | `range(10)` |
+| `default(val, fallback)` | Return `fallback` if `val` is null | `default($ctx.x, 0)` |
+
+### String Functions
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `str(x)` | Convert to string | `str($ctx.count)` |
+| `upper(s)` | Uppercase | `upper($input.name)` |
+| `lower(s)` | Lowercase | `lower($input.name)` |
+| `trim(s)` | Strip whitespace | `trim($input.text)` |
+| `split(s, delim)` | Split string into array | `split($input.csv, ",")` |
+| `join(arr, delim)` | Join array into string | `join($ctx.tags, ", ")` |
+| `replace(s, old, new)` | Replace substring | `replace($input.text, "foo", "bar")` |
+| `contains(s, sub)` | Check if string/array contains value | `contains($ctx.list, "x")` |
+
+### Numeric Functions
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `int(x)` | Convert to integer | `int($input.count)` |
+| `float(x)` | Convert to float | `float($input.price)` |
+| `abs(x)` | Absolute value | `abs($ctx.delta)` |
+| `round(x)` | Round to nearest integer | `round($ctx.score)` |
+| `min(a, b)` / `min(arr)` | Minimum value | `min($ctx.a, $ctx.b)` |
+| `max(a, b)` / `max(arr)` | Maximum value | `max($ctx.scores)` |
+
+### Type & Logic Functions
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `type(x)` | Type name as string | `type($ctx.value)` |
+| `if(cond, a, b)` | Conditional expression | `if($ctx.ok, "yes", "no")` |
+
+### Operators
 
 ```text
-# JSON serialization
-json($ctx.data)              # Object -> JSON string
+# Arithmetic
+$ctx.a + $ctx.b        # Addition / String concatenation
+$ctx.a - $ctx.b        # Subtraction
+$ctx.a * $ctx.b        # Multiplication
+$ctx.a / $ctx.b        # Division
+$ctx.a % $ctx.b        # Modulo
 
-# String concatenation
-"Hello, " + $input.name      # Concatenate strings
+# Comparison
+$ctx.a == $ctx.b       # Equal
+$ctx.a != $ctx.b       # Not equal
+$ctx.a > $ctx.b        # Greater than
+$ctx.a >= $ctx.b       # Greater than or equal
+$ctx.a < $ctx.b        # Less than
+$ctx.a <= $ctx.b       # Less than or equal
 
-# Array append
-append($ctx.list, $item)     # Append element to array
-```
+# Logical
+$ctx.a and $ctx.b      # Logical AND (also &&)
+$ctx.a or $ctx.b       # Logical OR (also ||)
+not $ctx.flag          # Logical NOT (also !)
 
-### Arithmetic Operations
-
-```text
-$ctx.count + 1               # Addition
-$ctx.total - $ctx.used       # Subtraction
-$ctx.price * $ctx.quantity   # Multiplication
-$ctx.total / $ctx.count      # Division
-```
-
-### Comparison Operations
-
-```text
-$ctx.score > 80              # Greater than
-$ctx.count <= 10             # Less than or equal
-$ctx.status == "done"        # Equal to
-$ctx.value != null           # Not equal to
-```
-
-### Logical Operations
-
-```text
-$ctx.a && $ctx.b             # AND
-$ctx.a || $ctx.b             # OR
-!$ctx.flag                   # NOT
+# Membership
+$item in $ctx.list     # Membership test
+$item not in $ctx.list # Negated membership
 ```
 
 ---
 
-## Combining Tools in Workflows
-
-### Complete Example
+## Complete Workflow Example
 
 ```juglans
 name: "Data Processing"
@@ -815,52 +819,29 @@ agents: ["./agents/*.jgagent"]
 entry: [init]
 exit: [done]
 
-# Initialization
 [init]: set_context(results=[], processed=0)
 [start_notify]: notify(status="Starting data processing...")
 
-# Fetch data
-[fetch_data]: fetch_url(url=$input.data_url)
+[fetch_data]: fetch(url=$input.data_url)
 
-# Process each data item
 [process]: foreach($item in $output.items) {
-  # Render analysis Prompt
   [render]: p(slug="analyze-item", item=$item)
-
-  # Call AI for analysis
-  [analyze]: chat(
-    agent="analyst",
-    message=$output,
-    format="json"
-  )
-
-  # Collect results
+  [analyze]: chat(agent="analyst", message=$output, format="json")
   [collect]: set_context(
     results=append($ctx.results, $output),
     processed=$ctx.processed + 1
   )
-
-  # Progress notification
-  [progress]: notify(status="Processed: " + $ctx.processed)
+  [progress]: notify(status="Processed: " + str($ctx.processed))
 
   [render] -> [analyze] -> [collect] -> [progress]
 }
 
-# Summarize
 [summarize]: chat(
   agent="summarizer",
   message="Summarize: " + json($ctx.results)
 )
 
-# Complete
-[done]: notify(status="Done! Processed " + $ctx.processed + " items")
+[done]: notify(status="Done! Processed " + str($ctx.processed) + " items")
 
-# Execution flow
 [init] -> [start_notify] -> [fetch_data] -> [process] -> [summarize] -> [done]
 ```
-
----
-
-## Custom Tools
-
-Custom tools can be added through MCP integration. See the [MCP Integration Guide](../integrations/mcp.md).

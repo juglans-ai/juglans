@@ -2314,8 +2314,11 @@ fn handle_remove(package: &str) -> Result<()> {
     Ok(())
 }
 
-async fn handle_tui(_agent: Option<&Path>) -> Result<()> {
-    let app = ui::tui::app::App::new();
+async fn handle_tui(agent: Option<&Path>) -> Result<()> {
+    let mut app = ui::tui::app::App::new();
+    if let Some(path) = agent {
+        app.pending_agent_load = Some(path.to_path_buf());
+    }
     ui::tui::run(app).await
 }
 
@@ -2470,12 +2473,18 @@ async fn handle_test(path: Option<&Path>, filter: Option<&str>, format: &str) ->
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("juglans=info,tower_http=info"));
-
-    tracing_subscriber::fmt().with_env_filter(filter).init();
-
     let application_cli = Cli::parse();
+
+    // TUI 模式完全关闭日志，避免破坏 ratatui 渲染
+    let is_tui = matches!(application_cli.command, Some(Commands::Chat { .. }));
+    let default_filter = if is_tui {
+        "off"
+    } else {
+        "juglans=info,tower_http=info"
+    };
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_filter));
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 
     if let Some(sub_command_enum) = &application_cli.command {
         match sub_command_enum {

@@ -1,10 +1,18 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
+use serde_json::json;
 use std::cell::{Cell, RefCell};
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use unicode_width::UnicodeWidthChar;
+
+use crate::core::agent_parser::AgentResource;
+use crate::core::context::{WorkflowContext, WorkflowEvent};
+use crate::core::executor::WorkflowExecutor;
+use crate::core::graph::WorkflowGraph;
 
 use super::claude_code::{self, ClaudeEvent, ClaudeProcess};
 use super::dialog::Dialog;
@@ -14,6 +22,22 @@ use super::messages::{
     load_attachment, read_directory_entries, Attachment, ChatMessage, ToolStatus,
 };
 use super::theme::Theme;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TuiMode {
+    ClaudeCode,
+    Agent,
+}
+
+pub struct AgentState {
+    pub executor: Arc<WorkflowExecutor>,
+    pub context: WorkflowContext,
+    pub agent_resource: AgentResource,
+    pub workflow: Option<Arc<WorkflowGraph>>,
+    pub event_rx: Option<mpsc::UnboundedReceiver<WorkflowEvent>>,
+    pub event_tx: mpsc::UnboundedSender<WorkflowEvent>,
+    pub current_task: Option<tokio::task::JoinHandle<()>>,
+}
 
 #[derive(Debug, Clone)]
 pub struct PendingMessage {
@@ -81,6 +105,15 @@ pub struct App {
     pub attachment_selected: bool,
     pub tick_counter: u32,
     pub waiting_for_response: bool,
+
+    // --- Mode ---
+    pub mode: TuiMode,
+
+    // --- Agent mode state ---
+    pub agent_state: Option<AgentState>,
+    pub agent_name: Option<String>,
+    pub pending_agent_message: Option<String>,
+    pub pending_agent_load: Option<PathBuf>,
 }
 
 impl Default for App {
@@ -140,6 +173,13 @@ impl App {
             attachment_selected: false,
             tick_counter: 0,
             waiting_for_response: false,
+            // Mode
+            mode: TuiMode::Agent,
+            // Agent state
+            agent_state: None,
+            agent_name: None,
+            pending_agent_message: None,
+            pending_agent_load: None,
         }
     }
 
@@ -218,6 +258,9 @@ impl App {
                             Some(Dialog::FilePicker { .. }) => {
                                 self.handle_file_picker_result(result);
                             }
+                            Some(Dialog::AgentPicker { .. }) => {
+                                self.pending_agent_load = Some(PathBuf::from(result.clone()));
+                            }
                             _ => {}
                         }
                     }
@@ -268,18 +311,29 @@ impl App {
                 if self.streaming {
                     self.interrupt_streaming();
                 }
-                // Kill existing subprocess for a fresh start
-                if let Some(mut proc) = self.claude_process.take() {
-                    proc.kill();
+                match self.mode {
+                    TuiMode::ClaudeCode => {
+                        if let Some(mut proc) = self.claude_process.take() {
+                            proc.kill();
+                        }
+                        self.claude_rx = None;
+                        self.session_id = None;
+                    }
+                    TuiMode::Agent => {
+                        if let Some(state) = &mut self.agent_state {
+                            let (tx, rx) = mpsc::unbounded_channel();
+                            state.context = WorkflowContext::with_sender(tx.clone());
+                            state.event_tx = tx;
+                            state.event_rx = Some(rx);
+                        }
+                    }
                 }
-                self.claude_rx = None;
                 self.messages.clear();
                 self.scroll_from_bottom = 0;
                 self.conversation_starter = None;
                 self.token_count = 0;
                 self.token_pct = 0;
                 self.cost = 0.0;
-                self.session_id = None;
                 self.page = Page::Welcome;
                 return;
             }
@@ -320,6 +374,35 @@ impl App {
                 }
                 return;
             }
+            (KeyCode::Char('t'), KeyModifiers::CONTROL) => {
+                self.mode = match self.mode {
+                    TuiMode::ClaudeCode => TuiMode::Agent,
+                    TuiMode::Agent => TuiMode::ClaudeCode,
+                };
+                let label = match self.mode {
+                    TuiMode::ClaudeCode => "Claude Code",
+                    TuiMode::Agent => "Agent",
+                };
+                self.status_message = Some((format!("Switched to {} mode", label), Instant::now()));
+                return;
+            }
+            (KeyCode::Tab, KeyModifiers::NONE) => {
+                if self.mode == TuiMode::Agent {
+                    let cwd = PathBuf::from(self.resolve_cwd());
+                    let agents = super::dialog::scan_agents(&cwd);
+                    if agents.is_empty() {
+                        self.status_message =
+                            Some(("No .jgagent files found".to_string(), Instant::now()));
+                    } else {
+                        self.active_dialog = Some(Dialog::AgentPicker {
+                            agents,
+                            selected: 0,
+                            scroll_offset: 0,
+                        });
+                    }
+                    return;
+                }
+            }
             _ => {}
         }
 
@@ -352,7 +435,10 @@ impl App {
 
         // Forward to editor
         if let Some(text) = self.editor.handle_key(key) {
-            self.send_message(text);
+            match self.mode {
+                TuiMode::ClaudeCode => self.send_message(text),
+                TuiMode::Agent => self.send_agent_message(text),
+            }
         }
         self.editor_scroll = 0;
     }
@@ -671,10 +757,22 @@ impl App {
     // -----------------------------------------------------------------------
 
     fn interrupt_streaming(&mut self) {
-        if let Some(mut proc) = self.claude_process.take() {
-            proc.kill();
+        match self.mode {
+            TuiMode::ClaudeCode => {
+                if let Some(mut proc) = self.claude_process.take() {
+                    proc.kill();
+                }
+                self.claude_rx = None;
+            }
+            TuiMode::Agent => {
+                if let Some(state) = &mut self.agent_state {
+                    if let Some(handle) = state.current_task.take() {
+                        handle.abort();
+                    }
+                }
+            }
         }
-        self.claude_rx = None;
+
         self.streaming = false;
         self.waiting_for_response = false;
 
@@ -698,10 +796,159 @@ impl App {
     }
 
     // -----------------------------------------------------------------------
+    // handle_agent_event — process WorkflowEvent from agent executor
+    // -----------------------------------------------------------------------
+
+    pub fn handle_agent_event(&mut self, event: WorkflowEvent) {
+        match event {
+            WorkflowEvent::Token(text) => {
+                self.waiting_for_response = false;
+                self.append_to_last_assistant_content(&text);
+            }
+            WorkflowEvent::ToolStart(ev) => {
+                self.waiting_for_response = false;
+                let params_str = ev
+                    .params
+                    .iter()
+                    .map(|(k, v)| format!("{}: {}", k, v))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                self.messages.push(ChatMessage::ToolCall {
+                    name: ev.tool.clone(),
+                    status: ToolStatus::InProgress,
+                    params: params_str,
+                    response: None,
+                });
+            }
+            WorkflowEvent::ToolComplete(ev) => {
+                for msg in self.messages.iter_mut().rev() {
+                    if let ChatMessage::ToolCall {
+                        status, response, ..
+                    } = msg
+                    {
+                        if matches!(status, ToolStatus::InProgress) {
+                            *status = if ev.status == "success" {
+                                ToolStatus::Completed
+                            } else {
+                                ToolStatus::Error
+                            };
+                            *response = ev
+                                .result
+                                .as_ref()
+                                .map(|v| serde_json::to_string_pretty(v).unwrap_or_default());
+                            break;
+                        }
+                    }
+                }
+            }
+            WorkflowEvent::Error(e) => {
+                self.append_to_last_assistant_content(&format!("\n**Error:** {}", e));
+                self.streaming = false;
+                self.waiting_for_response = false;
+            }
+            WorkflowEvent::Status(s) if s == "__turn_complete__" => {
+                self.streaming = false;
+                self.waiting_for_response = false;
+                self.cleanup_empty_assistant_messages();
+                if let Some(start) = self.request_start.take() {
+                    self.update_last_assistant_elapsed(start.elapsed());
+                }
+            }
+            WorkflowEvent::Status(_) => {
+                // 忽略非哨兵 status，TUI 通过 streaming flag 显示状态
+            }
+            _ => {} // Meta, NodeStart, NodeComplete — ignored for now
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // send_agent_message — queue message for agent executor
+    // -----------------------------------------------------------------------
+
+    fn send_agent_message(&mut self, text: String) {
+        if self.streaming {
+            self.status_message = Some((
+                "Please wait for the current response".to_string(),
+                Instant::now(),
+            ));
+            return;
+        }
+
+        if self.agent_state.is_none() {
+            self.status_message = Some((
+                "No agent loaded. Press Tab to select.".to_string(),
+                Instant::now(),
+            ));
+            return;
+        }
+
+        if self.page == Page::Welcome {
+            self.page = Page::Chat;
+            self.conversation_starter = Some(text.clone());
+        }
+
+        self.messages.push(ChatMessage::User {
+            content: text.clone(),
+            attachments: vec![],
+        });
+
+        self.streaming = true;
+        self.waiting_for_response = true;
+        self.request_start = Some(Instant::now());
+
+        let model = self
+            .agent_state
+            .as_ref()
+            .map(|s| s.agent_resource.model.clone())
+            .unwrap_or_default();
+        self.messages.push(ChatMessage::Assistant {
+            thinking: None,
+            content: String::new(),
+            model,
+            elapsed: None,
+        });
+
+        self.pending_agent_message = Some(text);
+        self.scroll_from_bottom = 0;
+    }
+
+    /// Execute agent chat in a background task (called from async event loop)
+    pub async fn do_execute_agent(&mut self, text: String) {
+        let Some(agent) = &mut self.agent_state else {
+            return;
+        };
+
+        let executor = agent.executor.clone();
+        let context = agent.context.clone();
+        let agent_slug = agent.agent_resource.slug.clone();
+        let workflow = agent.workflow.clone();
+
+        // Set input variables
+        let _ = context.set("input.message".into(), json!(text));
+        let _ = context.set("reply.output".into(), json!(""));
+        let _ = context.set("reply.status".into(), json!("processing"));
+
+        let handle = tokio::spawn(async move {
+            if let Some(wf) = workflow {
+                let _ = executor.execute_graph(wf, &context).await;
+            } else {
+                let params =
+                    HashMap::from([("agent".into(), agent_slug), ("message".into(), text)]);
+                let _ = executor
+                    .execute_tool_internal("chat", &params, &context)
+                    .await;
+            }
+            context.emit(WorkflowEvent::Status("__turn_complete__".into()));
+        });
+
+        agent.current_task = Some(handle);
+    }
+
+    // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
 
-    fn resolve_cwd(&self) -> String {
+    pub fn resolve_cwd(&self) -> String {
         if self.cwd.starts_with("~/") {
             if let Some(home) = std::env::var_os("HOME") {
                 return format!("{}/{}", home.to_string_lossy(), &self.cwd[2..]);

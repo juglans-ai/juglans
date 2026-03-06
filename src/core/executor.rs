@@ -448,6 +448,12 @@ impl WorkflowExecutor {
             info!("📦 [Debug] Node [{}]: {:?}", node.id, node.node_type);
         }
 
+        // Check if this node is mocked (injected output from mock() builtin)
+        if let Ok(Some(mock_val)) = context.resolve_path(&format!("_mocks.{}", node.id)) {
+            info!("  🎭 Mock [{}]", node.id);
+            return Ok(Some(mock_val));
+        }
+
         match &node.node_type {
             NodeType::Literal(val) => {
                 debug!("│   Literal value assigned");

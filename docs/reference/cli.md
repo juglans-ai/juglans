@@ -1,180 +1,120 @@
 # CLI Command Reference
 
-The Juglans CLI provides workflow execution, resource management, and development tools.
-
-## Installation
-
-```bash
-# Build from source
-git clone https://github.com/juglans-ai/juglans.git
-cd juglans
-cargo build --release
-
-# Install to system
-cargo install --path .
-
-# Or add to PATH
-export PATH="$PATH:$(pwd)/target/release"
-```
-
-## Basic Usage
+## Usage
 
 ```bash
 juglans [OPTIONS] <FILE> [ARGS]
 juglans <COMMAND> [OPTIONS]
 ```
 
-## Execution Commands
-
-### Execute Workflow
-
-```bash
-juglans path/to/workflow.jg [OPTIONS]
-```
-
-**Options:**
+**Global Options:**
 
 | Option | Description |
-|------|------|
+|--------|-------------|
 | `--input <JSON>` | Input data (JSON format) |
 | `--input-file <FILE>` | Read input from file |
 | `--verbose`, `-v` | Verbose output |
 | `--dry-run` | Parse only, do not execute |
-| `--output <FILE>` | Output result to file |
-| `--output-format <FORMAT>` | Output format (text, json), default text |
+| `--output <FILE>` | Write result to file |
+| `--output-format <FMT>` | Output format: `text` (default), `json` |
+
+## Command Summary
+
+| Command | Description |
+|---------|-------------|
+| `juglans <file>` | Execute .jg / .jgagent / .jgprompt file |
+| `juglans init` | Create a new project scaffold |
+| `juglans install` | Fetch MCP tool schemas |
+| `juglans check` | Validate file syntax |
+| `juglans web` | Start local development web server |
+| `juglans push` | Push resources to Jug0 server |
+| `juglans pull` | Pull resources from Jug0 server |
+| `juglans list` | List remote resources |
+| `juglans delete` | Delete a remote resource |
+| `juglans whoami` | Show account and config info |
+| `juglans bot` | Start bot adapter (Telegram, Feishu) |
+| `juglans chat` | Launch interactive chat TUI |
+| `juglans test` | Run tests (test_* nodes in .jg files) |
+| `juglans doctest` | Validate code snippets in markdown docs |
+| `juglans pack` | Pack a package into .tar.gz |
+| `juglans publish` | Publish a package to the registry |
+| `juglans add` | Add a package dependency |
+| `juglans remove` | Remove a package dependency |
+| `juglans deploy` | Deploy project to Docker container |
+| `juglans cron` | Run a workflow on a cron schedule |
+| `juglans lsp` | Start Language Server Protocol server |
+| `juglans skills` | Manage agent skills from GitHub |
+
+---
+
+## Execute File
+
+Run a workflow, agent, or prompt file.
+
+```bash
+juglans <FILE> [OPTIONS]
+```
+
+File type is determined by extension:
+
+| Extension | Behavior |
+|-----------|----------|
+| `.jg` | Execute workflow DAG |
+| `.jgagent` | Interactive agent session |
+| `.jgprompt` | Render prompt template |
+
+**Agent-specific options:**
+
+| Option | Description |
+|--------|-------------|
+| `--message <TEXT>` | Send a single message (non-interactive) |
+| `--info` | Show agent configuration |
 
 **Examples:**
 
 ```bash
-# Basic execution
+# Execute a workflow
 juglans src/main.jg
 
-# Pass input
+# Pass JSON input
 juglans src/main.jg --input '{"query": "Hello"}'
 
 # Read input from file
 juglans src/main.jg --input-file input.json
 
-# Verbose mode
-juglans src/main.jg -v
-
-# Validate only
+# Dry run (parse only)
 juglans src/main.jg --dry-run
 
-# JSON format output (convenient for programmatic processing)
+# JSON output for programmatic use
 juglans src/main.jg --output-format json
-```
 
-**JSON Output Format:**
-
-When using `--output-format json`, structured execution results are output:
-
-```json
-{
-  "success": true,
-  "duration_ms": 1234,
-  "nodes_executed": 5,
-  "final_output": {
-    "status": "completed",
-    "result": "..."
-  }
-}
-```
-
-This is very useful for CI/CD integration or programmatic processing of workflow results.
-
----
-
-### Execute Agent (Interactive Mode)
-
-```bash
-juglans path/to/agent.jgagent [OPTIONS]
-```
-
-**Options:**
-
-| Option | Description |
-|------|------|
-| `--message <TEXT>` | Initial message |
-| `--verbose`, `-v` | Verbose output |
-| `--info` | Show Agent information |
-
-**Examples:**
-
-```bash
-# Interactive conversation
+# Interactive agent chat
 juglans src/agents/assistant.jgagent
 
-# Send a single message
+# Single-message agent call
 juglans src/agents/assistant.jgagent --message "What is Rust?"
 
-# View configuration
-juglans src/agents/assistant.jgagent --info
-```
-
-**Interactive Commands:**
-
-In interactive mode:
-- Type a message to send it to the Agent
-- `exit` or `quit` to exit
-- `clear` to clear history
-- `history` to view conversation history
-
----
-
-### Render Prompt
-
-```bash
-juglans path/to/prompt.jgprompt [OPTIONS]
-```
-
-**Options:**
-
-| Option | Description |
-|------|------|
-| `--input <JSON>` | Template variables |
-| `--output <FILE>` | Output to file |
-
-**Examples:**
-
-```bash
-# Render with default values
-juglans src/prompts/greeting.jgprompt
-
-# Pass variables
+# Render a prompt template
 juglans src/prompts/greeting.jgprompt --input '{"name": "Alice"}'
-
-# Output to file
-juglans src/prompts/greeting.jgprompt --output rendered.txt
 ```
 
 ---
 
-## Project Commands
+## init
 
-### init - Initialize Project
+Create a new project scaffold.
 
 ```bash
-juglans init <PROJECT_NAME> [OPTIONS]
+juglans init <PROJECT_NAME>
 ```
 
-**Options:**
-
-| Option | Description |
-|------|------|
-| `--template <NAME>` | Use template (basic, advanced) |
-
-**Examples:**
+**Example:**
 
 ```bash
-# Create a new project
 juglans init my-project
-
-# Use advanced template
-juglans init my-project --template advanced
 ```
 
-**Generated Structure:**
+Generated structure:
 
 ```
 my-project/
@@ -182,304 +122,44 @@ my-project/
 └── src/
     ├── example.jg
     ├── workflows/
-    │   └── example.jgflow
     ├── agents/
-    │   └── example.jgagent
-    ├── pure-agents/
     ├── prompts/
-    │   └── example.jgprompt
     └── tools/
 ```
 
 ---
 
-### install - Install Dependencies
+## install
 
-Fetch MCP tool schemas:
-
-```bash
-juglans install [OPTIONS]
-```
-
-**Options:**
-
-| Option | Description |
-|------|------|
-| `--force` | Force re-fetch |
-
-**Examples:**
+Fetch MCP tool schemas defined in `juglans.toml`.
 
 ```bash
-# Install MCP tools
 juglans install
+```
 
-# Force refresh
-juglans install --force
+**Example:**
+
+```bash
+juglans install
 ```
 
 ---
 
-## Resource Management
+## check
 
-### push - Push Resources
-
-Push local resources to the Jug0 backend, supporting single file or batch operations.
-
-```bash
-juglans push [PATHS...] [OPTIONS]
-```
-
-**Arguments:**
-
-| Argument | Description |
-|------|------|
-| `PATHS` | File or directory paths (optional, uses workspace configuration when empty) |
-
-**Options:**
-
-| Option | Description |
-|------|------|
-| `--force` | Overwrite existing resources |
-| `--dry-run` | Preview without executing |
-| `--type <TYPE>`, `-t` | Filter resource type (workflow, agent, prompt, tool, all) |
-| `--recursive`, `-r` | Recursively scan directories |
-
-#### Basic Usage
-
-```bash
-# Push a single file
-juglans push src/prompts/my-prompt.jgprompt
-juglans push src/agents/my-agent.jgagent
-juglans push src/workflows/my-flow.jgflow
-
-# Force overwrite
-juglans push src/prompts/my-prompt.jgprompt --force
-```
-
-#### Batch Operations
-
-**Using workspace configuration:**
-
-First configure resource paths in `juglans.toml`:
-
-```toml
-[workspace]
-agents = ["src/agents/**/*.jgagent", "src/pure-agents/**/*.jgagent"]
-workflows = ["src/**/*.jg", "src/workflows/**/*.jgflow"]
-prompts = ["src/prompts/**/*.jgprompt"]
-tools = ["src/tools/**/*.json"]
-exclude = ["**/*.backup", "**/test_*"]
-```
-
-Then run push without arguments:
-
-```bash
-# Push all configured resources
-juglans push
-
-# Preview files that will be pushed
-juglans push --dry-run
-
-# Push only workflows
-juglans push --type workflow
-
-# Push only agents
-juglans push -t agent
-```
-
-**Output example:**
-
-```
-📦 Using workspace configuration from juglans.toml
-
-📂 Found resources:
-  📄 3 workflow(s)
-  👤 5 agent(s)
-  📝 8 prompt(s)
-
-📤 Pushing resources...
-
-  ✅ workflow: trading-assistant.jg - Pushed
-  ✅ agent: trader.jgagent - Pushed
-  ⚠️  agent: assistant.jgagent - Skipped (exists, use --force)
-  ✅ prompt: greeting.jgprompt - Pushed
-
-📊 Summary:
-  ✅ 9 succeeded
-  ⚠️  1 skipped
-  ❌ 0 failed
-```
-
-**Push specific directories:**
-
-```bash
-# Push an entire directory
-juglans push src/workflows/
-
-# Recursively push all subdirectories
-juglans push src/ -r
-
-# Push multiple directories
-juglans push src/agents/ src/prompts/
-
-# Push a specific type
-juglans push src/ -r --type workflow
-```
-
-**Glob patterns:**
-
-```bash
-# Push all workflows
-juglans push "src/**/*.jg"
-
-# Push files with a specific prefix
-juglans push "src/agents/prod_*.jgagent"
-```
-
-**Dry-run mode:**
-
-```bash
-# Preview files that will be pushed
-juglans push --dry-run
-
-# Preview a specific directory
-juglans push src/workflows/ --dry-run
-```
-
-Output:
-
-```
-📦 Scanning workspace: src/
-
-📂 Found resources:
-  📄 3 workflow(s)
-  👤 5 agent(s)
-
-🔍 Dry run mode - preview only:
-
-  ✓ src/trading.jg
-  ✓ src/analysis.jg
-  ✓ src/pipeline.jg
-  ✓ src/agents/trader.jgagent
-  ✓ src/agents/assistant.jgagent
-
-📊 Total: 8 file(s)
-
-Run without --dry-run to push.
-```
-
----
-
-### pull - Pull Resources
-
-Pull resources from the Jug0 backend:
-
-```bash
-juglans pull <SLUG> [OPTIONS]
-```
-
-**Options:**
-
-| Option | Description |
-|------|------|
-| `--type <TYPE>` | Resource type (prompt, agent, workflow) |
-| `--output <DIR>` | Output directory |
-
-**Examples:**
-
-```bash
-# Pull a Prompt
-juglans pull my-prompt --type prompt
-
-# Pull to a specific directory
-juglans pull my-agent --type agent --output ./src/agents/
-```
-
----
-
-### list - List Remote Resources
-
-List resources on the Jug0 backend.
-
-```bash
-juglans list [OPTIONS]
-```
-
-**Options:**
-
-| Option | Description |
-|------|------|
-| `--type <TYPE>`, `-t` | Filter resource type (prompt, agent, workflow), optional |
-
-**Examples:**
-
-```bash
-# List all resources
-juglans list
-
-# List only Prompts
-juglans list --type prompt
-
-# List only Agents (short option)
-juglans list -t agent
-
-# List only Workflows
-juglans list --type workflow
-```
-
-**Output format:**
-
-```
-greeting-prompt (prompt)
-assistant (agent)
-market-analyst (agent)
-simple-chat (workflow)
-data-pipeline (workflow)
-```
-
-Output format is: `slug (resource_type)`, one resource per line.
-
-**Empty results:**
-
-If no resources are found, the following is displayed:
-```
-No resources found.
-```
-
-**Use cases:**
-
-- View resources already on the server
-- Confirm whether resources have been successfully pushed
-- Confirm resource existence before pulling
-
-**Notes:**
-
-- Requires a valid API key to be configured
-- Only displays resources accessible by the current account
-- Sorted by resource type and name
-
----
-
-### check - Validate File Syntax
-
-Validate the syntax correctness of `.jg`, `.jgagent`, `.jgprompt` files (similar to `cargo check`).
+Validate syntax of `.jg`, `.jgagent`, `.jgprompt` files.
 
 ```bash
 juglans check [PATH] [OPTIONS]
 ```
 
-**Arguments:**
+| Option | Default | Description |
+|--------|---------|-------------|
+| `PATH` | `.` | File or directory to check |
+| `--all` | | Show warnings in addition to errors |
+| `--format <FMT>` | `text` | Output format: `text`, `json` |
 
-| Argument | Description |
-|------|------|
-| `PATH` | File or directory path to check (optional, defaults to current directory) |
-
-**Options:**
-
-| Option | Description |
-|------|------|
-| `--all` | Show all issues including warnings |
-| `--format <FORMAT>` | Output format (text, json), default text |
+**Exit codes:** `0` = all valid, `1` = errors found.
 
 **Examples:**
 
@@ -487,343 +167,395 @@ juglans check [PATH] [OPTIONS]
 # Check all files in current directory
 juglans check
 
-# Check a specific directory
-juglans check ./src/
-
-# Check a single file
+# Check a specific file
 juglans check workflow.jg
 
-# Show all warnings
-juglans check --all
+# Check a directory with warnings
+juglans check ./src/ --all
 
-# JSON format output
+# JSON output (for CI)
 juglans check --format json
 ```
 
-**Output example (text format):**
-
-```
-    Checking juglans files in "."
-
-    error[workflow]: src/main.jg (1 error(s), 0 warning(s))
-      --> [E001] Entry node 'start' not defined
-
-    warning[workflow]: src/test.jg (1 warning(s))
-      --> [W001] Unused node 'debug'
-
-    Finished checking 3 workflow(s), 2 agent(s), 1 prompt(s) - 2 valid with warnings
-
-error: could not validate 1 file(s) due to 1 previous error(s)
-```
-
-**Output example (JSON format):**
-
-```json
-{
-  "total": 6,
-  "valid": 5,
-  "errors": 1,
-  "warnings": 1,
-  "by_type": {
-    "workflows": 3,
-    "agents": 2,
-    "prompts": 1
-  },
-  "results": [
-    {
-      "file": "src/main.jg",
-      "type": "workflow",
-      "slug": "main",
-      "valid": false,
-      "errors": [
-        {"code": "E001", "message": "Entry node 'start' not defined"}
-      ],
-      "warnings": []
-    }
-  ]
-}
-```
-
-**Exit codes:**
-
-- `0` - All files validated successfully
-- `1` - Syntax errors found
-
-**Use cases:**
-
-- Syntax validation in CI/CD pipelines
-- Local checks before committing
-- Batch validation of all workflow files in a project
-
 ---
 
-### delete - Delete Remote Resources
+## web
 
-Delete resources from the Jug0 backend.
-
-```bash
-juglans delete <SLUG> --type <TYPE>
-```
-
-**Arguments:**
-
-| Argument | Description |
-|------|------|
-| `SLUG` | Resource slug to delete |
-
-**Options:**
-
-| Option | Description |
-|------|------|
-| `--type <TYPE>`, `-t` | Resource type (prompt, agent, workflow) |
-
-**Examples:**
-
-```bash
-# Delete a Prompt
-juglans delete my-prompt --type prompt
-
-# Delete an Agent (short option)
-juglans delete my-agent -t agent
-
-# Delete a Workflow
-juglans delete chat-flow --type workflow
-```
-
-**Notes:**
-
-- Requires a valid API key (via `juglans.toml` or environment variable)
-- Deletion is irreversible, use with caution
-- Can only delete resources owned by the current account
-- A confirmation message is displayed on successful deletion: `Deleted <slug> (<type>)`
-
-**Error Handling:**
-
-- If the resource does not exist, an error is returned
-- If there is no permission to delete, an authentication error is returned
-- Network errors display corresponding error messages
-
----
-
-### whoami - Show Account Information
-
-Display current user and workspace configuration information.
-
-```bash
-juglans whoami [OPTIONS]
-```
-
-**Options:**
-
-| Option | Description |
-|------|------|
-| `--verbose`, `-v` | Show detailed information |
-| `--check-connection` | Test connection to the Jug0 server |
-
-**Basic Usage:**
-
-```bash
-# Show account information
-juglans whoami
-
-# Show detailed information
-juglans whoami --verbose
-
-# Test connection
-juglans whoami --check-connection
-
-# Verbose mode + connection test
-juglans whoami -v --check-connection
-```
-
-**Output example (basic):**
-
-```
-📋 Account Information
-
-User ID:       u_demo
-Name:          Demo User
-Role:          admin
-API Key:       jug0_sk_***...***def (configured)
-
-Workspace:     ws_default (My Workspace)
-Members:       2 user(s)
-
-Jug0 Server:   http://localhost:3000
-
-Config:        ./juglans.toml
-```
-
-**Output example (verbose mode):**
-
-```
-📋 Account Information
-
-User ID:       u_demo
-Name:          Demo User
-Role:          admin
-API Key:       jug0_sk_***...***def (configured)
-
-Workspace:     ws_default (My Workspace)
-Members:       2 user(s)
-
-Resource Paths:
-  Agents:      src/agents/**/*.jgagent, src/pure-agents/**/*.jgagent
-  Workflows:   src/**/*.jg, src/workflows/**/*.jgflow
-  Prompts:     src/prompts/**/*.jgprompt
-  Tools:       src/tools/**/*.json
-
-Exclude:       **/*.backup, **/.draft, **/test_*
-
-Jug0 Server:   http://localhost:3000
-Status:        ✅ Connected
-
-Web Server:    127.0.0.1:3000
-
-MCP Servers:   2 configured
-  - filesystem (alias: fs): http://localhost:3001/mcp/filesystem
-  - github: http://localhost:3001/mcp/github
-
-Config:        ./juglans.toml
-```
-
-**Status Indicators:**
-
-- `Connected` - Server connection is normal
-- `Server unreachable` - Cannot connect to the server
-- `Error: ...` - Connection error
-- `Not configured` - API Key not configured
-
-**Use cases:**
-
-- Confirm the current account in use
-- Check if the configuration is correct
-- Debug connection issues
-- View workspace settings
-- Verify whether the API Key is configured
-
----
-
-## Development Server
-
-### web - Start Web Server
+Start local development web server with SSE streaming support.
 
 ```bash
 juglans web [OPTIONS]
 ```
 
-**Options:**
-
 | Option | Default | Description |
-|------|--------|------|
-| `--host <HOST>` | 127.0.0.1 | Bind address |
-| `--port <PORT>` | 8080 | Port number |
+|--------|---------|-------------|
+| `--host <HOST>` | `127.0.0.1` | Bind address |
+| `--port <PORT>` | `3000` | Port number |
+
+**API Endpoints:**
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/agents` | GET | List agents |
+| `/api/agents/:slug` | GET | Get agent |
+| `/api/prompts` | GET | List prompts |
+| `/api/prompts/:slug/render` | POST | Render prompt |
+| `/api/workflows` | GET | List workflows |
+| `/api/workflows/:slug/execute` | POST | Execute workflow |
+| `/api/chat` | POST | Chat (SSE stream) |
+| `/api/chat/tool-result` | POST | Return client tool result |
 
 **Examples:**
 
 ```bash
-# Default configuration
+# Default (localhost:3000)
 juglans web
 
 # Custom port
-juglans web --port 3000
+juglans web --port 8080
 
 # Allow external access
 juglans web --host 0.0.0.0 --port 8080
 ```
 
-**API Endpoints:**
-
-| Endpoint | Method | Description |
-|------|------|------|
-| `/api/agents` | GET | List Agents |
-| `/api/agents/:slug` | GET | Get Agent |
-| `/api/prompts` | GET | List Prompts |
-| `/api/prompts/:slug` | GET | Get Prompt |
-| `/api/prompts/:slug/render` | POST | Render Prompt |
-| `/api/workflows` | GET | List Workflows |
-| `/api/workflows/:slug/execute` | POST | Execute Workflow |
-| `/api/chat` | POST | Chat (SSE) |
-
 ---
 
-## Configuration
+## push
 
-### Configuration File Location
-
-Searched in order of priority:
-
-1. `./juglans.toml` (current directory)
-2. `~/.config/juglans/juglans.toml` (user configuration)
-3. `/etc/juglans/juglans.toml` (system configuration)
-
-### Configuration File Format
-
-```toml
-# juglans.toml
-
-[account]
-id = "user_id"
-api_key = "your_api_key"
-
-[jug0]
-base_url = "http://localhost:3000"
-
-[server]
-host = "127.0.0.1"
-port = 8080
-
-[mcp.filesystem]
-command = "npx"
-args = ["-y", "@anthropic/mcp-filesystem"]
-env = { ROOT_DIR = "/workspace" }
-```
-
-### Environment Variables
-
-| Variable | Description |
-|------|------|
-| `JUGLANS_API_KEY` | API key (overrides configuration file) |
-| `JUGLANS_CONFIG` | Configuration file path |
-| `JUGLANS_LOG_LEVEL` | Log level (debug, info, warn, error) |
-
----
-
-## Output Formats
-
-### Default Output
-
-```
-[node_id] Status message...
-[node_id] Result: ...
-```
-
-### Verbose Mode (-v)
-
-```
-[DEBUG] Loading workflow: main.jg
-[DEBUG] Parsed 5 nodes, 4 edges
-[INFO] [init] Starting...
-[DEBUG] [init] Output: null
-[INFO] [chat] Calling agent: assistant
-[DEBUG] [chat] Request: {"message": "..."}
-[INFO] [chat] Response received (234 tokens)
-...
-```
-
-### JSON Output
+Push resources to the Jug0 server.
 
 ```bash
-juglans workflow.jg --output-format json
+juglans push [PATHS...] [OPTIONS]
 ```
 
-```json
-{
-  "success": true,
-  "duration_ms": 1234,
-  "nodes_executed": 5,
-  "final_output": { ... }
-}
+| Option | Description |
+|--------|-------------|
+| `--force` | Overwrite existing resources |
+| `--dry-run` | Preview without pushing |
+| `--type <TYPE>`, `-t` | Filter: `workflow`, `agent`, `prompt`, `tool`, `all` |
+| `--recursive`, `-r` | Recursively scan directories |
+| `--endpoint <URL>` | Override workflow endpoint URL |
+
+When called without paths, uses `[workspace]` glob patterns from `juglans.toml`.
+
+**Examples:**
+
+```bash
+# Push a single file
+juglans push src/agents/trader.jgagent
+
+# Force overwrite
+juglans push src/prompts/greeting.jgprompt --force
+
+# Push all workspace resources
+juglans push
+
+# Preview what will be pushed
+juglans push --dry-run
+
+# Push only workflows
+juglans push --type workflow
+
+# Recursive directory push
+juglans push src/ -r
+```
+
+---
+
+## pull
+
+Pull a resource from the Jug0 server.
+
+```bash
+juglans pull <SLUG> --type <TYPE> [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--type <TYPE>`, `-t` | Resource type: `prompt`, `agent`, `workflow` |
+| `--output <DIR>`, `-o` | Output directory |
+
+**Examples:**
+
+```bash
+juglans pull my-agent --type agent
+juglans pull my-prompt -t prompt --output ./src/prompts/
+```
+
+---
+
+## list
+
+List resources on the Jug0 server.
+
+```bash
+juglans list [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--type <TYPE>`, `-t` | Filter: `prompt`, `agent`, `workflow` |
+
+**Examples:**
+
+```bash
+juglans list
+juglans list -t agent
+```
+
+---
+
+## delete
+
+Delete a resource from the Jug0 server.
+
+```bash
+juglans delete <SLUG> --type <TYPE>
+```
+
+| Option | Description |
+|--------|-------------|
+| `--type <TYPE>`, `-t` | Resource type: `prompt`, `agent`, `workflow` |
+
+**Examples:**
+
+```bash
+juglans delete old-prompt --type prompt
+juglans delete my-agent -t agent
+```
+
+---
+
+## whoami
+
+Show current account and configuration information.
+
+```bash
+juglans whoami [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--verbose`, `-v` | Show detailed info (MCP servers, resource paths) |
+| `--check-connection` | Test connection to Jug0 server |
+
+**Examples:**
+
+```bash
+juglans whoami
+juglans whoami -v --check-connection
+```
+
+---
+
+## bot
+
+Start a bot adapter for messaging platforms.
+
+```bash
+juglans bot <PLATFORM> [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `PLATFORM` | `telegram` or `feishu` |
+| `--agent <SLUG>` | Agent slug (overrides config default) |
+| `--port <PORT>` | Webhook port (Feishu) |
+
+**Examples:**
+
+```bash
+juglans bot telegram
+juglans bot feishu --agent trader --port 9000
+```
+
+---
+
+## chat
+
+Launch interactive chat TUI.
+
+```bash
+juglans chat [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--agent <FILE>`, `-a` | Agent file to load (.jgagent) |
+
+**Example:**
+
+```bash
+juglans chat --agent src/agents/assistant.jgagent
+```
+
+---
+
+## test
+
+Discover and execute `test_*` nodes in .jg files.
+
+```bash
+juglans test [PATH] [OPTIONS]
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `PATH` | `./tests/` | File or directory to test |
+| `--filter <NAME>` | | Filter tests by name substring |
+| `--format <FMT>` | `text` | Output format: `text`, `json`, `junit` |
+
+**Examples:**
+
+```bash
+juglans test
+juglans test ./tests/ --filter auth
+juglans test --format junit
+```
+
+---
+
+## doctest
+
+Validate ` ```juglans ` code blocks in markdown files through the parser.
+
+```bash
+juglans doctest [PATH] [OPTIONS]
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `PATH` | `./docs/` | File or directory |
+| `--format <FMT>` | `text` | Output format: `text`, `json` |
+
+**Examples:**
+
+```bash
+juglans doctest
+juglans doctest docs/guide/workflow-syntax.md
+juglans doctest --format json
+```
+
+---
+
+## pack
+
+Pack a package directory into a `.tar.gz` archive.
+
+```bash
+juglans pack [PATH] [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `PATH` | Package directory (default: `.`) |
+| `--output <DIR>`, `-o` | Output directory |
+
+**Example:**
+
+```bash
+juglans pack ./my-package -o ./dist
+```
+
+---
+
+## publish
+
+Publish a package to the registry.
+
+```bash
+juglans publish [PATH]
+```
+
+| Option | Description |
+|--------|-------------|
+| `PATH` | Package directory (default: `.`) |
+
+**Example:**
+
+```bash
+juglans publish
+```
+
+---
+
+## add / remove
+
+Manage package dependencies.
+
+```bash
+juglans add <PACKAGE>
+juglans remove <PACKAGE>
+```
+
+Package format: `name` or `name@version` (e.g., `sqlite-tools@^1.2.0`).
+
+**Examples:**
+
+```bash
+juglans add sqlite-tools
+juglans add sqlite-tools@^1.2.0
+juglans remove sqlite-tools
+```
+
+---
+
+## deploy
+
+Deploy project to a Docker container.
+
+```bash
+juglans deploy [PATH] [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--tag <TAG>` | Custom image tag |
+| `--port <PORT>`, `-p` | Host port (default: 8080) |
+| `--build-only` | Build image without starting container |
+| `--push` | Push image to registry after build |
+| `--stop` | Stop and remove running container |
+| `--status` | Show container status |
+| `--env <KEY=VAL>`, `-e` | Environment variables (repeatable) |
+
+**Examples:**
+
+```bash
+juglans deploy
+juglans deploy --port 3000 -e API_KEY=xxx
+juglans deploy --build-only --push
+juglans deploy --stop
+juglans deploy --status
+```
+
+---
+
+## cron
+
+Run a workflow on a cron schedule (local dev scheduler).
+
+```bash
+juglans cron <FILE> [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--schedule <EXPR>`, `-s` | Cron expression (overrides file metadata) |
+
+**Example:**
+
+```bash
+juglans cron src/daily-report.jg -s "0 9 * * *"
+```
+
+---
+
+## lsp
+
+Start the Language Server Protocol server for editor integration.
+
+```bash
+juglans lsp
 ```
 
 ---
@@ -831,42 +563,10 @@ juglans workflow.jg --output-format json
 ## Exit Codes
 
 | Code | Description |
-|----|------|
+|------|-------------|
 | 0 | Success |
 | 1 | General error |
 | 2 | Parse error |
 | 3 | Execution error |
 | 4 | Configuration error |
 | 5 | Network error |
-
----
-
-## Troubleshooting
-
-### Common Issues
-
-**Q: Configuration file not found**
-```bash
-juglans --config /path/to/juglans.toml workflow.jg
-```
-
-**Q: API connection failed**
-```bash
-# Check connection
-curl http://localhost:3000/health
-
-# View detailed logs
-JUGLANS_LOG_LEVEL=debug juglans workflow.jg
-```
-
-**Q: MCP tools unavailable**
-```bash
-# Reinstall
-juglans install --force
-```
-
-**Q: Out of memory**
-```bash
-# For large workflows, increase stack size
-RUST_MIN_STACK=8388608 juglans workflow.jg
-```

@@ -105,6 +105,7 @@ impl BuiltinRegistry {
 
         // Testing tools
         reg!(testing::Config);
+        // Mock is registered post-construction (needs Weak<BuiltinRegistry>)
 
         // Database ORM
         reg!(database::DbConnect);
@@ -142,6 +143,9 @@ impl BuiltinRegistry {
         let mut exec_wf_tool = ai::ExecuteWorkflow::new();
         exec_wf_tool.set_registry(Arc::downgrade(&registry_arc));
 
+        let mut mock_tool = testing::Mock::new();
+        mock_tool.set_registry(Arc::downgrade(&registry_arc));
+
         {
             let mut guard = registry_arc.tools.write().expect("Lock poisoned");
             guard.insert("chat".to_string(), Arc::new(Box::new(chat_tool)));
@@ -149,6 +153,7 @@ impl BuiltinRegistry {
                 "execute_workflow".to_string(),
                 Arc::new(Box::new(exec_wf_tool)),
             );
+            guard.insert("mock".to_string(), Arc::new(Box::new(mock_tool)));
         }
 
         registry_arc
