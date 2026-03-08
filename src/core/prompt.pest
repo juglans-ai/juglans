@@ -42,12 +42,12 @@ frontmatter = { separator ~ meta_entry+ ~ separator }
 
 // --- Template Logic ---
 nl = _{ "\r\n" | "\n" }
-if_tag = { "{%" ~ inner_ws* ~ "if" ~ inner_ws+ ~ expression ~ inner_ws* ~ "%}" ~ nl? }
-elif_tag = { "{%" ~ inner_ws* ~ "elif" ~ inner_ws+ ~ expression ~ inner_ws* ~ "%}" ~ nl? }
-else_tag = { "{%" ~ inner_ws* ~ "else" ~ inner_ws* ~ "%}" ~ nl? }
-endif_tag = { "{%" ~ inner_ws* ~ "endif" ~ inner_ws* ~ "%}" ~ nl? }
-for_tag = { "{%" ~ inner_ws* ~ "for" ~ inner_ws+ ~ identifier ~ inner_ws+ ~ "in" ~ inner_ws+ ~ expression ~ inner_ws* ~ "%}" ~ nl? }
-endfor_tag = { "{%" ~ inner_ws* ~ "endfor" ~ inner_ws* ~ "%}" ~ nl? }
+if_tag = ${ "{%" ~ inner_ws* ~ "if" ~ inner_ws+ ~ expression ~ inner_ws* ~ "%}" ~ nl? }
+elif_tag = ${ "{%" ~ inner_ws* ~ "elif" ~ inner_ws+ ~ expression ~ inner_ws* ~ "%}" ~ nl? }
+else_tag = ${ "{%" ~ inner_ws* ~ "else" ~ inner_ws* ~ "%}" ~ nl? }
+endif_tag = ${ "{%" ~ inner_ws* ~ "endif" ~ inner_ws* ~ "%}" ~ nl? }
+for_tag = ${ "{%" ~ inner_ws* ~ "for" ~ inner_ws+ ~ identifier ~ inner_ws+ ~ "in" ~ inner_ws+ ~ expression ~ inner_ws* ~ "%}" ~ nl? }
+endfor_tag = ${ "{%" ~ inner_ws* ~ "endfor" ~ inner_ws* ~ "%}" ~ nl? }
 interpolation = { "{{" ~ inner_ws* ~ expression ~ inner_ws* ~ "}}" }
 
 body = ${ node* }

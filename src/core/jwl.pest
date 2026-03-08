@@ -109,7 +109,9 @@ assign_call = { identifier ~ "=" ~ task_def }
 
 // 【新增】函数体：{ step1; step2 } 或 { step1 \n step2 }，至少一个步骤
 // PEG ordered choice: assert_stmt 和 assign_call 优先匹配
-func_step = { assert_stmt | assign_call | task_def | assignment_block }
+// ? 传播标记：失败时立即终止当前作用域（Rust 风格 error propagation）
+propagate_op = { "?" }
+func_step = { assert_stmt | return_err | assign_call ~ propagate_op? | task_def ~ propagate_op? | assignment_block }
 func_body = { "{" ~ func_step ~ (";"? ~ func_step)* ~ ";"? ~ "}" }
 
 // 赋值语法糖：count = 0, name = input.user → 解糖为 set_context(count=0, name=input.user)
@@ -162,8 +164,11 @@ new_expr = { "new" ~ identifier ~ "(" ~ (param_pair ~ ("," ~ param_pair)*)? ~ ")
 // 实例方法调用节点：$instance.method(params)
 method_call_node = { variable_ref ~ "(" ~ (param_pair ~ ("," ~ param_pair)*)? ~ ")" }
 
-// 节点内容：支持循环、遍历、new 实例化、方法调用、struct 花括号实例化、任务调用、赋值语法糖或纯 JSON/字符串
-node_content = _{ while_def | foreach_def | new_expr | method_call_node | struct_init | task_def | assignment_block | json_object | string }
+// return err { kind: "...", message: "..." } — 主动抛出类型化错误（Rust 风格）
+return_err = { "return" ~ "err" ~ json_object }
+
+// 节点内容：支持循环、遍历、return err、new 实例化、方法调用、struct 花括号实例化、任务调用、赋值语法糖或纯 JSON/字符串
+node_content = _{ while_def | foreach_def | return_err | new_expr | method_call_node | struct_init | task_def | assignment_block | json_object | string }
 // 节点定义：支持可选的函数参数 [name(params)] 和函数体 { ... }
 // struct_body 先试（字段是 id: type 形式），func_body 后试（字段是 id = value 形式）
 node_def = { "[" ~ identifier ~ func_params? ~ "]" ~ ":" ~ (struct_body | func_body | node_content) }
@@ -183,9 +188,12 @@ complex_edge_def = { node_ref ~ (edge_error | edge_condition) ~ "->" ~ node_ref 
 
 // --- Switch 表达式（多分支路由，只执行一个分支） ---
 // 语法：[node] -> switch $var { "case1": [target1], "case2": [target2], default: [fallback] }
+// 扩展：Result 路由 — [node] -> switch { ok: [next], err "timeout": [retry], err: [fallback] }
 switch_case_value = { string | number | boolean | var_or_ident }
 switch_default = { "default" }
-switch_case = { (switch_default | switch_case_value) ~ ":" ~ node_ref }
+switch_ok = { "ok" }
+switch_err = { "err" ~ string? }
+switch_case = { (switch_default | switch_ok | switch_err | switch_case_value) ~ ":" ~ node_ref }
 switch_body = { "{" ~ (switch_case ~ ","?)* ~ "}" }
 switch_subject = { var_or_ident | (!"{"  ~ ANY)+ }
 switch_edge_def = { node_ref ~ "->" ~ "switch" ~ switch_subject? ~ switch_body }

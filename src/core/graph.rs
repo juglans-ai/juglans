@@ -50,6 +50,8 @@ pub enum NodeType {
         method_name: String,
         args: HashMap<String, String>,
     },
+    /// return err { kind: "...", message: "..." } — explicit typed error (Rust-style)
+    ReturnErr(Value),
 }
 
 #[derive(Debug, Clone)]
@@ -65,6 +67,12 @@ pub struct SwitchCase {
     pub value: Option<String>,
     /// The target node ID
     pub target: String,
+    /// Result routing: ok case (node succeeded)
+    pub is_ok: bool,
+    /// Result routing: err case (node failed)
+    pub is_err: bool,
+    /// Error kind filter for err cases (e.g., err "timeout" → Some("timeout"))
+    pub err_kind: Option<String>,
 }
 
 /// Switch routing from a single source node

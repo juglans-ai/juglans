@@ -602,6 +602,45 @@ impl WorkflowExecutor {
                 context.emit_node_complete(&node.id, "assert", &result);
                 result
             }
+            NodeType::ReturnErr(err_obj) => {
+                debug!("│   ReturnErr: {:?}", err_obj);
+                context.emit_node_start(&node.id, "return_err", &HashMap::new());
+                // Render template variables in string fields that reference $variables
+                let rendered = if let Value::Object(map) = err_obj {
+                    let mut rendered_map = serde_json::Map::new();
+                    for (k, v) in map {
+                        if let Value::String(s) = v {
+                            if s.contains('$') || s.contains('{') {
+                                // Contains variable references — resolve
+                                let resolved = self.process_parameter(s, context).await.ok();
+                                rendered_map.insert(
+                                    k.clone(),
+                                    resolved.unwrap_or_else(|| Value::String(s.clone())),
+                                );
+                            } else {
+                                // Plain string — keep as-is
+                                rendered_map.insert(k.clone(), Value::String(s.clone()));
+                            }
+                        } else {
+                            rendered_map.insert(k.clone(), v.clone());
+                        }
+                    }
+                    Value::Object(rendered_map)
+                } else {
+                    err_obj.clone()
+                };
+                let kind = rendered
+                    .get("kind")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("custom");
+                let message = rendered
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("error");
+                let result: Result<Option<Value>> = Err(anyhow!("[{}] {}", kind, message));
+                context.emit_node_complete(&node.id, "return_err", &result);
+                result
+            }
             NodeType::AssignCall { var, action } => {
                 debug!("│   AssignCall: {} = {}(...)", var, action.name);
                 // Resolve params (same as Task)
@@ -1066,7 +1105,11 @@ impl WorkflowExecutor {
         }
     }
 
-    /// Store node execution result into context
+    /// Store node execution result into context.
+    ///
+    /// Result model (Rust-inspired):
+    /// - Ok: `$output` is the raw value directly (zero overhead)
+    /// - Err: `$output = { err: { kind, message, node } }` (structured error wrapper)
     fn store_node_result(node_id: &str, result: &Result<Option<Value>>, context: &WorkflowContext) {
         match result {
             Ok(Some(output)) => {
@@ -1092,6 +1135,20 @@ impl WorkflowExecutor {
             Err(e) => {
                 warn!("  [Output] Error for [{}]: {}", node_id, e);
                 error!("  ❌ Failed: {}", e);
+                let kind = classify_error(e);
+                let err_value = json!({
+                    "err": {
+                        "kind": kind,
+                        "message": e.to_string(),
+                        "node": node_id,
+                    }
+                });
+                // Result model: err info lives in $output itself
+                context
+                    .set(format!("{}.output", node_id), err_value.clone())
+                    .unwrap();
+                context.set("output".to_string(), err_value).unwrap();
+                // Backward compat: keep legacy $error and $nodeid.error
                 context
                     .set(format!("{}.error", node_id), json!(e.to_string()))
                     .unwrap();
@@ -1175,11 +1232,97 @@ impl WorkflowExecutor {
         let node_id = &workflow.graph[node_idx].id;
         let mut switch_matched = false;
 
+        // Check if this node has a Result switch route (ok/err cases)
+        let is_result_switch = workflow
+            .switch_routes
+            .get(node_id)
+            .map(|r| r.cases.iter().any(|c| c.is_ok || c.is_err))
+            .unwrap_or(false);
+
+        // For err "kind" matching, resolve the error kind from context
+        let error_kind = if !node_succeeded {
+            context.resolve_path("output").ok().flatten().and_then(|v| {
+                v.get("err")
+                    .and_then(|e| e.get("kind"))
+                    .and_then(|k| k.as_str())
+                    .map(|s| s.to_string())
+            })
+        } else {
+            None
+        };
+
+        // For result switches, use two-pass matching:
+        // Pass 1: ok + specific err "kind" cases (highest priority)
+        // Pass 2: catch-all err case (only if no specific match found)
+        if is_result_switch {
+            // Pass 1: ok and specific err "kind"
+            for edge in workflow.graph.edges(node_idx) {
+                let (edge_info, successor_idx) = (edge.weight(), edge.target());
+                if let Some(ref case_value) = edge_info.switch_case {
+                    if case_value == "__ok__" && node_succeeded && !switch_matched {
+                        switch_matched = true;
+                        info!(
+                            "  -> Switch ok, taking path to [{}]",
+                            workflow.graph[successor_idx].id
+                        );
+                        Self::activate_successor(successor_idx, workflow, in_degrees, ready_queue);
+                    } else if case_value.starts_with("__err_")
+                        && case_value.ends_with("__")
+                        && case_value != "__err__"
+                        && !node_succeeded
+                        && !switch_matched
+                    {
+                        let case_kind = &case_value[6..case_value.len() - 2];
+                        if error_kind.as_deref() == Some(case_kind) {
+                            switch_matched = true;
+                            info!(
+                                "  -> Switch err \"{}\", taking path to [{}]",
+                                case_kind, workflow.graph[successor_idx].id
+                            );
+                            Self::activate_successor(
+                                successor_idx,
+                                workflow,
+                                in_degrees,
+                                ready_queue,
+                            );
+                        }
+                    }
+                }
+            }
+            // Pass 2: catch-all err (only if no specific match)
+            if !switch_matched && !node_succeeded {
+                for edge in workflow.graph.edges(node_idx) {
+                    let (edge_info, successor_idx) = (edge.weight(), edge.target());
+                    if let Some(ref case_value) = edge_info.switch_case {
+                        if case_value == "__err__" && !switch_matched {
+                            switch_matched = true;
+                            info!(
+                                "  -> Switch err (catch-all), taking path to [{}]",
+                                workflow.graph[successor_idx].id
+                            );
+                            Self::activate_successor(
+                                successor_idx,
+                                workflow,
+                                in_degrees,
+                                ready_queue,
+                            );
+                        }
+                    }
+                }
+            }
+            // If result switch handled the error, clear the global error
+            if switch_matched && !node_succeeded {
+                context.set("error".to_string(), serde_json::Value::Null);
+            }
+        }
+
         for edge in workflow.graph.edges(node_idx) {
             let (edge_info, successor_idx) = (edge.weight(), edge.target());
             let mut proceed = false;
 
-            if edge_info.is_error_path {
+            if is_result_switch {
+                // Already handled above — skip result switch edges in main loop
+            } else if edge_info.is_error_path {
                 if !node_succeeded {
                     proceed = true;
                     info!(
@@ -1253,7 +1396,8 @@ impl WorkflowExecutor {
         }
 
         // Handle default switch case if no case matched
-        if switch_result.is_some() && !switch_matched {
+        let has_switch = switch_result.is_some() || is_result_switch;
+        if has_switch && !switch_matched {
             for edge in workflow.graph.edges(node_idx) {
                 let (edge_info, successor_idx) = (edge.weight(), edge.target());
                 if edge_info.switch_case.is_none()
@@ -1474,5 +1618,50 @@ impl WorkflowExecutor {
 
             Ok(())
         })
+    }
+}
+
+/// Classify an anyhow error into a kind string for structured error output.
+///
+/// Checks for `[kind]` prefix pattern (from `return err`), then falls back
+/// to heuristic keyword matching on the error message.
+fn classify_error(e: &anyhow::Error) -> String {
+    let msg = e.to_string();
+
+    // Check for explicit [kind] prefix (from return err / fail)
+    if msg.starts_with('[') {
+        if let Some(end) = msg.find(']') {
+            return msg[1..end].to_string();
+        }
+    }
+
+    // Heuristic classification based on error message keywords
+    let lower = msg.to_lowercase();
+    if lower.contains("timeout") || lower.contains("timed out") {
+        "timeout".to_string()
+    } else if lower.contains("connection refused")
+        || lower.contains("network")
+        || lower.contains("dns")
+        || lower.contains("connect error")
+    {
+        "network".to_string()
+    } else if lower.contains("not found") || lower.contains("no such file") {
+        "not_found".to_string()
+    } else if lower.contains("parse")
+        || lower.contains("invalid json")
+        || lower.contains("expected")
+    {
+        "parse".to_string()
+    } else if lower.contains("assertion") || lower.contains("assert") {
+        "assertion".to_string()
+    } else if lower.contains("python") || lower.contains("traceback") {
+        "python".to_string()
+    } else if lower.contains("permission")
+        || lower.contains("unauthorized")
+        || lower.contains("403")
+    {
+        "auth".to_string()
+    } else {
+        "unknown".to_string()
     }
 }

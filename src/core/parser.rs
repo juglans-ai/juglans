@@ -3,6 +3,8 @@ use crate::core::graph::{
     self, Action, ClassDef, ClassField, Edge, FunctionDef, Node, NodeType, SwitchCase, SwitchRoute,
     WorkflowGraph,
 };
+use crate::core::jwl_lexer::Lexer;
+use crate::core::jwl_parser::JwlParser;
 use anyhow::{anyhow, Result};
 use pest::iterators::Pair;
 use pest::Parser;
@@ -13,6 +15,10 @@ use std::collections::HashMap;
 #[derive(Parser)]
 #[grammar = "core/jwl.pest"]
 struct JwlGrammar;
+
+fn use_pest_parser() -> bool {
+    std::env::var("JUGLANS_PARSER").as_deref() == Ok("pest")
+}
 
 pub struct GraphParser;
 
@@ -91,6 +97,76 @@ impl GraphParser {
     }
 
     pub fn parse(content: &str) -> Result<WorkflowGraph> {
+        if !use_pest_parser() {
+            return Self::parse_rdp(content);
+        }
+        Self::parse_pest(content)
+    }
+
+    /// 解析 .jgflow 清单文件 — 只提取 metadata，不允许节点/边/类定义
+    pub fn parse_manifest(content: &str) -> Result<WorkflowGraph> {
+        if !use_pest_parser() {
+            return Self::parse_manifest_rdp(content);
+        }
+        Self::parse_manifest_pest(content)
+    }
+
+    /// 解析库文件 — 允许只包含 function 定义，无需 entry 节点或常规节点
+    pub fn parse_lib(content: &str) -> Result<WorkflowGraph> {
+        if !use_pest_parser() {
+            return Self::parse_lib_rdp(content);
+        }
+        Self::parse_lib_pest(content)
+    }
+
+    // ==================== RDP implementations ====================
+
+    fn parse_rdp(content: &str) -> Result<WorkflowGraph> {
+        let tokens = Lexer::new(content)
+            .tokenize()
+            .map_err(|e| anyhow!("JWL Compilation Syntax Error:\n{}", e))?;
+        let mut parser = JwlParser::new(&tokens, content);
+        let mut wf = parser.parse_workflow()?;
+
+        if wf.entry_node.is_empty() {
+            if let Some(first_idx) = wf.graph.node_indices().next() {
+                wf.entry_node = wf.graph[first_idx].id.clone();
+            } else {
+                return Err(anyhow!("Architecture Error: Workflow must define an 'entry' node or contain at least one valid node."));
+            }
+        }
+        Ok(wf)
+    }
+
+    fn parse_manifest_rdp(content: &str) -> Result<WorkflowGraph> {
+        let tokens = Lexer::new(content)
+            .tokenize()
+            .map_err(|e| anyhow!("Manifest Syntax Error:\n{}", e))?;
+        let mut parser = JwlParser::new(&tokens, content);
+        parser.parse_manifest()
+    }
+
+    fn parse_lib_rdp(content: &str) -> Result<WorkflowGraph> {
+        let tokens = Lexer::new(content)
+            .tokenize()
+            .map_err(|e| anyhow!("JWL Compilation Syntax Error:\n{}", e))?;
+        let mut parser = JwlParser::new(&tokens, content);
+        let mut wf = parser.parse_workflow()?;
+
+        if wf.entry_node.is_empty()
+            && wf.graph.node_indices().next().is_none()
+            && wf.functions.is_empty()
+        {
+            return Err(anyhow!(
+                "Library Error: Library file must define at least one function node."
+            ));
+        }
+        Ok(wf)
+    }
+
+    // ==================== Pest implementations (legacy) ====================
+
+    fn parse_pest(content: &str) -> Result<WorkflowGraph> {
         let mut pairs = JwlGrammar::parse(Rule::workflow, content)
             .map_err(|e| anyhow!("JWL Compilation Syntax Error:\n{}", e))?;
 
@@ -115,8 +191,7 @@ impl GraphParser {
         Ok(workflow_instance)
     }
 
-    /// 解析 .jgflow 清单文件 — 只提取 metadata，不允许节点/边/类定义
-    pub fn parse_manifest(content: &str) -> Result<WorkflowGraph> {
+    fn parse_manifest_pest(content: &str) -> Result<WorkflowGraph> {
         let mut pairs = JwlGrammar::parse(Rule::manifest, content)
             .map_err(|e| anyhow!("Manifest Syntax Error:\n{}", e))?;
 
@@ -132,12 +207,10 @@ impl GraphParser {
             }
         }
 
-        // 清单不需要 entry 节点
         Ok(workflow_instance)
     }
 
-    /// 解析库文件 — 允许只包含 function 定义，无需 entry 节点或常规节点
-    pub fn parse_lib(content: &str) -> Result<WorkflowGraph> {
+    fn parse_lib_pest(content: &str) -> Result<WorkflowGraph> {
         let mut pairs = JwlGrammar::parse(Rule::workflow, content)
             .map_err(|e| anyhow!("JWL Compilation Syntax Error:\n{}", e))?;
 
@@ -151,7 +224,6 @@ impl GraphParser {
             Self::parse_block(workflow_pair, &mut workflow_instance)?;
         }
 
-        // 库文件只需包含 function 定义，不强制要求 entry 节点
         if workflow_instance.entry_node.is_empty()
             && workflow_instance.graph.node_indices().next().is_none()
             && workflow_instance.functions.is_empty()
@@ -369,14 +441,10 @@ impl GraphParser {
             return Self::parse_function_def(node_id_str, params, content_node, workflow);
         }
 
-        // [name]: { func_body } without params
+        // [name]: { func_body } without params — expand compound block inline into DAG
+        // Parameterized functions [name(a,b)]: { ... } are already handled above.
         if content_node.as_rule() == Rule::func_body {
-            if graph::is_test_node_id(&node_id_str) {
-                // test_ blocks: expand into chained DAG nodes for test runner discovery
-                return Self::expand_test_block(node_id_str, content_node, workflow);
-            }
-            // Regular blocks: treat as function def
-            return Self::parse_function_def(node_id_str, Vec::new(), content_node, workflow);
+            return Self::expand_test_block(node_id_str, content_node, workflow);
         }
 
         // [name]: { struct_body } — 纯字段声明 → 存为 ClassDef（不进 DAG）
@@ -484,6 +552,14 @@ impl GraphParser {
                     params,
                 })
             }
+            Rule::return_err => {
+                // return err { kind: "...", message: "..." }
+                let json_pair = content_node.into_inner().next().unwrap();
+                let raw = json_pair.as_str();
+                let val: Value =
+                    serde_json::from_str(raw).unwrap_or(Value::String(raw.to_string()));
+                NodeType::ReturnErr(val)
+            }
             Rule::while_def => {
                 let mut w_it = content_node.into_inner();
                 let cond_text = w_it.next().unwrap().as_str().trim().to_string();
@@ -581,6 +657,13 @@ impl GraphParser {
                                     .trim()
                                     .to_string();
                                 NodeType::Assert(expr_str)
+                            }
+                            Rule::return_err => {
+                                let json_pair = inner_pair.into_inner().next().unwrap();
+                                let raw = json_pair.as_str();
+                                let val: Value = serde_json::from_str(raw)
+                                    .unwrap_or(Value::String(raw.to_string()));
+                                NodeType::ReturnErr(val)
                             }
                             Rule::assign_call => {
                                 let mut parts = inner_pair.into_inner();
@@ -728,6 +811,13 @@ impl GraphParser {
                         .trim()
                         .to_string();
                     NodeType::Assert(expr_str)
+                }
+                Rule::return_err => {
+                    let json_pair = inner_pair.into_inner().next().unwrap();
+                    let raw = json_pair.as_str();
+                    let val: Value =
+                        serde_json::from_str(raw).unwrap_or(Value::String(raw.to_string()));
+                    NodeType::ReturnErr(val)
                 }
                 Rule::assign_call => {
                     let mut parts = inner_pair.into_inner();
@@ -954,13 +1044,38 @@ impl GraphParser {
                             let mut case_it = case_item.into_inner();
                             let case_value_or_default = case_it.next().unwrap();
 
-                            let case_value =
-                                if case_value_or_default.as_rule() == Rule::switch_default {
-                                    None
-                                } else {
+                            let mut is_ok = false;
+                            let mut is_err = false;
+                            let mut err_kind: Option<String> = None;
+
+                            let case_value = match case_value_or_default.as_rule() {
+                                Rule::switch_default => None,
+                                Rule::switch_ok => {
+                                    is_ok = true;
+                                    Some("__ok__".to_string())
+                                }
+                                Rule::switch_err => {
+                                    is_err = true;
+                                    // Check for optional err kind: err "timeout"
+                                    let kind_str =
+                                        case_value_or_default.into_inner().next().map(|s| {
+                                            let raw = s.as_str().trim();
+                                            if raw.starts_with('"') && raw.ends_with('"') {
+                                                raw[1..raw.len() - 1].to_string()
+                                            } else {
+                                                raw.to_string()
+                                            }
+                                        });
+                                    err_kind = kind_str.clone();
+                                    Some(
+                                        kind_str
+                                            .map(|k| format!("__err_{}__", k))
+                                            .unwrap_or_else(|| "__err__".to_string()),
+                                    )
+                                }
+                                _ => {
                                     // It's a switch_case_value (string, number, boolean, or variable_ref)
                                     let val_str = case_value_or_default.as_str().trim();
-                                    // Remove quotes from strings
                                     let clean_val =
                                         if val_str.starts_with('"') && val_str.ends_with('"') {
                                             val_str[1..val_str.len() - 1].to_string()
@@ -968,7 +1083,8 @@ impl GraphParser {
                                             val_str.to_string()
                                         };
                                     Some(clean_val)
-                                };
+                                }
+                            };
 
                             let target_node = case_it.next().ok_or_else(|| {
                                 anyhow!(
@@ -986,12 +1102,15 @@ impl GraphParser {
                             cases.push(SwitchCase {
                                 value: case_value.clone(),
                                 target: target_id.clone(),
+                                is_ok,
+                                is_err,
+                                err_kind,
                             });
 
                             // Create edge with switch_case marker
                             let edge = Edge {
                                 condition: None,
-                                is_error_path: false,
+                                is_error_path: is_err,
                                 switch_case: case_value,
                             };
                             Self::commit_edge_to_graph(workflow, &from_id, &target_id, edge)?;

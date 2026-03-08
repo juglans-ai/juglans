@@ -969,28 +969,18 @@ impl JuglansRuntime for Jug0Client {
             tool_handler,
         } = req;
 
-        // 验证 agent_config 包含必须字段
+        // 验证 agent_config 包含必须字段（slug 必须，model 可选 — server 端可从 agent 配置中获取）
         if let Some(agent_obj) = agent_config.as_object() {
-            let required_fields = ["slug", "model"];
-            let mut missing_fields = Vec::new();
-
-            for field in required_fields {
-                if !agent_obj.contains_key(field) {
-                    missing_fields.push(field);
-                }
-            }
-
-            if !missing_fields.is_empty() {
+            if !agent_obj.contains_key("slug") {
                 return Err(anyhow!(
-                    "Agent configuration is incomplete. Missing required fields: {}\n\n\
+                    "Agent configuration is incomplete. Missing required field: slug\n\n\
                     💡 This usually means:\n\
-                       1. The agent file (.jgagent) is missing required fields: slug and model\n\
+                       1. The agent file (.jgagent) is missing required field: slug\n\
                        2. Or the jug0 server endpoint is incorrect\n\
                        3. Current jug0 endpoint: {}\n\
                        4. For local development, add [jug0] section in juglans.toml:\n\
                           [jug0]\n\
                           base_url = \"http://localhost:3000\"",
-                    missing_fields.join(", "),
                     self.base_url
                 ));
             }

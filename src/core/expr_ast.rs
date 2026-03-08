@@ -75,6 +75,12 @@ pub enum Expr {
         params: Vec<String>,
         body: Box<Expr>,
     },
+
+    /// Null-coalesce: `a ?? b` — returns `a` if non-null/non-err, else `b`
+    Coalesce {
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -2441,12 +2441,8 @@ async fn handle_test(path: Option<&Path>, filter: Option<&str>, format: &str) ->
     // Run all test files
     let mut all_results = Vec::new();
     for file in &test_files {
-        match runner.run_file(file).await {
-            Ok(mut file_result) => {
-                // Apply filter if specified
-                if let Some(filter_str) = filter {
-                    file_result.results.retain(|r| r.name.contains(filter_str));
-                }
+        match runner.run_file_filtered(file, filter).await {
+            Ok(file_result) => {
                 all_results.push(file_result);
             }
             Err(e) => {

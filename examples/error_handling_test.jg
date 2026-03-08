@@ -1,0 +1,23 @@
+name: "Rust-style Error Handling Test"
+version: "0.1.0"
+
+entry: [start]
+exit: [done]
+
+# Nodes
+[start]: return err { kind: "validation", message: "price is negative" }
+[on_success]: notify(message="Success!")
+[on_validation_error]: notify(message="Validation error caught!")
+[on_generic_error]: notify(message="Generic error caught!")
+[done]: notify(message="Done")
+
+# Result routing via switch { ok/err }
+[start] -> switch {
+    ok: [on_success]
+    err "validation": [on_validation_error]
+    err: [on_generic_error]
+}
+
+[on_validation_error] -> [done]
+[on_success] -> [done]
+[on_generic_error] -> [done]

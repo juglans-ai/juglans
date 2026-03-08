@@ -180,6 +180,7 @@ impl ExprEvaluator {
                 let inner = pair.into_inner().next().unwrap();
                 self.parse_expression(inner)
             }
+            Rule::coalesce_expr => self.parse_coalesce_expr(pair),
             Rule::pipe_expr => self.parse_pipe_expr(pair),
             Rule::or_expr => self.parse_binary_left(pair, |op| match op.as_str() {
                 "or" | "||" => Some(BinOp::Or),
@@ -268,6 +269,23 @@ impl ExprEvaluator {
                 pair.as_str()
             )),
         }
+    }
+
+    fn parse_coalesce_expr(&self, pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
+        let mut inner = pair.into_inner();
+        let mut expr = self.parse_expression(inner.next().unwrap())?;
+
+        while inner.peek().is_some() {
+            let op = inner.next().unwrap();
+            if op.as_rule() == Rule::coalesce_op {
+                let right = self.parse_expression(inner.next().unwrap())?;
+                expr = Expr::Coalesce {
+                    left: Box::new(expr),
+                    right: Box::new(right),
+                };
+            }
+        }
+        Ok(expr)
     }
 
     fn parse_pipe_expr(&self, pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
@@ -704,6 +722,24 @@ impl ExprEvaluator {
                         all_args.push(self.eval_expr(a, resolver)?);
                     }
                     call_builtin(filter, &all_args)
+                }
+            }
+
+            Expr::Coalesce { left, right } => {
+                match self.eval_expr(left, resolver) {
+                    Ok(val) => {
+                        // null → fallback; { err: ... } → fallback; anything else → keep
+                        if val.is_null() {
+                            self.eval_expr(right, resolver)
+                        } else if val.is_object()
+                            && val.as_object().unwrap().contains_key("err")
+                        {
+                            self.eval_expr(right, resolver)
+                        } else {
+                            Ok(val)
+                        }
+                    }
+                    Err(_) => self.eval_expr(right, resolver),
                 }
             }
 
@@ -2615,6 +2651,32 @@ fn call_builtin(name: &str, args: &[Value]) -> Result<Value> {
             match input.trim().to_lowercase().as_str() {
                 "y" | "yes" | "" => Ok(json!(true)),
                 _ => Ok(json!(false)),
+            }
+        }
+
+        // ── Result inspection (Rust-style) ──
+        "is_err" => {
+            require_args(name, args, 1)?;
+            match &args[0] {
+                Value::Object(obj) => Ok(Value::Bool(obj.contains_key("err"))),
+                Value::Null => Ok(Value::Bool(true)),
+                _ => Ok(Value::Bool(false)),
+            }
+        }
+        "is_ok" => {
+            require_args(name, args, 1)?;
+            match &args[0] {
+                Value::Object(obj) => Ok(Value::Bool(!obj.contains_key("err"))),
+                Value::Null => Ok(Value::Bool(false)),
+                _ => Ok(Value::Bool(true)),
+            }
+        }
+        "unwrap_or" => {
+            require_args(name, args, 2)?;
+            match &args[0] {
+                Value::Null => Ok(args[1].clone()),
+                Value::Object(obj) if obj.contains_key("err") => Ok(args[1].clone()),
+                _ => Ok(args[0].clone()),
             }
         }
 

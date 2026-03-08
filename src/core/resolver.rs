@@ -336,6 +336,9 @@ fn merge_subgraph(
                 .map(|c| SwitchCase {
                     value: c.value.clone(),
                     target: format!("{}.{}", prefix, c.target),
+                    is_ok: c.is_ok,
+                    is_err: c.is_err,
+                    err_kind: c.err_kind.clone(),
                 })
                 .collect(),
         };
@@ -547,6 +550,10 @@ fn prefix_node_type(
                     params: prefixed_params,
                 },
             }
+        }
+        NodeType::ReturnErr(val) => {
+            // ReturnErr contains a JSON object — no variable references to prefix
+            NodeType::ReturnErr(val.clone())
         }
     }
 }

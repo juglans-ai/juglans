@@ -58,25 +58,27 @@ impl FileTestResult {
 /// Main test runner
 pub struct TestRunner {
     runtime: Arc<dyn JuglansRuntime>,
-    prompt_registry: Arc<PromptRegistry>,
     agent_registry: Arc<AgentRegistry>,
 }
 
 impl TestRunner {
     pub fn new(
         runtime: Arc<dyn JuglansRuntime>,
-        prompt_registry: Arc<PromptRegistry>,
+        _prompt_registry: Arc<PromptRegistry>,
         agent_registry: Arc<AgentRegistry>,
     ) -> Self {
         Self {
             runtime,
-            prompt_registry,
             agent_registry,
         }
     }
 
     /// Run all tests in a single .jg file
-    pub async fn run_file(&self, path: &Path) -> Result<FileTestResult> {
+    pub async fn run_file_filtered(
+        &self,
+        path: &Path,
+        filter: Option<&str>,
+    ) -> Result<FileTestResult> {
         let content = std::fs::read_to_string(path)
             .map_err(|e| anyhow!("Failed to read {}: {}", path.display(), e))?;
 
@@ -93,10 +95,24 @@ impl TestRunner {
             });
         }
 
-        // Create executor
+        // Load prompts declared in the test file (needed for {% if %} / {% for %} template logic)
+        // Agents are NOT loaded locally — they are resolved via jug0 server which has tool resources
+        let base_dir = path.parent().unwrap_or(Path::new("."));
+        let mut prompt_registry = PromptRegistry::new();
+
+        if !workflow.prompt_patterns.is_empty() {
+            let resolved: Vec<String> = workflow
+                .prompt_patterns
+                .iter()
+                .map(|p| base_dir.join(p).to_string_lossy().to_string())
+                .collect();
+            let _ = prompt_registry.load_from_paths(&resolved);
+        }
+
+        // Create executor with loaded prompt registry
         let executor = Arc::new(
             WorkflowExecutor::new(
-                self.prompt_registry.clone(),
+                Arc::new(prompt_registry),
                 self.agent_registry.clone(),
                 self.runtime.clone(),
             )
@@ -108,10 +124,15 @@ impl TestRunner {
 
         let workflow_arc = Arc::new(workflow);
 
-        // Run each test subgraph
+        // Run each test subgraph (skip non-matching if filter is set)
         let mut results = Vec::new();
         for root_idx in &test_roots {
             let root_name = workflow_arc.graph[*root_idx].id.clone();
+            if let Some(f) = filter {
+                if !root_name.contains(f) {
+                    continue;
+                }
+            }
             let subgraph_nodes = collect_subgraph(&workflow_arc, *root_idx);
             let result = self
                 .run_subgraph_test(&executor, &workflow_arc, &root_name, &subgraph_nodes)

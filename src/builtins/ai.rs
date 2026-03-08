@@ -1485,13 +1485,36 @@ impl Tool for Prompt {
             self.runtime.fetch_prompt(target_slug).await?
         };
 
-        let template_body_content = match PromptParser::parse(&template_raw_string) {
-            Ok(parsed_resource) => parsed_resource.content,
-            Err(_) => template_raw_string,
+        let finalized_output = match PromptParser::parse(&template_raw_string) {
+            Ok(parsed_resource) if !parsed_resource.ast.is_empty() => {
+                // Build context JSON from params + workflow context
+                let mut ctx_map = serde_json::Map::new();
+                // Add explicit params first
+                for (k, v) in params {
+                    if k != "slug" && k != "file" {
+                        let val = serde_json::from_str(v).unwrap_or(Value::String(v.clone()));
+                        ctx_map.insert(k.clone(), val);
+                    }
+                }
+                // Add workflow context variables as fallback
+                if let Ok(Some(ctx_val)) = context.resolve_path("ctx") {
+                    if let Some(obj) = ctx_val.as_object() {
+                        for (k, v) in obj {
+                            if !ctx_map.contains_key(k) {
+                                ctx_map.insert(k.clone(), v.clone());
+                            }
+                        }
+                    }
+                }
+                let ctx_json = Value::Object(ctx_map);
+                let renderer = crate::core::renderer::JwlRenderer::new();
+                renderer.render(&parsed_resource.ast, &ctx_json)?
+            }
+            Ok(parsed_resource) => {
+                self.render_template_verbose(&parsed_resource.content, params, context)
+            }
+            Err(_) => self.render_template_verbose(&template_raw_string, params, context),
         };
-
-        let finalized_output =
-            self.render_template_verbose(&template_body_content, params, context);
 
         Ok(Some(Value::String(finalized_output)))
     }

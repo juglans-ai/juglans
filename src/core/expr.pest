@@ -1,7 +1,7 @@
 // Juglans Expression Language (JEL)
 // Python-like expression grammar for workflow conditions, parameters, and template interpolation.
 
-WHITESPACE = _{ " " | "\t" }
+WHITESPACE = _{ " " | "\t" | NEWLINE }
 
 // ========== Literals ==========
 
@@ -88,7 +88,12 @@ or_expr  = { and_expr ~ (or_op ~ and_expr)* }
 pipe_filter = { identifier ~ ("(" ~ call_args ~ ")")? }
 pipe_expr   = { or_expr ~ ("|" ~ pipe_filter)* }
 
+// ========== Null coalesce (Rust-inspired ?? operator) ==========
+
+coalesce_op   = { "??" }
+coalesce_expr = { pipe_expr ~ (coalesce_op ~ pipe_expr)* }
+
 // ========== Inner expression (recursive) vs Root (entry point) ==========
 
-expr       = { pipe_expr }
-expression = { SOI ~ pipe_expr ~ EOI }
+expr       = { coalesce_expr }
+expression = { SOI ~ coalesce_expr ~ EOI }

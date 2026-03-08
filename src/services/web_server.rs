@@ -41,6 +41,81 @@ use crate::services::interface::JuglansRuntime;
 use crate::services::jug0::Jug0Client;
 use crate::services::prompt_loader::PromptRegistry;
 
+// --- File Watcher (hot-reload feedback) ---
+
+fn watch_workspace(project_root: PathBuf) {
+    use notify::{Config, EventKind, RecursiveMode, Watcher};
+    use std::sync::mpsc;
+
+    let (tx, rx) = mpsc::channel();
+    let mut watcher = match notify::RecommendedWatcher::new(tx, Config::default()) {
+        Ok(w) => w,
+        Err(e) => {
+            warn!("File watcher failed to start: {}", e);
+            return;
+        }
+    };
+
+    if let Err(e) = watcher.watch(&project_root, RecursiveMode::Recursive) {
+        warn!("File watcher failed to watch {:?}: {}", project_root, e);
+        return;
+    }
+
+    info!("👀 Watching {:?} for file changes...", project_root);
+
+    let extensions = ["jg", "jgflow", "jgprompt", "jgagent"];
+
+    for event in rx {
+        if let Ok(event) = event {
+            if !matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) {
+                continue;
+            }
+            for path in &event.paths {
+                let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+                if !extensions.contains(&ext) {
+                    continue;
+                }
+                let rel = path.strip_prefix(&project_root).unwrap_or(path);
+                log_file_change(path, rel, ext);
+            }
+        }
+    }
+}
+
+fn log_file_change(path: &Path, rel: &Path, ext: &str) {
+    use crate::core::agent_parser::AgentParser;
+
+    match ext {
+        "jgagent" => {
+            if let Ok(content) = fs::read_to_string(path) {
+                match AgentParser::parse(&content) {
+                    Ok(agent) => info!(
+                        "🔄 [Hot-reload] {} — agent: {}, model: {}, temp: {}",
+                        rel.display(),
+                        agent.slug,
+                        agent.model,
+                        agent
+                            .temperature
+                            .map(|t| t.to_string())
+                            .unwrap_or("-".into())
+                    ),
+                    Err(e) => warn!("🔄 [Hot-reload] {} — parse error: {}", rel.display(), e),
+                }
+            }
+        }
+        "jgprompt" => {
+            info!("🔄 [Hot-reload] {} — prompt updated", rel.display());
+        }
+        "jg" => {
+            info!("🔄 [Hot-reload] {} — workflow updated", rel.display());
+        }
+        "jgflow" => {
+            info!("🔄 [Hot-reload] {} — flow metadata updated", rel.display());
+        }
+        _ => {}
+    }
+}
+
 // --- API Models (兼容 Jug0) ---
 
 #[derive(Serialize)]
@@ -994,6 +1069,12 @@ pub async fn start_web_server(
         info!("   - All other routes -> serve() workflow");
     }
     info!("--------------------------------------------------");
+
+    // File watcher for hot-reload feedback
+    tokio::task::spawn_blocking({
+        let project_root = project_root.clone();
+        move || watch_workspace(project_root)
+    });
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     info!("🚀 Server is ready and waiting for requests...");
