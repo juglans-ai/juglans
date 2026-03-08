@@ -558,6 +558,10 @@ impl<'a> JwlParser<'a> {
                 // Could be: struct_body, func_body, json_object, or struct_init
                 if self.is_struct_body() {
                     self.parse_struct_body_into_class(&node_id, wf)?;
+                } else if self.is_json_object() {
+                    // JSON object literal: { "key": value, ... }
+                    let val = self.parse_json_object_literal()?;
+                    self.add_node(wf, &node_id, NodeType::Literal(val))?;
                 } else {
                     // Compound block (func_body) — expand inline into DAG
                     self.parse_compound_block(&node_id, wf)?;
@@ -686,6 +690,111 @@ impl<'a> JwlParser<'a> {
             return false;
         }
         matches!(self.tokens[i].kind, TokenKind::Colon)
+    }
+
+    /// Check if current `{` starts a JSON object literal (string keys: `{ "key": ... }`)
+    fn is_json_object(&self) -> bool {
+        let mut i = self.pos + 1; // skip {
+        while i < self.tokens.len() && matches!(self.tokens[i].kind, TokenKind::Newline) {
+            i += 1;
+        }
+        if i >= self.tokens.len() {
+            return false;
+        }
+        matches!(&self.tokens[i].kind, TokenKind::String(_))
+    }
+
+    /// Parse a JSON object literal: `{ "key": value, ... }`
+    /// Consumes tokens from `{` through `}` and returns a serde_json::Value::Object.
+    fn parse_json_object_literal(&mut self) -> Result<serde_json::Value> {
+        self.expect(&TokenKind::LBrace)?;
+        self.skip_newlines();
+
+        let mut map = serde_json::Map::new();
+
+        while !matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
+            // Key must be a string
+            let key = match self.peek_kind().clone() {
+                TokenKind::String(s) => {
+                    self.advance();
+                    strip_string_quotes(&s)
+                }
+                _ => {
+                    let tok = self.peek().clone();
+                    return Err(self.error_at(
+                        tok.span,
+                        format!(
+                            "Expected string key in JSON object, got {}",
+                            tok.kind.describe()
+                        ),
+                    ));
+                }
+            };
+
+            self.expect(&TokenKind::Colon)?;
+
+            // Value: string, number, true, false, null, nested object, array
+            let value = self.parse_json_value()?;
+            map.insert(key, value);
+
+            self.skip_newlines();
+            if matches!(self.peek_kind(), TokenKind::Comma) {
+                self.advance();
+            }
+            self.skip_newlines();
+        }
+
+        self.expect(&TokenKind::RBrace)?;
+        Ok(serde_json::Value::Object(map))
+    }
+
+    /// Parse a single JSON value (string, number, bool, null, object, array).
+    fn parse_json_value(&mut self) -> Result<serde_json::Value> {
+        match self.peek_kind().clone() {
+            TokenKind::String(s) => {
+                self.advance();
+                Ok(serde_json::Value::String(strip_string_quotes(&s)))
+            }
+            TokenKind::Number(n) => {
+                self.advance();
+                Ok(serde_json::from_str(&n).unwrap_or(serde_json::Value::String(n)))
+            }
+            TokenKind::True => {
+                self.advance();
+                Ok(serde_json::Value::Bool(true))
+            }
+            TokenKind::False => {
+                self.advance();
+                Ok(serde_json::Value::Bool(false))
+            }
+            TokenKind::Null => {
+                self.advance();
+                Ok(serde_json::Value::Null)
+            }
+            TokenKind::LBrace => self.parse_json_object_literal(),
+            TokenKind::LBracket => {
+                self.advance(); // [
+                let mut arr = Vec::new();
+                self.skip_newlines();
+                while !matches!(self.peek_kind(), TokenKind::RBracket | TokenKind::Eof) {
+                    arr.push(self.parse_json_value()?);
+                    self.skip_newlines();
+                    if matches!(self.peek_kind(), TokenKind::Comma) {
+                        self.advance();
+                    }
+                    self.skip_newlines();
+                }
+                self.expect(&TokenKind::RBracket)?;
+                Ok(serde_json::Value::Array(arr))
+            }
+            _ => {
+                let tok = self.peek().clone();
+                Err(self.error_at(
+                    tok.span,
+                    format!("Expected JSON value, got {}", tok.kind.describe()),
+                ))
+            }
+        }
     }
 
     fn is_struct_init(&self, _first_ident: &str) -> bool {
