@@ -729,10 +729,10 @@ impl ExprEvaluator {
                 match self.eval_expr(left, resolver) {
                     Ok(val) => {
                         // null → fallback; { err: ... } → fallback; anything else → keep
-                        if val.is_null() {
-                            self.eval_expr(right, resolver)
-                        } else if val.is_object()
-                            && val.as_object().unwrap().contains_key("err")
+                        if val.is_null()
+                            || val
+                                .as_object()
+                                .is_some_and(|obj| obj.contains_key("err"))
                         {
                             self.eval_expr(right, resolver)
                         } else {

@@ -1312,7 +1312,7 @@ impl WorkflowExecutor {
             }
             // If result switch handled the error, clear the global error
             if switch_matched && !node_succeeded {
-                context.set("error".to_string(), serde_json::Value::Null);
+                let _ = context.set("error".to_string(), serde_json::Value::Null);
             }
         }
 

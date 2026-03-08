@@ -110,6 +110,7 @@ impl TokenKind {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
 pub struct Span {
     pub start: usize,
     pub end: usize,

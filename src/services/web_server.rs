@@ -65,19 +65,17 @@ fn watch_workspace(project_root: PathBuf) {
 
     let extensions = ["jg", "jgflow", "jgprompt", "jgagent"];
 
-    for event in rx {
-        if let Ok(event) = event {
-            if !matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) {
+    for event in rx.into_iter().flatten() {
+        if !matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) {
+            continue;
+        }
+        for path in &event.paths {
+            let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+            if !extensions.contains(&ext) {
                 continue;
             }
-            for path in &event.paths {
-                let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
-                if !extensions.contains(&ext) {
-                    continue;
-                }
-                let rel = path.strip_prefix(&project_root).unwrap_or(path);
-                log_file_change(path, rel, ext);
-            }
+            let rel = path.strip_prefix(&project_root).unwrap_or(path);
+            log_file_change(path, rel, ext);
         }
     }
 }

@@ -36,11 +36,6 @@ impl<'a> JwlParser<'a> {
         &self.peek().kind
     }
 
-    fn peek_ahead(&self, offset: usize) -> &TokenKind {
-        let idx = (self.pos + offset).min(self.tokens.len() - 1);
-        &self.tokens[idx].kind
-    }
-
     fn advance(&mut self) -> &Token {
         let tok = &self.tokens[self.pos.min(self.tokens.len() - 1)];
         if self.pos < self.tokens.len() {
@@ -53,10 +48,6 @@ impl<'a> JwlParser<'a> {
         while matches!(self.peek_kind(), TokenKind::Newline) {
             self.advance();
         }
-    }
-
-    fn at(&self, kind: &TokenKind) -> bool {
-        std::mem::discriminant(self.peek_kind()) == std::mem::discriminant(kind)
     }
 
     fn at_eof(&self) -> bool {
@@ -1657,9 +1648,8 @@ fn commit_edge_to_graph(wf: &mut WorkflowGraph, f_id: &str, t_id: &str, e: Edge)
 fn strip_string_quotes(s: &str) -> String {
     if s.starts_with("\"\"\"") && s.ends_with("\"\"\"") && s.len() >= 6 {
         s[3..s.len() - 3].to_string()
-    } else if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {
-        s[1..s.len() - 1].to_string()
-    } else if s.starts_with('\'') && s.ends_with('\'') && s.len() >= 2 {
+    } else if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\''))
+    {
         s[1..s.len() - 1].to_string()
     } else {
         s.to_string()

@@ -1,6 +1,6 @@
 // src/core/parser.rs
 use crate::core::graph::{
-    self, Action, ClassDef, ClassField, Edge, FunctionDef, Node, NodeType, SwitchCase, SwitchRoute,
+    Action, ClassDef, ClassField, Edge, FunctionDef, Node, NodeType, SwitchCase, SwitchRoute,
     WorkflowGraph,
 };
 use crate::core::jwl_lexer::Lexer;
@@ -151,7 +151,7 @@ impl GraphParser {
             .tokenize()
             .map_err(|e| anyhow!("JWL Compilation Syntax Error:\n{}", e))?;
         let mut parser = JwlParser::new(&tokens, content);
-        let mut wf = parser.parse_workflow()?;
+        let wf = parser.parse_workflow()?;
 
         if wf.entry_node.is_empty()
             && wf.graph.node_indices().next().is_none()
