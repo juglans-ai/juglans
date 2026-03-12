@@ -2,7 +2,7 @@
 
 use include_dir::{include_dir, Dir};
 
-// 【修改】增加 [server] 和 workspace 资源配置部分
+// Added [server] and workspace resource configuration sections
 pub const TPL_TOML: &str = r#"[account]
 id = "u_demo"
 name = "Demo User"

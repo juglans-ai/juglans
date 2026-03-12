@@ -1,107 +1,107 @@
 # How to Test Workflows
 
-本指南介绍如何验证和测试 Juglans workflow。
+This guide covers how to validate and test Juglans workflows.
 
 ## juglans check -- Static Validation
 
-`juglans check` 对 `.jg`、`.jgagent`、`.jgprompt` 文件进行静态语法验证，不执行任何工具调用：
+`juglans check` performs static syntax validation on `.jg`, `.jgagent`, and `.jgprompt` files without executing any tool calls:
 
 ```bash
-# 检查当前目录所有文件
+# Check all files in the current directory
 juglans check
 
-# 检查指定目录
+# Check a specific directory
 juglans check ./src/
 
-# 检查单个文件
+# Check a single file
 juglans check src/main.jg
 
-# 显示所有警告
+# Show all warnings
 juglans check --all
 
-# JSON 输出（适合程序解析）
+# JSON output (suitable for programmatic parsing)
 juglans check --format json
 ```
 
-检查内容：
+What it checks:
 
-- 语法正确性（节点定义、边定义、metadata）
-- 节点引用一致性（边引用的节点必须已定义）
-- Entry/exit 节点是否存在
-- 无环检测
+- Syntax correctness (node definitions, edge definitions, metadata)
+- Node reference consistency (nodes referenced by edges must be defined)
+- Entry node inference (topological sort; nodes with in-degree 0)
+- Cycle detection
 
 ## juglans test -- Automated Testing
 
-`juglans test` 提供 AI workflow 的自动化测试能力。详细设计参见 [juglans test 设计文档](./juglans-test.md)。
+`juglans test` provides automated testing capabilities for AI workflows. See the [juglans test design document](./juglans-test.md) for details.
 
-核心能力：
+Core capabilities:
 
-- **节点级测试** -- 单独测试某个节点，自动 mock 依赖
-- **语义断言** -- 用 AI 判断输出质量（而非字符串精确匹配）
-- **快照回归** -- 记录每次执行结果，自动检测变化
+- **Node-level testing** -- Test individual nodes in isolation with automatic dependency mocking
+- **Semantic assertions** -- Use AI to evaluate output quality (rather than exact string matching)
+- **Snapshot regression** -- Record each execution result and automatically detect changes
 
 ## Manual Testing
 
-手动运行 workflow 并传入输入数据：
+Run a workflow manually and pass input data:
 
 ```bash
-# 基本执行
+# Basic execution
 juglans src/main.jg
 
-# 传入 JSON 输入
+# Pass JSON input
 juglans src/main.jg --input '{"query": "Hello"}'
 
-# 从文件读取输入
+# Read input from a file
 juglans src/main.jg --input-file input.json
 
-# 详细模式（查看每个节点的输入输出）
+# Verbose mode (view each node's input and output)
 juglans src/main.jg --input '{"query": "test"}' --verbose
 
-# 只解析不执行（验证结构）
+# Parse only, do not execute (verify structure)
 juglans src/main.jg --dry-run
 
-# JSON 格式输出（方便程序处理）
+# JSON output format (convenient for programmatic processing)
 juglans src/main.jg --output-format json
 ```
 
-单独测试各类资源：
+Test individual resource types:
 
 ```bash
-# 测试 Agent（交互模式）
+# Test an Agent (interactive mode)
 juglans src/agents/assistant.jgagent
 
-# 测试 Agent（单条消息）
+# Test an Agent (single message)
 juglans src/agents/assistant.jgagent --message "What is Rust?"
 
-# 测试 Prompt（渲染模板）
+# Test a Prompt (render the template)
 juglans src/prompts/greeting.jgprompt --input '{"name": "Alice"}'
 ```
 
 ## doctest -- Validate Documentation
 
-`juglans doctest` 从 Markdown 文件中提取 ` ```juglans ` 代码块，验证其语法：
+`juglans doctest` extracts ` ```juglans ` code blocks from Markdown files and validates their syntax:
 
 ```bash
-# 验证单个文件
+# Validate a single file
 juglans doctest docs/guide/concepts.md
 
-# 验证整个文档目录
+# Validate the entire docs directory
 juglans doctest docs/
 
-# JSON 格式
+# JSON output
 juglans doctest docs/ --format json
 ```
 
-编写可通过 doctest 的代码块规则：
+Rules for writing code blocks that pass doctest:
 
-1. 节点定义必须在边定义之前
-2. 边引用的节点必须已定义
-3. 不需要验证的代码块加 `ignore` 标记
+1. Node definitions must appear before edge definitions
+2. Nodes referenced by edges must already be defined
+3. Code blocks that should not be validated must be marked with `ignore`
 
-示例：
+Example:
 
 ```juglans
-# 这个代码块会被 doctest 验证
+# This code block will be validated by doctest
 [start]: print(message="hello")
 [end]: print(message="done")
 [start] -> [end]
@@ -109,7 +109,7 @@ juglans doctest docs/ --format json
 
 ## CI Integration
 
-在 GitHub Actions 中集成 Juglans 检查：
+Integrate Juglans checks into GitHub Actions:
 
 ```yaml
 # .github/workflows/check.yml
@@ -134,24 +134,24 @@ jobs:
         run: juglans doctest ./docs/
 ```
 
-Exit code 说明：
+Exit code reference:
 
 | Command | Exit 0 | Exit 1 |
 |---------|--------|--------|
-| `juglans check` | 所有文件验证通过 | 存在语法错误 |
-| `juglans doctest` | 所有代码块解析通过 | 存在解析失败的代码块 |
+| `juglans check` | All files pass validation | Syntax errors found |
+| `juglans doctest` | All code blocks parse successfully | One or more code blocks failed to parse |
 
-两个命令都适合直接在 CI pipeline 中使用，无需额外配置。
+Both commands are suitable for direct use in CI pipelines with no additional configuration required.
 
 ## Best Practices
 
-1. **Commit 前** -- 运行 `juglans check` 确保语法正确
-2. **文档更新后** -- 运行 `juglans doctest docs/` 确保示例代码有效
-3. **CI 中** -- 同时运行 `check` 和 `doctest`，对应不同 step
-4. **手动测试** -- 使用 `--verbose` 查看详细执行过程，用 `--dry-run` 快速验证结构
+1. **Before committing** -- Run `juglans check` to ensure correct syntax
+2. **After updating docs** -- Run `juglans doctest docs/` to ensure example code is valid
+3. **In CI** -- Run both `check` and `doctest` as separate steps
+4. **Manual testing** -- Use `--verbose` to view detailed execution and `--dry-run` to quickly verify structure
 
 ## Next Steps
 
-- [Debugging](./debugging.md) -- 调试技巧
-- [Error Handling](./error-handling.md) -- 在 workflow 中处理错误
-- [CLI Reference](../reference/cli.md) -- 完整命令参考
+- [Debugging](./debugging.md) -- Debugging tips
+- [Error Handling](./error-handling.md) -- Handling errors in workflows
+- [CLI Reference](../reference/cli.md) -- Complete command reference

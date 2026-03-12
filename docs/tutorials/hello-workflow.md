@@ -1,10 +1,10 @@
 # Tutorial 1: Hello Workflow
 
-本章结束后你将理解四个核心概念：**节点（Node）**、**边（Edge）**、**工具（Tool）**，以及一个 `.jg` 文件的基本结构。
+By the end of this chapter, you will understand four core concepts: **Nodes**, **Edges**, **Tools**, and the basic structure of a `.jg` file.
 
-## 最小 workflow
+## Minimal Workflow
 
-创建一个文件 `hello.jg`，写入以下内容：
+Create a file called `hello.jg` with the following content:
 
 ```juglans
 [greet]: print(message="Hello!")
@@ -12,30 +12,30 @@
 [greet] -> [done]
 ```
 
-运行它：
+Run it:
 
 ```bash
 juglans hello.jg
 ```
 
-输出：
+Output:
 
 ```
 Hello!
 Done.
 ```
 
-三行代码，三个概念：
+Three lines of code, three concepts:
 
-- `[greet]` 和 `[done]` 是**节点**。方括号包裹一个唯一的名字，代表 workflow 中的一个执行单元。
-- `print(message="Hello!")` 是**工具调用**。`print` 是工具名，`message` 是参数。节点通过 `:` 绑定一个工具调用。
-- `[greet] -> [done]` 是**边**。箭头 `->` 表示执行顺序：`greet` 完成后执行 `done`。
+- `[greet]` and `[done]` are **nodes**. Square brackets wrap a unique name, representing a single execution unit in the workflow.
+- `print(message="Hello!")` is a **tool call**. `print` is the tool name, `message` is the parameter. A node binds a tool call using `:`.
+- `[greet] -> [done]` is an **edge**. The arrow `->` defines execution order: `done` runs after `greet` completes.
 
-一个 workflow 就是"用边把节点连起来"。
+A workflow is simply "connecting nodes with edges."
 
-## 多节点链式执行
+## Multi-Node Chain Execution
 
-节点可以用 `->` 串成任意长度的链：
+Nodes can be chained into a sequence of any length using `->`:
 
 ```juglans
 [step1]: print(message="Step 1: Preparing data")
@@ -45,21 +45,17 @@ Done.
 [step1] -> [step2] -> [step3] -> [step4]
 ```
 
-执行顺序严格遵循边的方向。Juglans 在内部将所有节点和边构建成一个 **DAG（有向无环图）**，然后按**拓扑排序**决定执行顺序——简单来说，就是"先做没有依赖的事，再做有依赖的事"。
+Execution order strictly follows the direction of the edges. Internally, Juglans builds all nodes and edges into a **DAG (Directed Acyclic Graph)** and determines execution order via **topological sort** -- in simple terms, "do things with no dependencies first, then do things that depend on them."
 
-在线性链中，拓扑排序的结果就是你写的顺序：step1, step2, step3, step4。
+In a linear chain, the topological sort result matches the order you wrote: step1, step2, step3, step4.
 
-## 添加 metadata
+## Entry Nodes
 
-到目前为止的例子都能运行，但缺少描述信息。一个完整的 `.jg` 文件通常在顶部声明 **metadata**：
+All examples so far have worked -- but you might wonder: how does Juglans know which node to start from?
+
+The answer is **topological sort**. Juglans analyzes all edges and identifies nodes with **in-degree 0** (no incoming edges) as entry points. In the example below, `greet` has no node pointing to it, so it automatically becomes the entry node:
 
 ```juglans
-name: "My First Workflow"
-version: "0.1.0"
-
-entry: [greet]
-exit: [done]
-
 [greet]: print(message="Hello, Juglans!")
 [log]: print(message="Workflow is running...")
 [done]: print(message="Goodbye!")
@@ -67,24 +63,15 @@ exit: [done]
 [greet] -> [log] -> [done]
 ```
 
-逐项解释：
+No extra declarations needed -- just define your nodes and edges clearly, and the execution order is determined naturally.
 
-| 字段 | 作用 |
-|------|------|
-| `name` | Workflow 的名称，用于展示和检索 |
-| `version` | 版本号，用于追踪变更 |
-| `entry` | **入口节点**——执行从这里开始 |
-| `exit` | **出口节点**——执行到这里结束 |
+## Exploring More Tools
 
-`entry` 和 `exit` 不是必须的。省略时，Juglans 会自动推断：没有入边的节点是入口，没有出边的节点是出口。但显式声明让意图更清晰，在复杂 workflow 中尤其重要。
-
-## 认识更多工具
-
-`print` 适合调试，但 Juglans 内置了更多工具。以下是最常用的三个：
+`print` is great for debugging, but Juglans comes with more built-in tools. Here are the three most commonly used ones:
 
 ### print()
 
-最简单的输出工具，将 `message` 参数的值打印到控制台。
+The simplest output tool. Prints the value of the `message` parameter to the console.
 
 ```juglans
 [hello]: print(message="Hello, World!")
@@ -92,12 +79,9 @@ exit: [done]
 
 ### notify()
 
-发送状态通知。接受 `status` 参数，用于在控制台或 UI 中显示流程进度。
+Sends a status notification. Accepts a `status` parameter, used to display workflow progress in the console or UI.
 
 ```juglans
-entry: [start]
-exit: [done]
-
 [start]: notify(status="Workflow started")
 [process]: print(message="Processing...")
 [done]: notify(status="Workflow completed")
@@ -105,16 +89,13 @@ exit: [done]
 [start] -> [process] -> [done]
 ```
 
-`print` 和 `notify` 的区别：`print` 是纯文本输出，`notify` 携带语义（这是一条状态通知），在 Web UI 中会以不同样式渲染。
+The difference between `print` and `notify`: `print` produces plain text output, while `notify` carries semantic meaning (it is a status notification) and renders with a different style in the Web UI.
 
 ### set_context()
 
-设置**上下文变量**，接受任意 `key=value` 对。变量存入上下文后，后续节点可以通过 `$ctx.key` 读取。
+Sets **context variables**, accepting arbitrary `key=value` pairs. Once stored in the context, subsequent nodes can read them via `$ctx.key`.
 
 ```juglans
-entry: [start]
-exit: [done]
-
 [start]: print(message="Starting workflow")
 [save]: set_context(user="Alice", score=100)
 [report]: notify(status="User saved: Alice")
@@ -123,19 +104,13 @@ exit: [done]
 [start] -> [save] -> [report] -> [done]
 ```
 
-`set_context` 不产生可见输出，但它改变了 workflow 的内部状态。变量系统是下一章的主题，这里只需知道 `set_context` 是"往 workflow 的记忆里写东西"。
+`set_context` produces no visible output, but it changes the workflow's internal state. The variable system is the topic of the next chapter; for now, just know that `set_context` means "writing something into the workflow's memory."
 
-## 组合使用
+## Combining Tools
 
-把学到的工具组合在一起：
+Put the tools you have learned together:
 
 ```juglans
-name: "Status Pipeline"
-version: "0.1.0"
-
-entry: [init]
-exit: [finish]
-
 [init]: notify(status="Pipeline starting...")
 [setup]: set_context(stage="prepared")
 [work]: print(message="Doing the real work here")
@@ -145,11 +120,11 @@ exit: [finish]
 [init] -> [setup] -> [work] -> [report] -> [finish]
 ```
 
-这个 workflow 展示了一个典型模式：用 `notify` 标记关键节点，用 `set_context` 记录中间状态，用 `print` 输出调试信息。
+This workflow demonstrates a typical pattern: use `notify` to mark key milestones, `set_context` to record intermediate state, and `print` for debug output.
 
-## 常见错误
+## Common Errors
 
-### 节点名重复
+### Duplicate Node Names
 
 ```juglans,ignore
 [step]: print(message="first")
@@ -157,36 +132,36 @@ exit: [finish]
 [step] -> [step]
 ```
 
-同一个 workflow 中两个节点使用相同的名字 `step`，解析器会报错：
+Two nodes in the same workflow use the same name `step`. The parser will report an error:
 
 ```
 Error: Duplicate node ID: step
 ```
 
-每个节点名在整个 workflow 中必须唯一。
+Every node name must be unique within the entire workflow.
 
-### 引用不存在的节点
+### Referencing an Undefined Node
 
 ```juglans,ignore
 [start]: print(message="Hello")
 [start] -> [end]
 ```
 
-边 `[start] -> [end]` 引用了节点 `end`，但它从未被定义。验证器会报错：
+The edge `[start] -> [end]` references node `end`, which was never defined. The validator will report an error:
 
 ```
 Error: Edge references undefined node: end
 ```
 
-所有被边引用的节点都必须先定义。先写节点，再写边——这是 `.jg` 文件的基本约定。
+All nodes referenced by edges must be defined first. Define nodes first, then write edges -- this is a fundamental convention of `.jg` files.
 
-## 小结
+## Summary
 
-本章涵盖了 Juglans workflow 的基础：
+This chapter covered the fundamentals of Juglans workflows:
 
-- **节点** `[name]` 是执行单元，通过 `:` 绑定工具调用
-- **边** `->` 定义执行顺序
-- **工具** 是节点的实际行为：`print` 输出文本，`notify` 发送通知，`set_context` 写入上下文
-- **Metadata**（`name`、`version`、`entry`、`exit`）让 workflow 更完整、更易维护
+- **Nodes** `[name]` are execution units, bound to tool calls via `:`
+- **Edges** `->` define execution order
+- **Tools** are the actual behavior of nodes: `print` outputs text, `notify` sends notifications, `set_context` writes to the context
+- **Entry nodes** are automatically determined by topological sort -- nodes with in-degree 0 are entry points, no extra declarations needed
 
-下一章：[Tutorial 2: 变量与数据流]() —— 学习 `$input`、`$output`、`$ctx`，让节点之间传递数据。
+Next chapter: [Tutorial 2: Variables & Data Flow]() -- learn about `$input`, `$output`, `$ctx`, and how to pass data between nodes.

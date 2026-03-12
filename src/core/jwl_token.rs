@@ -53,7 +53,6 @@ pub enum TokenKind {
     While,
     Assert,
     New,
-    Class,
 
     // Special
     Newline,
@@ -102,7 +101,6 @@ impl TokenKind {
             Self::Err => "'err'",
             Self::Return => "'return'",
             Self::New => "'new'",
-            Self::Class => "'class'",
             Self::Newline => "newline",
             Self::Eof => "end of file",
         }
@@ -135,25 +133,8 @@ pub struct Token {
     pub span: Span,
 }
 
-/// Known metadata keys
-pub const META_KEYS: &[&str] = &[
-    "slug",
-    "name",
-    "version",
-    "source",
-    "author",
-    "description",
-    "entry",
-    "exit",
-    "libs",
-    "flows",
-    "prompts",
-    "agents",
-    "tools",
-    "python",
-    "is_public",
-    "schedule",
-];
+/// Known metadata keys (import-only — non-import meta lives in .jgflow manifest)
+pub const META_KEYS: &[&str] = &["libs", "flows", "prompts", "agents", "tools", "python"];
 
 pub fn is_meta_key(s: &str) -> bool {
     META_KEYS.contains(&s)

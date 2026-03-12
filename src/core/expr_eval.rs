@@ -6,25 +6,28 @@
 /// - Supports pipe/filter syntax natively (`value | upper | truncate(10)`)
 /// - Provides clear error messages with expression context
 use anyhow::{anyhow, Result};
-use pest::Parser;
-use pest_derive::Parser;
+use parking_lot::RwLock;
 use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::expr_ast::{BinOp, Expr, FStringPart, UnaryOp};
-
-// ============================================================
-// Pest Grammar
-// ============================================================
-
-#[derive(Parser)]
-#[grammar = "core/expr.pest"]
-struct ExprParser;
+use super::graph::ClassDef;
+use super::instance_arena::TypedSlot;
 
 // ============================================================
 // Evaluator
 // ============================================================
 
-pub struct ExprEvaluator;
+/// Type alias for class definition registry
+type ClassRegistry = HashMap<String, Arc<ClassDef>>;
+
+pub struct ExprEvaluator {
+    /// Class definition registry for instance field index lookup
+    class_registry: RwLock<Option<Arc<ClassRegistry>>>,
+    /// AST cache: expression string -> parsed AST (eliminates redundant Pest PEG parsing at runtime)
+    ast_cache: RwLock<HashMap<Arc<str>, Arc<Expr>>>,
+}
 
 impl Default for ExprEvaluator {
     fn default() -> Self {
@@ -34,7 +37,33 @@ impl Default for ExprEvaluator {
 
 impl ExprEvaluator {
     pub fn new() -> Self {
-        Self
+        Self {
+            class_registry: RwLock::new(None),
+            ast_cache: RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// Set class definition registry (called when workflow execution starts)
+    pub fn set_class_registry(&self, classes: Arc<ClassRegistry>) {
+        *self.class_registry.write() = Some(classes);
+    }
+
+    /// Parse expression and cache AST (reused after first parse, eliminates Pest PEG re-parsing overhead)
+    pub fn parse_cached(&self, expr_str: &str) -> Result<Arc<Expr>> {
+        // Fast path: cache hit (read lock, uncontended ~2ns)
+        {
+            let cache = self.ast_cache.read();
+            if let Some(ast) = cache.get(expr_str) {
+                return Ok(Arc::clone(ast));
+            }
+        }
+
+        // Slow path: parse + cache
+        let ast = Arc::new(super::expr_parser::parse_expr(expr_str)?);
+        self.ast_cache
+            .write()
+            .insert(Arc::from(expr_str), Arc::clone(&ast));
+        Ok(ast)
     }
 
     /// Evaluate an expression string with a variable resolver.
@@ -48,28 +77,8 @@ impl ExprEvaluator {
             return Ok(Value::Null);
         }
 
-        let pairs = ExprParser::parse(Rule::expression, trimmed)
-            .map_err(|e| anyhow!("Expression parse error: {}", e))?;
-
-        let expr_pair = pairs
-            .into_iter()
-            .next()
-            .ok_or_else(|| anyhow!("Empty parse result for '{}'", trimmed))?;
-
-        let ast = self.parse_expression(expr_pair)?;
+        let ast = self.parse_cached(trimmed)?;
         self.eval_expr(&ast, resolver as &dyn Fn(&str) -> Option<Value>)
-    }
-
-    /// Parse an expression string into an AST node (used internally for f-string interpolation)
-    fn parse(&self, expr_str: &str) -> Result<Expr> {
-        let trimmed = expr_str.trim();
-        let pairs = ExprParser::parse(Rule::expression, trimmed)
-            .map_err(|e| anyhow!("F-string expression parse error: {}", e))?;
-        let expr_pair = pairs
-            .into_iter()
-            .next()
-            .ok_or_else(|| anyhow!("Empty parse result for f-string expr '{}'", trimmed))?;
-        self.parse_expression(expr_pair)
     }
 
     /// Evaluate and return as bool using Python truthiness
@@ -94,6 +103,377 @@ impl ExprEvaluator {
                 "Expected array for iteration, got {}",
                 type_name(&other)
             )),
+        }
+    }
+
+    // ============================================================
+    // TypedSlot fast path (zero-allocation arithmetic inside method body)
+    // ============================================================
+
+    /// Evaluate expression, returning TypedSlot (zero-allocation fast path).
+    /// Resolver returns TypedSlot instead of Value; method scope fields return slots directly from field_cache.
+    /// Complex AST nodes (FuncCall / Pipe / DotAccess etc.) fall back to Value path.
+    pub fn eval_typed<F>(&self, expr_str: &str, resolver: &F) -> Result<TypedSlot>
+    where
+        F: Fn(&str) -> Option<TypedSlot>,
+    {
+        let trimmed = expr_str.trim();
+        if trimmed.is_empty() {
+            return Ok(TypedSlot::Null);
+        }
+
+        let ast = self.parse_cached(trimmed)?;
+        self.eval_expr_typed(&ast, resolver)
+    }
+
+    /// TypedSlot fast-path evaluator.
+    /// Handles scalar literals, variables, arithmetic/comparison/logical operations.
+    /// Other AST nodes fall back to Value path + TypedSlot::from_value().
+    fn eval_expr_typed<F>(&self, expr: &Expr, resolver: &F) -> Result<TypedSlot>
+    where
+        F: Fn(&str) -> Option<TypedSlot>,
+    {
+        match expr {
+            Expr::Number(n) => {
+                if n.fract() == 0.0 && n.abs() < (i64::MAX as f64) {
+                    Ok(TypedSlot::Int(*n as i64))
+                } else {
+                    Ok(TypedSlot::Float(*n))
+                }
+            }
+            Expr::String(s) => Ok(TypedSlot::Str(Arc::from(s.as_str()))),
+            Expr::Bool(b) => Ok(TypedSlot::Bool(*b)),
+            Expr::None => Ok(TypedSlot::Null),
+
+            Expr::Variable(var) => {
+                let path = var.trim_start_matches('$');
+                Ok(resolver(path).unwrap_or(TypedSlot::Null))
+            }
+
+            Expr::Identifier(name) => Ok(resolver(name).unwrap_or(TypedSlot::Null)),
+
+            Expr::BinaryOp { left, op, right } => {
+                // Short-circuit for And/Or
+                match op {
+                    BinOp::And => {
+                        let l = self.eval_expr_typed(left, resolver)?;
+                        if !l.is_truthy() {
+                            return Ok(l);
+                        }
+                        return self.eval_expr_typed(right, resolver);
+                    }
+                    BinOp::Or => {
+                        let l = self.eval_expr_typed(left, resolver)?;
+                        if l.is_truthy() {
+                            return Ok(l);
+                        }
+                        return self.eval_expr_typed(right, resolver);
+                    }
+                    _ => {}
+                }
+
+                let l = self.eval_expr_typed(left, resolver)?;
+                let r = self.eval_expr_typed(right, resolver)?;
+
+                match op {
+                    BinOp::Eq => Ok(TypedSlot::Bool(l.typed_eq(&r))),
+                    BinOp::Ne => Ok(TypedSlot::Bool(!l.typed_eq(&r))),
+
+                    BinOp::Lt => Ok(TypedSlot::Bool(
+                        l.partial_cmp_numeric(&r)
+                            .is_some_and(|o| o == std::cmp::Ordering::Less),
+                    )),
+                    BinOp::Gt => Ok(TypedSlot::Bool(
+                        l.partial_cmp_numeric(&r)
+                            .is_some_and(|o| o == std::cmp::Ordering::Greater),
+                    )),
+                    BinOp::Le => Ok(TypedSlot::Bool(
+                        l.partial_cmp_numeric(&r)
+                            .is_some_and(|o| o != std::cmp::Ordering::Greater),
+                    )),
+                    BinOp::Ge => Ok(TypedSlot::Bool(
+                        l.partial_cmp_numeric(&r)
+                            .is_some_and(|o| o != std::cmp::Ordering::Less),
+                    )),
+
+                    BinOp::Add => l.add(&r).ok_or_else(|| anyhow!("Cannot add these types")),
+                    BinOp::Sub => l
+                        .sub(&r)
+                        .ok_or_else(|| anyhow!("Cannot subtract these types")),
+                    BinOp::Mul => l
+                        .mul(&r)
+                        .ok_or_else(|| anyhow!("Cannot multiply these types")),
+                    BinOp::Div => l.div(&r).ok_or_else(|| anyhow!("Division by zero")),
+                    BinOp::Mod => l.modulo(&r).ok_or_else(|| anyhow!("Modulo by zero")),
+
+                    BinOp::In | BinOp::NotIn => {
+                        // In/NotIn requires Value semantics (array/object containment check)
+                        let lv = l.to_value();
+                        let rv = r.to_value();
+                        let result = value_in(&lv, &rv);
+                        Ok(TypedSlot::Bool(if *op == BinOp::NotIn {
+                            !result
+                        } else {
+                            result
+                        }))
+                    }
+
+                    BinOp::And | BinOp::Or => unreachable!(),
+                }
+            }
+
+            Expr::UnaryOp { op, operand } => {
+                let val = self.eval_expr_typed(operand, resolver)?;
+                match op {
+                    UnaryOp::Not => Ok(TypedSlot::Bool(!val.is_truthy())),
+                    UnaryOp::Neg => val.neg().ok_or_else(|| anyhow!("Cannot negate this type")),
+                }
+            }
+
+            // ResolvedField/ResolvedParam: fall back via resolver (should be used through eval_method_expr)
+            Expr::ResolvedField(_) | Expr::ResolvedParam(_) => Err(anyhow!(
+                "ResolvedField/ResolvedParam requires eval_method_expr"
+            )),
+
+            // Complex AST nodes: fall back to Value path
+            _ => {
+                let value_resolver =
+                    |path: &str| -> Option<Value> { resolver(path).map(|s| s.to_value()) };
+                let val =
+                    self.eval_expr(expr, &value_resolver as &dyn Fn(&str) -> Option<Value>)?;
+                Ok(TypedSlot::from_value(val))
+            }
+        }
+    }
+
+    // ============================================================
+    // Phase C-2: Method body AST optimization + dedicated evaluator
+    // ============================================================
+
+    /// Optimize AST for method body execution: resolve Variable/Identifier to direct indices
+    pub fn optimize_for_method(expr: &Expr, class_def: &ClassDef, params: &[String]) -> Expr {
+        match expr {
+            Expr::Variable(var) => {
+                let path = var.trim_start_matches('$');
+                // $self.field → ResolvedField(idx)
+                if let Some(field) = path.strip_prefix("self.") {
+                    if let Some(&idx) = class_def.field_index.get(field) {
+                        return Expr::ResolvedField(idx);
+                    }
+                }
+                // Bare field name -> ResolvedField(idx)
+                if let Some(&idx) = class_def.field_index.get(path) {
+                    return Expr::ResolvedField(idx);
+                }
+                // Method parameter -> ResolvedParam(idx)
+                if let Some(idx) = params.iter().position(|p| p == path) {
+                    return Expr::ResolvedParam(idx);
+                }
+                expr.clone()
+            }
+            Expr::Identifier(name) => {
+                // Field name -> ResolvedField(idx)
+                if let Some(&idx) = class_def.field_index.get(name.as_str()) {
+                    return Expr::ResolvedField(idx);
+                }
+                // Method parameter -> ResolvedParam(idx)
+                if let Some(idx) = params.iter().position(|p| p == name) {
+                    return Expr::ResolvedParam(idx);
+                }
+                expr.clone()
+            }
+            Expr::BinaryOp { left, op, right } => Expr::BinaryOp {
+                left: Box::new(Self::optimize_for_method(left, class_def, params)),
+                op: *op,
+                right: Box::new(Self::optimize_for_method(right, class_def, params)),
+            },
+            Expr::UnaryOp { op, operand } => Expr::UnaryOp {
+                op: *op,
+                operand: Box::new(Self::optimize_for_method(operand, class_def, params)),
+            },
+            Expr::DotAccess { object, field } => Expr::DotAccess {
+                object: Box::new(Self::optimize_for_method(object, class_def, params)),
+                field: field.clone(),
+            },
+            Expr::BracketAccess { object, index } => Expr::BracketAccess {
+                object: Box::new(Self::optimize_for_method(object, class_def, params)),
+                index: Box::new(Self::optimize_for_method(index, class_def, params)),
+            },
+            Expr::FuncCall { name, args } => Expr::FuncCall {
+                name: name.clone(),
+                args: args
+                    .iter()
+                    .map(|a| Self::optimize_for_method(a, class_def, params))
+                    .collect(),
+            },
+            Expr::MethodCall {
+                object,
+                method,
+                args,
+            } => Expr::MethodCall {
+                object: Box::new(Self::optimize_for_method(object, class_def, params)),
+                method: method.clone(),
+                args: args
+                    .iter()
+                    .map(|a| Self::optimize_for_method(a, class_def, params))
+                    .collect(),
+            },
+            Expr::Pipe {
+                value,
+                filter,
+                args,
+            } => Expr::Pipe {
+                value: Box::new(Self::optimize_for_method(value, class_def, params)),
+                filter: filter.clone(),
+                args: args
+                    .iter()
+                    .map(|a| Self::optimize_for_method(a, class_def, params))
+                    .collect(),
+            },
+            Expr::Array(items) => Expr::Array(
+                items
+                    .iter()
+                    .map(|i| Self::optimize_for_method(i, class_def, params))
+                    .collect(),
+            ),
+            Expr::Object(pairs) => Expr::Object(
+                pairs
+                    .iter()
+                    .map(|(k, v)| (k.clone(), Self::optimize_for_method(v, class_def, params)))
+                    .collect(),
+            ),
+            Expr::FString(parts) => Expr::FString(
+                parts
+                    .iter()
+                    .map(|p| match p {
+                        FStringPart::Text(t) => FStringPart::Text(t.clone()),
+                        FStringPart::Expr(e) => {
+                            FStringPart::Expr(Self::optimize_for_method(e, class_def, params))
+                        }
+                    })
+                    .collect(),
+            ),
+            Expr::Coalesce { left, right } => Expr::Coalesce {
+                left: Box::new(Self::optimize_for_method(left, class_def, params)),
+                right: Box::new(Self::optimize_for_method(right, class_def, params)),
+            },
+            Expr::Lambda { params: lp, body } => Expr::Lambda {
+                params: lp.clone(),
+                body: Box::new(Self::optimize_for_method(body, class_def, params)),
+            },
+            // Literals and already-resolved nodes don't need optimization
+            _ => expr.clone(),
+        }
+    }
+
+    /// Method body dedicated evaluator: uses field_cache and params slices directly.
+    /// ResolvedField/ResolvedParam nodes use direct indexing, zero HashMap, zero locks.
+    pub fn eval_method_expr(
+        &self,
+        ast: &Expr,
+        fields: &[TypedSlot],
+        params: &[TypedSlot],
+    ) -> Result<TypedSlot> {
+        match ast {
+            // Direct indexing: zero-overhead field/parameter access
+            Expr::ResolvedField(idx) => Ok(fields.get(*idx).cloned().unwrap_or(TypedSlot::Null)),
+            Expr::ResolvedParam(idx) => Ok(params.get(*idx).cloned().unwrap_or(TypedSlot::Null)),
+
+            // Literals
+            Expr::Number(n) => {
+                if n.fract() == 0.0 && n.abs() < (i64::MAX as f64) {
+                    Ok(TypedSlot::Int(*n as i64))
+                } else {
+                    Ok(TypedSlot::Float(*n))
+                }
+            }
+            Expr::String(s) => Ok(TypedSlot::Str(Arc::from(s.as_str()))),
+            Expr::Bool(b) => Ok(TypedSlot::Bool(*b)),
+            Expr::None => Ok(TypedSlot::Null),
+
+            // Unresolved variables/identifiers (dynamic paths not covered by optimize_for_method)
+            Expr::Variable(_) | Expr::Identifier(_) => Ok(TypedSlot::Null),
+
+            // Binary operations
+            Expr::BinaryOp { left, op, right } => {
+                match op {
+                    BinOp::And => {
+                        let l = self.eval_method_expr(left, fields, params)?;
+                        if !l.is_truthy() {
+                            return Ok(l);
+                        }
+                        return self.eval_method_expr(right, fields, params);
+                    }
+                    BinOp::Or => {
+                        let l = self.eval_method_expr(left, fields, params)?;
+                        if l.is_truthy() {
+                            return Ok(l);
+                        }
+                        return self.eval_method_expr(right, fields, params);
+                    }
+                    _ => {}
+                }
+
+                let l = self.eval_method_expr(left, fields, params)?;
+                let r = self.eval_method_expr(right, fields, params)?;
+
+                match op {
+                    BinOp::Eq => Ok(TypedSlot::Bool(l.typed_eq(&r))),
+                    BinOp::Ne => Ok(TypedSlot::Bool(!l.typed_eq(&r))),
+                    BinOp::Lt => Ok(TypedSlot::Bool(
+                        l.partial_cmp_numeric(&r)
+                            .is_some_and(|o| o == std::cmp::Ordering::Less),
+                    )),
+                    BinOp::Gt => Ok(TypedSlot::Bool(
+                        l.partial_cmp_numeric(&r)
+                            .is_some_and(|o| o == std::cmp::Ordering::Greater),
+                    )),
+                    BinOp::Le => Ok(TypedSlot::Bool(
+                        l.partial_cmp_numeric(&r)
+                            .is_some_and(|o| o != std::cmp::Ordering::Greater),
+                    )),
+                    BinOp::Ge => Ok(TypedSlot::Bool(
+                        l.partial_cmp_numeric(&r)
+                            .is_some_and(|o| o != std::cmp::Ordering::Less),
+                    )),
+                    BinOp::Add => l.add(&r).ok_or_else(|| anyhow!("Cannot add these types")),
+                    BinOp::Sub => l
+                        .sub(&r)
+                        .ok_or_else(|| anyhow!("Cannot subtract these types")),
+                    BinOp::Mul => l
+                        .mul(&r)
+                        .ok_or_else(|| anyhow!("Cannot multiply these types")),
+                    BinOp::Div => l.div(&r).ok_or_else(|| anyhow!("Division by zero")),
+                    BinOp::Mod => l.modulo(&r).ok_or_else(|| anyhow!("Modulo by zero")),
+                    BinOp::In | BinOp::NotIn => {
+                        let lv = l.to_value();
+                        let rv = r.to_value();
+                        let result = value_in(&lv, &rv);
+                        Ok(TypedSlot::Bool(if *op == BinOp::NotIn {
+                            !result
+                        } else {
+                            result
+                        }))
+                    }
+                    BinOp::And | BinOp::Or => unreachable!(),
+                }
+            }
+
+            // Unary operations
+            Expr::UnaryOp { op, operand } => {
+                let val = self.eval_method_expr(operand, fields, params)?;
+                match op {
+                    UnaryOp::Not => Ok(TypedSlot::Bool(!val.is_truthy())),
+                    UnaryOp::Neg => val.neg().ok_or_else(|| anyhow!("Cannot negate this type")),
+                }
+            }
+
+            // Other complex nodes: fall back to Value path
+            _ => {
+                let value_resolver = |_path: &str| -> Option<Value> { None };
+                let val = self.eval_expr(ast, &value_resolver as &dyn Fn(&str) -> Option<Value>)?;
+                Ok(TypedSlot::from_value(val))
+            }
         }
     }
 }
@@ -166,428 +546,6 @@ fn value_to_f64(val: &Value) -> Result<f64> {
         Value::Bool(b) => Ok(if *b { 1.0 } else { 0.0 }),
         Value::Null => Ok(0.0),
         _ => Err(anyhow!("Cannot convert {} to number", type_name(val))),
-    }
-}
-
-// ============================================================
-// Parser: Pest Pairs → AST
-// ============================================================
-
-impl ExprEvaluator {
-    fn parse_expression(&self, pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
-        match pair.as_rule() {
-            Rule::expression | Rule::expr => {
-                let inner = pair.into_inner().next().unwrap();
-                self.parse_expression(inner)
-            }
-            Rule::coalesce_expr => self.parse_coalesce_expr(pair),
-            Rule::pipe_expr => self.parse_pipe_expr(pair),
-            Rule::or_expr => self.parse_binary_left(pair, |op| match op.as_str() {
-                "or" | "||" => Some(BinOp::Or),
-                _ => Option::None,
-            }),
-            Rule::and_expr => self.parse_binary_left(pair, |op| match op.as_str() {
-                "and" | "&&" => Some(BinOp::And),
-                _ => Option::None,
-            }),
-            Rule::in_expr => self.parse_in_expr(pair),
-            Rule::cmp_expr => self.parse_binary_left(pair, |op| match op.as_str() {
-                "==" => Some(BinOp::Eq),
-                "!=" => Some(BinOp::Ne),
-                ">" => Some(BinOp::Gt),
-                "<" => Some(BinOp::Lt),
-                ">=" => Some(BinOp::Ge),
-                "<=" => Some(BinOp::Le),
-                _ => Option::None,
-            }),
-            Rule::add_expr => self.parse_binary_left(pair, |op| match op.as_str() {
-                "+" => Some(BinOp::Add),
-                "-" => Some(BinOp::Sub),
-                _ => Option::None,
-            }),
-            Rule::mul_expr => self.parse_binary_left(pair, |op| match op.as_str() {
-                "*" => Some(BinOp::Mul),
-                "/" => Some(BinOp::Div),
-                "%" => Some(BinOp::Mod),
-                _ => Option::None,
-            }),
-            Rule::unary_expr => self.parse_unary_expr(pair),
-            Rule::postfix_expr => self.parse_postfix_expr(pair),
-            Rule::atom => {
-                let inner = pair.into_inner().next().unwrap();
-                self.parse_expression(inner)
-            }
-            Rule::paren_expr => {
-                let inner = pair.into_inner().next().unwrap();
-                self.parse_expression(inner)
-            }
-            Rule::func_call => self.parse_func_call(pair),
-            Rule::number => self.parse_number(pair),
-            Rule::string => self.parse_string(pair),
-            Rule::fstring => self.parse_fstring(pair),
-            Rule::bool_lit => {
-                let inner = pair.into_inner().next().unwrap();
-                match inner.as_rule() {
-                    Rule::true_lit => Ok(Expr::Bool(true)),
-                    Rule::false_lit => Ok(Expr::Bool(false)),
-                    _ => unreachable!(),
-                }
-            }
-            Rule::none_lit => Ok(Expr::None),
-            Rule::variable => {
-                let var_str = pair.as_str().to_string();
-                Ok(Expr::Variable(var_str))
-            }
-            Rule::identifier => Ok(Expr::Identifier(pair.as_str().to_string())),
-            Rule::array_lit => {
-                let items: Result<Vec<Expr>> = pair
-                    .into_inner()
-                    .map(|p| self.parse_expression(p))
-                    .collect();
-                Ok(Expr::Array(items?))
-            }
-            Rule::object_lit => {
-                let pairs: Result<Vec<(String, Expr)>> = pair
-                    .into_inner()
-                    .map(|p| {
-                        let mut inner = p.into_inner();
-                        let key_pair = inner.next().unwrap();
-                        let key = match key_pair.as_rule() {
-                            Rule::string => self.extract_string_value(key_pair),
-                            Rule::identifier => key_pair.as_str().to_string(),
-                            _ => key_pair.as_str().to_string(),
-                        };
-                        let val = self.parse_expression(inner.next().unwrap())?;
-                        Ok((key, val))
-                    })
-                    .collect();
-                Ok(Expr::Object(pairs?))
-            }
-            _ => Err(anyhow!(
-                "Unexpected rule {:?}: '{}'",
-                pair.as_rule(),
-                pair.as_str()
-            )),
-        }
-    }
-
-    fn parse_coalesce_expr(&self, pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
-        let mut inner = pair.into_inner();
-        let mut expr = self.parse_expression(inner.next().unwrap())?;
-
-        while inner.peek().is_some() {
-            let op = inner.next().unwrap();
-            if op.as_rule() == Rule::coalesce_op {
-                let right = self.parse_expression(inner.next().unwrap())?;
-                expr = Expr::Coalesce {
-                    left: Box::new(expr),
-                    right: Box::new(right),
-                };
-            }
-        }
-        Ok(expr)
-    }
-
-    fn parse_pipe_expr(&self, pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
-        let mut inner = pair.into_inner();
-        let mut expr = self.parse_expression(inner.next().unwrap())?;
-
-        for filter_pair in inner {
-            if filter_pair.as_rule() == Rule::pipe_filter {
-                let mut filter_inner = filter_pair.into_inner();
-                let name = filter_inner.next().unwrap().as_str().to_string();
-                let args = if let Some(args_pair) = filter_inner.next() {
-                    self.parse_call_args(args_pair)?
-                } else {
-                    vec![]
-                };
-                expr = Expr::Pipe {
-                    value: Box::new(expr),
-                    filter: name,
-                    args,
-                };
-            }
-        }
-        Ok(expr)
-    }
-
-    fn parse_binary_left<F>(&self, pair: pest::iterators::Pair<Rule>, op_map: F) -> Result<Expr>
-    where
-        F: Fn(&pest::iterators::Pair<Rule>) -> Option<BinOp>,
-    {
-        let mut inner = pair.into_inner();
-        let mut left = self.parse_expression(inner.next().unwrap())?;
-
-        while let Some(op_pair) = inner.next() {
-            if let Some(op) = op_map(&op_pair) {
-                let right = self.parse_expression(inner.next().unwrap())?;
-                left = Expr::BinaryOp {
-                    left: Box::new(left),
-                    op,
-                    right: Box::new(right),
-                };
-            }
-        }
-        Ok(left)
-    }
-
-    fn parse_in_expr(&self, pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
-        let mut inner = pair.into_inner();
-        let left = self.parse_expression(inner.next().unwrap())?;
-
-        if let Some(op_pair) = inner.next() {
-            let op = if op_pair.as_str().contains("not") {
-                BinOp::NotIn
-            } else {
-                BinOp::In
-            };
-            let right = self.parse_expression(inner.next().unwrap())?;
-            Ok(Expr::BinaryOp {
-                left: Box::new(left),
-                op,
-                right: Box::new(right),
-            })
-        } else {
-            Ok(left)
-        }
-    }
-
-    fn parse_unary_expr(&self, pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
-        let mut inner = pair.into_inner();
-        let first = inner.next().unwrap();
-
-        match first.as_rule() {
-            Rule::not_op => {
-                let operand = self.parse_expression(inner.next().unwrap())?;
-                Ok(Expr::UnaryOp {
-                    op: UnaryOp::Not,
-                    operand: Box::new(operand),
-                })
-            }
-            Rule::neg_op => {
-                let operand = self.parse_expression(inner.next().unwrap())?;
-                Ok(Expr::UnaryOp {
-                    op: UnaryOp::Neg,
-                    operand: Box::new(operand),
-                })
-            }
-            _ => self.parse_expression(first),
-        }
-    }
-
-    fn parse_postfix_expr(&self, pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
-        let mut inner = pair.into_inner();
-        let mut expr = self.parse_expression(inner.next().unwrap())?;
-
-        for postfix in inner {
-            match postfix.as_rule() {
-                Rule::method_call => {
-                    let mut mc_inner = postfix.into_inner();
-                    let method = mc_inner.next().unwrap().as_str().to_string();
-                    let args = if let Some(args_pair) = mc_inner.next() {
-                        self.parse_call_args(args_pair)?
-                    } else {
-                        vec![]
-                    };
-                    expr = Expr::MethodCall {
-                        object: Box::new(expr),
-                        method,
-                        args,
-                    };
-                }
-                Rule::dot_access => {
-                    let field = postfix.into_inner().next().unwrap().as_str().to_string();
-                    expr = Expr::DotAccess {
-                        object: Box::new(expr),
-                        field,
-                    };
-                }
-                Rule::bracket_access => {
-                    let index = self.parse_expression(postfix.into_inner().next().unwrap())?;
-                    expr = Expr::BracketAccess {
-                        object: Box::new(expr),
-                        index: Box::new(index),
-                    };
-                }
-                _ => {}
-            }
-        }
-        Ok(expr)
-    }
-
-    fn parse_func_call(&self, pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
-        let mut inner = pair.into_inner();
-        let name = inner.next().unwrap().as_str().to_string();
-        let args = if let Some(args_pair) = inner.next() {
-            self.parse_call_args(args_pair)?
-        } else {
-            vec![]
-        };
-        Ok(Expr::FuncCall { name, args })
-    }
-
-    fn parse_call_args(&self, pair: pest::iterators::Pair<Rule>) -> Result<Vec<Expr>> {
-        pair.into_inner()
-            .map(|p| match p.as_rule() {
-                Rule::call_arg => {
-                    let inner = p.into_inner().next().unwrap();
-                    match inner.as_rule() {
-                        Rule::lambda_expr => self.parse_lambda(inner),
-                        _ => self.parse_expression(inner),
-                    }
-                }
-                _ => self.parse_expression(p),
-            })
-            .collect()
-    }
-
-    fn parse_lambda(&self, pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
-        let mut inner = pair.into_inner();
-        let params_pair = inner.next().unwrap();
-        let params = self.parse_lambda_params(params_pair)?;
-        let body = self.parse_expression(inner.next().unwrap())?;
-        Ok(Expr::Lambda {
-            params,
-            body: Box::new(body),
-        })
-    }
-
-    fn parse_lambda_params(&self, pair: pest::iterators::Pair<Rule>) -> Result<Vec<String>> {
-        let inner = pair.into_inner().next().unwrap();
-        match inner.as_rule() {
-            Rule::lambda_params_single => Ok(vec![inner.as_str().to_string()]),
-            Rule::lambda_params_multi => {
-                Ok(inner.into_inner().map(|p| p.as_str().to_string()).collect())
-            }
-            _ => Err(anyhow!(
-                "Unexpected lambda params rule: {:?}",
-                inner.as_rule()
-            )),
-        }
-    }
-
-    fn parse_number(&self, pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
-        let inner = pair.into_inner().next().unwrap();
-        let s = inner.as_str();
-        let n: f64 = s.parse().map_err(|_| anyhow!("Invalid number: '{}'", s))?;
-        Ok(Expr::Number(n))
-    }
-
-    fn parse_string(&self, pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
-        let s = self.extract_string_value(pair.into_inner().next().unwrap());
-        Ok(Expr::String(s))
-    }
-
-    fn extract_string_value(&self, pair: pest::iterators::Pair<Rule>) -> String {
-        let raw = pair.as_str();
-        // Triple-quoted: raw string, no escape processing
-        if raw.starts_with("\"\"\"") {
-            return raw[3..raw.len() - 3].to_string();
-        }
-        // Strip surrounding quotes
-        let inner = &raw[1..raw.len() - 1];
-        // Process escape sequences
-        let mut result = String::with_capacity(inner.len());
-        let mut chars = inner.chars();
-        while let Some(c) = chars.next() {
-            if c == '\\' {
-                if let Some(next) = chars.next() {
-                    match next {
-                        'n' => result.push('\n'),
-                        'r' => result.push('\r'),
-                        't' => result.push('\t'),
-                        '\\' => result.push('\\'),
-                        '"' => result.push('"'),
-                        '\'' => result.push('\''),
-                        other => {
-                            result.push('\\');
-                            result.push(other);
-                        }
-                    }
-                }
-            } else {
-                result.push(c);
-            }
-        }
-        result
-    }
-
-    fn parse_fstring(&self, pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
-        let inner_pair = pair.into_inner().next();
-        let is_triple = inner_pair
-            .as_ref()
-            .map(|p| p.as_rule() == Rule::fstring_triple_body)
-            .unwrap_or(false);
-        let body = inner_pair.map(|p| p.as_str()).unwrap_or("");
-
-        let mut parts = Vec::new();
-        let mut chars = body.chars().peekable();
-        let mut text_buf = String::new();
-
-        while let Some(c) = chars.next() {
-            match c {
-                '\\' if !is_triple => {
-                    if let Some(&next) = chars.peek() {
-                        chars.next();
-                        match next {
-                            'n' => text_buf.push('\n'),
-                            'r' => text_buf.push('\r'),
-                            't' => text_buf.push('\t'),
-                            '\\' => text_buf.push('\\'),
-                            '"' => text_buf.push('"'),
-                            other => {
-                                text_buf.push('\\');
-                                text_buf.push(other);
-                            }
-                        }
-                    }
-                }
-                '{' if chars.peek() == Some(&'{') => {
-                    chars.next();
-                    text_buf.push('{');
-                }
-                '{' => {
-                    // Flush text buffer
-                    if !text_buf.is_empty() {
-                        parts.push(FStringPart::Text(std::mem::take(&mut text_buf)));
-                    }
-                    // Extract expression until matching '}'
-                    let mut depth = 1;
-                    let mut expr_str = String::new();
-                    for ch in chars.by_ref() {
-                        match ch {
-                            '{' => {
-                                depth += 1;
-                                expr_str.push(ch);
-                            }
-                            '}' => {
-                                depth -= 1;
-                                if depth == 0 {
-                                    break;
-                                }
-                                expr_str.push(ch);
-                            }
-                            _ => expr_str.push(ch),
-                        }
-                    }
-                    // Parse expression string
-                    let expr = self.parse(&expr_str)?;
-                    parts.push(FStringPart::Expr(expr));
-                }
-                '}' if chars.peek() == Some(&'}') => {
-                    chars.next();
-                    text_buf.push('}');
-                }
-                _ => text_buf.push(c),
-            }
-        }
-
-        // Flush remaining text
-        if !text_buf.is_empty() {
-            parts.push(FStringPart::Text(text_buf));
-        }
-
-        Ok(Expr::FString(parts))
     }
 }
 
@@ -666,7 +624,7 @@ impl ExprEvaluator {
 
             Expr::DotAccess { object, field } => {
                 let obj_val = self.eval_expr(object, resolver)?;
-                Ok(access_field(&obj_val, field))
+                Ok(self.access_field_with_registry(&obj_val, field))
             }
 
             Expr::BracketAccess { object, index } => {
@@ -746,6 +704,9 @@ impl ExprEvaluator {
             Expr::Lambda { .. } => {
                 Err(anyhow!("Lambda expressions can only be used as arguments to higher-order functions (map, filter, reduce, etc.)"))
             }
+
+            // Phase C-2: pre-resolved nodes (should not appear in Value path, but handled safely)
+            Expr::ResolvedField(_) | Expr::ResolvedParam(_) => Ok(Value::Null),
         }
     }
 
@@ -816,6 +777,78 @@ impl ExprEvaluator {
             BinOp::NotIn => Ok(Value::Bool(!value_in(&left, &right))),
 
             BinOp::And | BinOp::Or => unreachable!(), // handled above
+        }
+    }
+
+    // ============================================================
+    // Class-registry-aware field access
+    // ============================================================
+
+    /// Access a field on a Value, using class registry for instance field lookup.
+    fn access_field_with_registry(&self, obj: &Value, field: &str) -> Value {
+        match obj {
+            Value::Object(map) => {
+                // Safety net: arena proxy objects should not reach DotAccess evaluation
+                // (normally $self.field is parsed as Variable("self.field") → resolve_path)
+                if map.contains_key("__arena_ref__") {
+                    return Value::Null;
+                }
+                // Fast path: class instance with __class__ + __fields__
+                if let (Some(Value::String(class_name)), Some(fields_arr)) =
+                    (map.get("__class__"), map.get("__fields__"))
+                {
+                    if let Some(arr) = fields_arr.as_array() {
+                        // Look up field index from class registry
+                        {
+                            let guard = self.class_registry.read();
+                            if let Some(registry) = guard.as_ref() {
+                                if let Some(class_def) = registry.get(class_name.as_str()) {
+                                    if let Some(&idx) = class_def.field_index.get(field) {
+                                        return arr.get(idx).cloned().unwrap_or(Value::Null);
+                                    }
+                                }
+                            }
+                        }
+                        // Fallback: check __field_index__ in instance (backward compat)
+                        if let Some(index_map) = map.get("__field_index__") {
+                            if let Some(idx_obj) = index_map.as_object() {
+                                if let Some(idx_val) = idx_obj.get(field) {
+                                    if let Some(idx) = idx_val.as_u64() {
+                                        return arr
+                                            .get(idx as usize)
+                                            .cloned()
+                                            .unwrap_or(Value::Null);
+                                    }
+                                }
+                            }
+                        }
+                        // Allow direct access to __class__ etc.
+                        if field.starts_with("__") {
+                            return map.get(field).cloned().unwrap_or(Value::Null);
+                        }
+                        return Value::Null;
+                    }
+                }
+                // Normal object field access
+                map.get(field).cloned().unwrap_or(Value::Null)
+            }
+            Value::Array(arr) => {
+                if field == "length" {
+                    json!(arr.len())
+                } else {
+                    Value::Null
+                }
+            }
+            Value::String(s) => {
+                if field == "length" {
+                    json!(s.len())
+                } else if let Ok(parsed) = serde_json::from_str::<Value>(s) {
+                    self.access_field_with_registry(&parsed, field)
+                } else {
+                    Value::Null
+                }
+            }
+            _ => Value::Null,
         }
     }
 
@@ -1374,31 +1407,6 @@ fn value_in(needle: &Value, haystack: &Value) -> bool {
     }
 }
 
-fn access_field(obj: &Value, field: &str) -> Value {
-    match obj {
-        Value::Object(map) => map.get(field).cloned().unwrap_or(Value::Null),
-        Value::Array(arr) => {
-            // Support array.length
-            if field == "length" {
-                json!(arr.len())
-            } else {
-                Value::Null
-            }
-        }
-        Value::String(s) => {
-            if field == "length" {
-                json!(s.len())
-            } else if let Ok(parsed) = serde_json::from_str::<Value>(s) {
-                // 字符串是 JSON 编码的对象/数组，先解析再导航
-                access_field(&parsed, field)
-            } else {
-                Value::Null
-            }
-        }
-        _ => Value::Null,
-    }
-}
-
 fn access_bracket(obj: &Value, index: &Value) -> Value {
     match obj {
         Value::Array(arr) => {
@@ -1553,6 +1561,16 @@ fn call_builtin(name: &str, args: &[Value]) -> Result<Value> {
             Ok(Value::String(value_to_string(&args[0]).to_lowercase()))
         }
 
+        // if(condition, then_value, else_value)
+        "if" => {
+            require_args(name, args, 3)?;
+            if is_truthy(&args[0]) {
+                Ok(args[1].clone())
+            } else {
+                Ok(args[2].clone())
+            }
+        }
+
         "default" => {
             require_args(name, args, 2)?;
             if args[0].is_null() || (args[0].is_string() && args[0].as_str().unwrap().is_empty()) {
@@ -1566,11 +1584,11 @@ fn call_builtin(name: &str, args: &[Value]) -> Result<Value> {
             require_args(name, args, 1)?;
             match &args[0] {
                 Value::String(s) => {
-                    // 字符串输入 → 解析 JSON（decode 方向）
+                    // String input -> parse JSON (decode direction)
                     Ok(serde_json::from_str(s).unwrap_or_else(|_| args[0].clone()))
                 }
                 other => {
-                    // 非字符串 → 序列化为 JSON 字符串（encode 方向）
+                    // Non-string -> serialize to JSON string (encode direction)
                     Ok(Value::String(
                         serde_json::to_string(other).unwrap_or_default(),
                     ))

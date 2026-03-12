@@ -1,10 +1,10 @@
 # How to Connect AI Models
 
-本指南介绍如何配置 Juglans 连接 AI 模型，包括 Jug0 后端和本地模型。
+This guide covers how to configure Juglans to connect to AI models, including the Jug0 backend and local models.
 
 ## Configure Jug0
 
-Juglans 通过 Jug0 后端调用 LLM。在项目根目录的 `juglans.toml` 中配置：
+Juglans calls LLMs through the Jug0 backend. Configure it in `juglans.toml` at the project root:
 
 ```toml
 [account]
@@ -12,13 +12,13 @@ id = "your_user_id"
 api_key = "jug0_sk_your_api_key"
 
 [jug0]
-base_url = "http://localhost:3000"   # 本地开发
-# base_url = "https://api.jug0.com" # 生产环境
+base_url = "http://localhost:3000"   # Local development
+# base_url = "https://api.jug0.com" # Production
 ```
 
-配置文件搜索顺序：`./juglans.toml` -> `~/.config/juglans/juglans.toml` -> `/etc/juglans/juglans.toml`。
+Configuration file search order: `./juglans.toml` -> `~/.config/juglans/juglans.toml` -> `/etc/juglans/juglans.toml`.
 
-也可以通过环境变量覆盖：
+You can also override settings via environment variables:
 
 ```bash
 export JUGLANS_API_KEY="jug0_sk_..."
@@ -27,52 +27,47 @@ export JUGLANS_JUG0_URL="http://localhost:3000"
 
 ## Get API Key
 
-1. 登录 Jug0 控制台
-2. 进入 Settings > API Keys
-3. 创建新的 API Key（格式：`jug0_sk_...`）
-4. 复制到 `juglans.toml` 的 `[account].api_key` 字段
+1. Log in to the Jug0 console
+2. Go to Settings > API Keys
+3. Create a new API Key (format: `jug0_sk_...`)
+4. Copy it into the `[account].api_key` field in `juglans.toml`
 
 ## Test Connection
 
-创建一个最小的 chat workflow 验证连接：
+Create a minimal chat workflow to verify the connection:
 
 ```juglans
-name: "Connection Test"
-
-entry: [test]
-exit: [done]
-
 [test]: chat(agent="assistant", message="Say hello in one word.")
 [done]: print(message="Connection OK. Response: " + $output)
 
 [test] -> [done]
 ```
 
-运行：
+Run it:
 
 ```bash
 juglans test-connection.jg
 ```
 
-如果配置正确，你会看到模型的回复。如果失败，检查：
+If configured correctly, you will see the model's response. If it fails, check:
 
-- `juglans.toml` 中的 `api_key` 和 `base_url` 是否正确
-- Jug0 后端是否在运行（`curl http://localhost:3000/health`）
-- 使用 `juglans whoami --check-connection` 测试连接状态
+- Whether the `api_key` and `base_url` in `juglans.toml` are correct
+- Whether the Jug0 backend is running (`curl http://localhost:3000/health`)
+- Use `juglans whoami --check-connection` to test the connection status
 
 ## Use Local Models (Ollama)
 
-Juglans 支持通过 Jug0 后端连接本地模型。配置 Ollama 示例：
+Juglans supports connecting to local models through the Jug0 backend. Example Ollama configuration:
 
 ```toml
 [jug0]
 base_url = "http://localhost:3000"
 
-# Jug0 后端配置中设置 Ollama provider
-# 然后在 .jgagent 中指定 model
+# Set up the Ollama provider in the Jug0 backend configuration,
+# then specify the model in your .jgagent file
 ```
 
-创建使用本地模型的 Agent：
+Create an Agent that uses a local model:
 
 ```jgagent
 slug: "local-agent"
@@ -81,13 +76,10 @@ temperature: 0.7
 system_prompt: "You are a helpful assistant."
 ```
 
-在 Workflow 中使用：
+Use it in a Workflow:
 
 ```juglans
 agents: ["./agents/*.jgagent"]
-
-entry: [ask]
-exit: [done]
 
 [ask]: chat(agent="local-agent", message=$input.query)
 [done]: print(message=$output)
@@ -97,21 +89,21 @@ exit: [done]
 
 ## Resource Management
 
-Juglans 资源（Workflow、Agent、Prompt）可以在本地和 Jug0 之间同步。
+Juglans resources (Workflows, Agents, Prompts) can be synchronized between local storage and Jug0.
 
 ### Push (Local -> Remote)
 
 ```bash
-# 推送单个文件
+# Push a single file
 juglans push src/prompts/greeting.jgprompt
 
-# 强制覆盖
+# Force overwrite
 juglans push src/agents/assistant.jgagent --force
 
-# 批量推送（使用 workspace 配置）
+# Batch push (using workspace configuration)
 juglans push
 
-# 预览
+# Preview
 juglans push --dry-run
 ```
 
@@ -125,8 +117,8 @@ juglans pull my-agent --type agent --output ./agents/
 ### List and Delete
 
 ```bash
-juglans list                    # 列出所有远程资源
-juglans list --type agent       # 只列出 Agent
+juglans list                    # List all remote resources
+juglans list --type agent       # List Agents only
 juglans delete old-prompt --type prompt
 ```
 
@@ -134,19 +126,14 @@ juglans delete old-prompt --type prompt
 
 | | Local | Remote |
 |---|---|---|
-| 引用方式 | slug（如 `"my-agent"`） | owner/slug（如 `"juglans/assistant"`） |
-| 需要导入 | 是（`agents: ["./agents/*.jgagent"]`） | 否，直接引用 |
-| 适用场景 | 开发、测试 | 生产部署、团队共享 |
+| Reference style | slug (e.g., `"my-agent"`) | owner/slug (e.g., `"juglans/assistant"`) |
+| Requires import | Yes (`agents: ["./agents/*.jgagent"]`) | No, reference directly |
+| Best for | Development, testing | Production deployment, team sharing |
 
-在同一个 Workflow 中混合使用：
+Mix both in the same Workflow:
 
 ```juglans
-name: "Hybrid Workflow"
-
 agents: ["./agents/*.jgagent"]
-
-entry: [start]
-exit: [end]
 
 [start]: print(msg="begin")
 [local_chat]: chat(agent="my-agent", message=$input.query)
@@ -160,13 +147,13 @@ exit: [end]
 
 | Problem | Solution |
 |---------|----------|
-| `Connection refused` | 确认 Jug0 后端正在运行，检查 `base_url` |
-| `401 Unauthorized` | 检查 `api_key` 是否正确 |
-| `Agent not found` | 确认 Agent slug 拼写正确，本地 Agent 需要 `agents:` 导入 |
-| `Timeout` | 增大超时配置，或检查网络连接 |
+| `Connection refused` | Confirm the Jug0 backend is running; check `base_url` |
+| `401 Unauthorized` | Verify the `api_key` is correct |
+| `Agent not found` | Confirm the agent slug is spelled correctly; local agents require an `agents:` import |
+| `Timeout` | Increase the timeout configuration or check the network connection |
 
 ## Next Steps
 
-- [Jug0 Integration](../integrations/jug0.md) — 完整 API 参考
-- [Agent Syntax](./agent-syntax.md) — Agent 配置详解
-- [Configuration Reference](../reference/config.md) — 完整配置项
+- [Jug0 Integration](../integrations/jug0.md) -- Full API reference
+- [Agent Syntax](./agent-syntax.md) -- Detailed agent configuration
+- [Configuration Reference](../reference/config.md) -- Complete configuration options

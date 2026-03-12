@@ -6,31 +6,31 @@ use axum::{extract::Extension, response::IntoResponse, routing::post, Json, Rout
 use dashmap::DashSet;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tracing::{error, info, warn};
 
 use super::{chat_via_jug0, run_agent_for_message, PlatformMessage, ToolExecutor};
 use crate::services::config::JuglansConfig;
 
-/// 飞书 Bot 共享状态
+/// Feishu Bot shared state
 struct FeishuState {
     config: JuglansConfig,
     project_root: PathBuf,
     agent_slug: String,
     app_id: String,
     app_secret: String,
-    /// API base URL (https://open.feishu.cn 或 https://open.larksuite.com)
+    /// API base URL (https://open.feishu.cn or https://open.larksuite.com)
     base_url: String,
-    /// 缓存的 tenant_access_token
+    /// Cached tenant_access_token
     access_token: Mutex<Option<(String, std::time::Instant)>>,
-    /// 是否通过 jug0 SSE 模式执行（薄客户端模式）
+    /// Whether to execute via jug0 SSE mode (thin client mode)
     use_jug0: bool,
-    /// 已处理的 event_id 集合（飞书 at-least-once 去重）
+    /// Set of processed event IDs (Feishu at-least-once deduplication)
     processed_events: DashSet<String>,
 }
 
-/// 飞书平台工具执行器 — 通过 Python subprocess 调用 bill_utils.py
+/// Feishu platform tool executor -- invokes bill_utils.py via Python subprocess
 struct FeishuToolExecutor {
     project_root: PathBuf,
     app_id: String,
@@ -67,12 +67,29 @@ impl FeishuToolExecutor {
         executor.platform_user_id = msg.platform_user_id.clone();
         executor
     }
+
+    fn from_handler(handler: &FeishuWebhookHandler, msg: &PlatformMessage) -> Self {
+        let bot_config = handler.config.bot.as_ref().and_then(|b| b.feishu.as_ref());
+        let approvers = bot_config.map(|c| c.approvers.clone()).unwrap_or_default();
+
+        Self {
+            project_root: handler.project_root.clone(),
+            app_id: handler.app_id.clone(),
+            app_secret: handler.app_secret.clone(),
+            base_url: handler.base_url.clone(),
+            approvers,
+            jug0_base_url: handler.config.jug0.base_url.clone(),
+            jug0_api_key: handler.config.account.api_key.clone().unwrap_or_default(),
+            platform_chat_id: msg.platform_chat_id.clone(),
+            platform_user_id: msg.platform_user_id.clone(),
+        }
+    }
 }
 
 #[async_trait::async_trait]
 impl ToolExecutor for FeishuToolExecutor {
     async fn execute(&self, tool_name: &str, args: Value) -> anyhow::Result<String> {
-        // 注入系统参数到 args
+        // Inject system parameters into args
         let mut full_args = args.clone();
         if let Some(obj) = full_args.as_object_mut() {
             obj.insert("_app_id".into(), json!(self.app_id));
@@ -93,10 +110,10 @@ import bill_utils
 
 args = json.loads(sys.argv[2])
 
-# 提取系统参数
+# Extract system parameters
 _sys = {{k: args.pop(k) for k in list(args) if k.startswith('_')}}
 
-# 注入上下文（供 create_bill / clear_chat_history 使用）
+# Inject context (used by create_bill / clear_chat_history)
 bill_utils._context = {{
     "user_id": _sys.get("_user_id"),
     "chat_id": _sys.get("_chat_id"),
@@ -151,14 +168,223 @@ else:
     }
 }
 
-/// 飞书事件推送结构
+// ======================================================================
+// Public webhook handler (for web_server.rs serverless integration)
+// ======================================================================
+
+/// Standalone Feishu webhook handler, embeddable in web_server.
+///
+/// No need to start a separate Feishu bot service; mounts directly onto juglans web routes.
+/// Suitable for serverless deployment scenarios.
+pub struct FeishuWebhookHandler {
+    config: JuglansConfig,
+    project_root: PathBuf,
+    agent_slug: String,
+    app_id: String,
+    app_secret: String,
+    base_url: String,
+    access_token: Mutex<Option<(String, std::time::Instant)>>,
+    use_jug0: bool,
+    processed_events: DashSet<String>,
+}
+
+impl FeishuWebhookHandler {
+    /// Create from JuglansConfig; returns Some if Feishu config is complete
+    pub fn from_config(config: &JuglansConfig, project_root: &Path) -> Option<Self> {
+        let bot_config = config.bot.as_ref()?.feishu.as_ref()?;
+        let app_id = bot_config.app_id.clone()?;
+        let app_secret = bot_config.app_secret.clone()?;
+        let base_url = bot_config.base_url.clone();
+        let agent_slug = bot_config.agent.clone();
+
+        let use_jug0 = match bot_config.mode.as_deref() {
+            Some("local") => false,
+            Some("jug0") => true,
+            _ => !config.jug0.base_url.is_empty(),
+        };
+
+        Some(Self {
+            config: config.clone(),
+            project_root: project_root.to_path_buf(),
+            agent_slug,
+            app_id,
+            app_secret,
+            base_url,
+            access_token: Mutex::new(None),
+            use_jug0,
+            processed_events: DashSet::new(),
+        })
+    }
+
+    /// Handle Feishu webhook request body, return JSON response
+    pub async fn handle_event(&self, body: Value) -> Value {
+        // URL verification challenge
+        if let Some(challenge) = body["challenge"].as_str() {
+            info!("[Feishu Webhook] URL verification challenge");
+            return json!({ "challenge": challenge });
+        }
+
+        let event_type = body
+            .pointer("/header/event_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let event_id = body
+            .pointer("/header/event_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        // Event deduplication
+        if !event_id.is_empty() && !self.processed_events.insert(event_id.clone()) {
+            info!("[Feishu Webhook] Duplicate event {}, skipping", event_id);
+            return json!({"code": 0, "msg": "duplicate"});
+        }
+
+        match event_type {
+            "im.message.receive_v1" => {
+                if let Some(event) = body.get("event") {
+                    let event = event.clone();
+                    // Reuse handle_message logic
+                    if let Err(e) = self.handle_message(&event).await {
+                        error!("[Feishu Webhook] Message handling failed: {}", e);
+                    }
+                }
+                json!({"code": 0, "msg": "ok"})
+            }
+            _ => {
+                if !event_type.is_empty() {
+                    warn!(
+                        "[Feishu Webhook] Unhandled event type: {} (id: {})",
+                        event_type, event_id
+                    );
+                }
+                json!({"code": 0, "msg": "ok"})
+            }
+        }
+    }
+
+    /// Handle message event (reuses run_agent_for_message logic)
+    async fn handle_message(&self, event: &Value) -> Result<()> {
+        let message = event
+            .get("message")
+            .ok_or_else(|| anyhow::anyhow!("No message in event"))?;
+
+        let msg_type = message["message_type"].as_str().unwrap_or("");
+        if msg_type != "text" {
+            info!(
+                "[Feishu Webhook] Skipping non-text message (type: {})",
+                msg_type
+            );
+            return Ok(());
+        }
+
+        let content_str = message["content"].as_str().unwrap_or("{}");
+        let content: Value = serde_json::from_str(content_str).unwrap_or(json!({}));
+        let raw_text = content["text"].as_str().unwrap_or("");
+
+        let text = raw_text
+            .split_whitespace()
+            .filter(|s| !s.starts_with("@_user_"))
+            .collect::<Vec<_>>()
+            .join(" ")
+            .trim()
+            .to_string();
+
+        if text.is_empty() {
+            return Ok(());
+        }
+
+        let chat_id = message["chat_id"].as_str().unwrap_or("").to_string();
+        let empty = json!({});
+        let sender = event.get("sender").unwrap_or(&empty);
+        let sender_id = sender["sender_id"]["open_id"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+
+        info!(
+            "📩 [Feishu Webhook] User {}: {}",
+            sender_id,
+            if text.chars().count() > 50 {
+                &text[..text
+                    .char_indices()
+                    .nth(50)
+                    .map(|(i, _)| i)
+                    .unwrap_or(text.len())]
+            } else {
+                &text
+            }
+        );
+
+        let platform_msg = PlatformMessage {
+            event_type: "message".into(),
+            event_data: json!({ "text": &text }),
+            platform_user_id: sender_id,
+            platform_chat_id: chat_id.clone(),
+            text,
+            username: None,
+        };
+
+        let result = if self.use_jug0 {
+            let tool_executor = FeishuToolExecutor::from_handler(self, &platform_msg);
+            chat_via_jug0(
+                &self.config,
+                &self.agent_slug,
+                &platform_msg,
+                &tool_executor,
+            )
+            .await
+        } else {
+            let tool_executor = FeishuToolExecutor::from_handler(self, &platform_msg);
+            run_agent_for_message(
+                &self.config,
+                &self.project_root,
+                &self.agent_slug,
+                &platform_msg,
+                Some(&tool_executor),
+            )
+            .await
+        };
+
+        match result {
+            Ok(reply) => {
+                if !reply.text.is_empty() && reply.text != "(No response)" {
+                    let token = get_access_token(
+                        &self.app_id,
+                        &self.app_secret,
+                        &self.base_url,
+                        &self.access_token,
+                    )
+                    .await?;
+                    send_feishu_message(&token, &chat_id, &reply.text, &self.base_url).await?;
+                }
+            }
+            Err(e) => {
+                error!("[Feishu Webhook] Agent error: {}", e);
+                let token = get_access_token(
+                    &self.app_id,
+                    &self.app_secret,
+                    &self.base_url,
+                    &self.access_token,
+                )
+                .await?;
+                send_feishu_message(&token, &chat_id, &format!("Error: {}", e), &self.base_url)
+                    .await?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Feishu event push payload
 #[derive(Deserialize)]
 struct FeishuEventPayload {
-    /// URL 验证时的 challenge
+    /// Challenge for URL verification
     challenge: Option<String>,
-    /// 事件头部
+    /// Event header
     header: Option<FeishuHeader>,
-    /// 事件内容
+    /// Event content
     event: Option<Value>,
 }
 
@@ -168,7 +394,7 @@ struct FeishuHeader {
     event_id: Option<String>,
 }
 
-/// 启动飞书 Bot（自动选择模式）
+/// Start Feishu Bot (auto-selects mode)
 pub async fn start(
     config: JuglansConfig,
     project_root: PathBuf,
@@ -181,7 +407,7 @@ pub async fn start(
         .and_then(|b| b.feishu.as_ref())
         .ok_or_else(|| anyhow::anyhow!("Missing [bot.feishu] config in juglans.toml"))?;
 
-    // 提前提取，避免借用冲突
+    // Extract early to avoid borrow conflicts
     let webhook_url = bot_config.webhook_url.clone();
     let has_app_credentials = bot_config.app_id.is_some() && bot_config.app_secret.is_some();
     let _ = bot_config;
@@ -197,7 +423,7 @@ pub async fn start(
     }
 }
 
-/// Webhook 模式：交互式 REPL + 飞书群推送
+/// Webhook mode: interactive REPL + Feishu group push
 async fn start_webhook_mode(
     config: JuglansConfig,
     project_root: PathBuf,
@@ -244,7 +470,7 @@ async fn start_webhook_mode(
         match run_agent_for_message(&config, &project_root, &agent_slug, &msg, None).await {
             Ok(reply) => {
                 println!("💬 {}", reply.text);
-                // 推送到飞书群
+                // Push to Feishu group
                 if let Err(e) = send_webhook(&webhook_url, &reply.text).await {
                     warn!("⚠️  Webhook send failed: {}", e);
                 } else {
@@ -261,7 +487,7 @@ async fn start_webhook_mode(
     Ok(())
 }
 
-/// 事件订阅模式：启动 HTTP 服务接收飞书事件
+/// Event subscription mode: starts HTTP server to receive Feishu events
 async fn start_event_mode(
     config: JuglansConfig,
     project_root: PathBuf,
@@ -289,7 +515,7 @@ async fn start_event_mode(
     info!("   App ID: {}", app_id);
     info!("   API Base: {}", base_url);
 
-    // 执行模式：优先读 [bot.feishu] mode，否则按 jug0 base_url 自动判断
+    // Execution mode: prefer [bot.feishu] mode, otherwise auto-detect based on jug0 base_url
     let use_jug0 = match bot_config.mode.as_deref() {
         Some("local") => false,
         Some("jug0") => true,
@@ -328,7 +554,7 @@ async fn start_event_mode(
     Ok(())
 }
 
-/// 通过 Webhook URL 发送消息到飞书群（自定义机器人）
+/// Send message to Feishu group via webhook URL (custom bot)
 pub async fn send_webhook(webhook_url: &str, text: &str) -> Result<()> {
     let client = reqwest::Client::new();
 
@@ -355,7 +581,7 @@ pub async fn send_webhook(webhook_url: &str, text: &str) -> Result<()> {
     Ok(())
 }
 
-/// 通过 Webhook 发送富文本消息（Markdown 风格的 post 消息）
+/// Send rich text message via webhook (Markdown-style post message)
 pub async fn _send_webhook_rich(
     webhook_url: &str,
     title: &str,
@@ -387,18 +613,18 @@ pub async fn _send_webhook_rich(
     Ok(())
 }
 
-/// 处理飞书事件推送
+/// Handle Feishu event push
 async fn handle_feishu_event(
     Extension(state): Extension<Arc<FeishuState>>,
     Json(payload): Json<FeishuEventPayload>,
 ) -> impl IntoResponse {
-    // 1. URL 验证（飞书开放平台配置回调 URL 时的 challenge 验证）
+    // 1. URL verification (challenge verification when configuring callback URL on Feishu Open Platform)
     if let Some(challenge) = payload.challenge {
         info!("[Feishu] URL verification challenge received");
         return Json(json!({ "challenge": challenge }));
     }
 
-    // 2. 处理事件
+    // 2. Handle event
     let event_type = payload
         .header
         .as_ref()
@@ -411,7 +637,7 @@ async fn handle_feishu_event(
         .and_then(|h| h.event_id.clone())
         .unwrap_or_default();
 
-    // 飞书事件去重（at-least-once delivery）
+    // Feishu event deduplication (at-least-once delivery)
     if !event_id.is_empty() && !state.processed_events.insert(event_id.clone()) {
         info!("[Feishu] Duplicate event {}, skipping", event_id);
         return Json(json!({"code": 0, "msg": "duplicate"}));
@@ -419,7 +645,7 @@ async fn handle_feishu_event(
 
     match event_type {
         "im.message.receive_v1" => {
-            // 消息事件
+            // Message event
             if let Some(event) = payload.event {
                 let state = state.clone();
                 tokio::spawn(async move {
@@ -430,28 +656,28 @@ async fn handle_feishu_event(
             }
         }
         "card.action.trigger" => {
-            // 卡片按钮回调事件：同步执行 workflow，在回调响应中直接返回更新后的卡片
-            // （PATCH API 在 card.action.trigger 回调期间无效，必须通过响应返回卡片）
+            // Card button callback event: synchronously execute workflow, return updated card in callback response
+            // (PATCH API is ineffective during card.action.trigger callback; card must be returned in the response)
             if let Some(event) = payload.event {
                 let result = handle_card_action_event(&state, &event).await;
                 return match result {
                     Ok(reply_text) => {
-                        // 尝试将 reply 解析为卡片 JSON（handle_card_action 返回 card_json）
+                        // Try to parse reply as card JSON (handle_card_action returns card_json)
                         match serde_json::from_str::<Value>(&reply_text) {
                             Ok(card) if card.get("header").is_some() => {
-                                // 有效的卡片 JSON：在回调响应中直接返回更新后的卡片
+                                // Valid card JSON: return updated card directly in callback response
                                 Json(json!({
-                                    "toast": { "type": "success", "content": "已处理" },
+                                    "toast": { "type": "success", "content": "Processed" },
                                     "card": { "type": "raw", "data": card }
                                 }))
                             }
                             _ => {
-                                // 非卡片内容（如错误消息），只返回 toast
+                                // Non-card content (e.g. error message), return toast only
                                 Json(json!({
                                     "toast": {
                                         "type": "info",
                                         "content": if reply_text.is_empty() || reply_text == "(No response)" {
-                                            "已处理".to_string()
+                                            "Processed".to_string()
                                         } else {
                                             reply_text
                                         }
@@ -463,12 +689,12 @@ async fn handle_feishu_event(
                     Err(e) => {
                         error!("[Feishu Card] Error: {}", e);
                         Json(json!({
-                            "toast": { "type": "error", "content": format!("处理失败: {}", e) }
+                            "toast": { "type": "error", "content": format!("Processing failed: {}", e) }
                         }))
                     }
                 };
             }
-            return Json(json!({ "toast": { "type": "error", "content": "无效事件" } }));
+            return Json(json!({ "toast": { "type": "error", "content": "Invalid event" } }));
         }
         _ => {
             warn!(
@@ -481,13 +707,13 @@ async fn handle_feishu_event(
     Json(json!({ "code": 0, "msg": "ok" }))
 }
 
-/// 处理飞书消息事件
+/// Handle Feishu message event
 async fn handle_message_event(state: &FeishuState, event: &Value) -> Result<()> {
     let message = event
         .get("message")
         .ok_or_else(|| anyhow::anyhow!("No message in event"))?;
 
-    // 提取消息内容
+    // Extract message content
     let msg_type = message["message_type"].as_str().unwrap_or("");
     if msg_type != "text" {
         info!("[Feishu] Skipping non-text message (type: {})", msg_type);
@@ -498,7 +724,7 @@ async fn handle_message_event(state: &FeishuState, event: &Value) -> Result<()> 
     let content: Value = serde_json::from_str(content_str).unwrap_or(json!({}));
     let raw_text = content["text"].as_str().unwrap_or("");
 
-    // 清理 @mention 占位符（如 @_user_1），保留实际用户消息
+    // Clean up @mention placeholders (e.g. @_user_1), keep actual user message
     let text = raw_text
         .split_whitespace()
         .filter(|s| !s.starts_with("@_user_"))
@@ -545,7 +771,7 @@ async fn handle_message_event(state: &FeishuState, event: &Value) -> Result<()> 
         username: None,
     };
 
-    // 执行 agent — 根据模式选择本地执行或 SSE 客户端
+    // Execute agent -- choose local execution or SSE client based on mode
     let result = if state.use_jug0 {
         let tool_executor = FeishuToolExecutor::with_message(state, &platform_msg);
         chat_via_jug0(
@@ -597,14 +823,14 @@ async fn handle_message_event(state: &FeishuState, event: &Value) -> Result<()> 
     Ok(())
 }
 
-/// 获取飞书 tenant_access_token（带缓存）
+/// Get Feishu tenant_access_token (with caching)
 async fn get_access_token(
     app_id: &str,
     app_secret: &str,
     base_url: &str,
     cache: &Mutex<Option<(String, std::time::Instant)>>,
 ) -> Result<String> {
-    // 检查缓存（token 有效期 2 小时，提前 5 分钟刷新）
+    // Check cache (token valid for 2 hours, refresh 5 minutes early)
     if let Ok(guard) = cache.lock() {
         if let Some((ref token, ref created)) = *guard {
             if created.elapsed() < std::time::Duration::from_secs(7000) {
@@ -628,7 +854,7 @@ async fn get_access_token(
         .json()
         .await?;
 
-    // 检查 API 响应码
+    // Check API response code
     let code = resp["code"].as_i64().unwrap_or(-1);
     if code != 0 {
         return Err(anyhow::anyhow!(
@@ -652,7 +878,7 @@ async fn get_access_token(
     Ok(token)
 }
 
-/// 发送飞书消息（事件订阅模式，需要 access_token）
+/// Send Feishu message (event subscription mode, requires access_token)
 async fn send_feishu_message(token: &str, chat_id: &str, text: &str, base_url: &str) -> Result<()> {
     let client = reqwest::Client::new();
 
@@ -688,10 +914,10 @@ async fn send_feishu_message(token: &str, chat_id: &str, text: &str, base_url: &
     Ok(())
 }
 
-/// 处理飞书卡片按钮回调事件 (card.action.trigger)
+/// Handle Feishu card button callback event (card.action.trigger)
 ///
-/// 构建标准化事件信封，统一走 workflow 路由。
-/// workflow 通过 switch $input.event_type 决定走 Python 直调。
+/// Builds a standardized event envelope and routes through the workflow.
+/// The workflow uses switch $input.event_type to route to Python direct calls.
 async fn handle_card_action_event(state: &FeishuState, event: &Value) -> Result<String> {
     let action_value = event
         .pointer("/action/value")
@@ -714,7 +940,7 @@ async fn handle_card_action_event(state: &FeishuState, event: &Value) -> Result<
         operator_id, action_str
     );
 
-    // 标准化事件信封
+    // Standardized event envelope
     let platform_msg = PlatformMessage {
         event_type: "card_action".into(),
         event_data: action_value.clone(),
@@ -724,7 +950,7 @@ async fn handle_card_action_event(state: &FeishuState, event: &Value) -> Result<
         username: None,
     };
 
-    // 统一走 workflow（由 workflow switch 路由到 Python 直调）
+    // Route through workflow (workflow switch routes to Python direct calls)
     let tool_executor = FeishuToolExecutor::with_message(state, &platform_msg);
     let reply = run_agent_for_message(
         &state.config,
@@ -735,7 +961,7 @@ async fn handle_card_action_event(state: &FeishuState, event: &Value) -> Result<
     )
     .await?;
 
-    // 尝试解析为卡片 JSON
+    // Try to parse as card JSON
     if let Ok(card) = serde_json::from_str::<Value>(&reply.text) {
         if card.get("header").is_some() {
             return Ok(reply.text);

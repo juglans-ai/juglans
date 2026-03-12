@@ -1,0 +1,40 @@
+libs: ["../std/ai.jg"]
+
+# Define tools as struct instances
+[t1]: ai.tool {
+  name="web_search",
+  description="Search the web for information",
+  params={"query": {"type": "string", "description": "Search query"}}
+}
+
+[t2]: ai.tool {
+  name="get_weather",
+  description="Get current weather for a location",
+  params={"location": {"type": "string", "description": "City name"}}
+}
+
+[t3]: ai.tool {
+  name="get_time",
+  description="Get current UTC time",
+  params={}
+}
+
+# Convert to schemas — writes back to instance's .schema field
+[_1]: $t1.to_schema()
+[_2]: $t2.to_schema()
+[_3]: $t3.to_schema()
+
+# Group into a toolbox
+[box]: ai.toolbox(tools=[$t1.schema, $t2.schema, $t3.schema])
+
+# Verify schemas
+[verify()]: {
+  assert $t1.schema.type == "function"
+  assert $t1.schema.function.name == "web_search"
+  assert $t2.schema.function.name == "get_weather"
+  assert $t3.schema.function.name == "get_time"
+  assert len($box.output) == 3
+}
+[run_verify]: verify()
+
+[t1] -> [_1] -> [t2] -> [_2] -> [t3] -> [_3] -> [box] -> [run_verify]

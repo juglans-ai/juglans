@@ -334,12 +334,6 @@ $prefix.array.0.field      # Field of array element
 ## Comprehensive Example
 
 ```juglans
-name: "Context Demo"
-version: "0.1.0"
-
-entry: [init]
-exit: [summary]
-
 [init]: set_context(
   processed=0,
   successes=0,

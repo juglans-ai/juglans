@@ -1,7 +1,4 @@
-name: "Test Syntax Errors"
-entry: [start]
-
-# Missing value after equals
-[start]: notify(message=)
+[start]: notify(message="hello")
+[end]: notify(message="done")
 
 [start] -> [end]

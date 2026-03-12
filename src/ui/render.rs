@@ -4,11 +4,11 @@
 use ::crossterm::style::Stylize;
 use termimad::*;
 
-/// 渲染 Markdown 文本（带颜色和格式）
+/// Render Markdown text (with colors and formatting)
 pub fn render_markdown(content: &str) {
     let mut skin = MadSkin::default();
 
-    // 自定义颜色方案（使用 termimad 的 Color）
+    // Custom color scheme (using termimad Color)
     skin.bold.set_fg(crossterm::style::Color::Yellow);
     skin.italic.set_fg(crossterm::style::Color::Cyan);
     skin.headers[0].set_fg(crossterm::style::Color::Magenta);
@@ -16,11 +16,11 @@ pub fn render_markdown(content: &str) {
     skin.code_block.set_fg(crossterm::style::Color::Green);
     skin.inline_code.set_fg(crossterm::style::Color::Green);
 
-    // 渲染
+    // Render
     println!("{}", skin.term_text(content));
 }
 
-/// 显示状态栏
+/// Display status bar
 pub fn _show_status(chat_id: Option<&str>, status: &str, depth: usize) {
     println!();
 
@@ -29,7 +29,7 @@ pub fn _show_status(chat_id: Option<&str>, status: &str, depth: usize) {
         println!("  {} {}", "●".dark_grey(), id.dark_grey());
     }
 
-    // 状态
+    // Status
     let status_colored = match status {
         "processing" => status.yellow(),
         "completed" => status.green(),
@@ -38,7 +38,7 @@ pub fn _show_status(chat_id: Option<&str>, status: &str, depth: usize) {
     };
     println!("  {} {}", "Status:".dark_grey(), status_colored);
 
-    // 嵌套深度
+    // Nesting depth
     if depth > 0 {
         println!("  {} {}", "Depth:".dark_grey(), depth.to_string().cyan());
     }
@@ -46,7 +46,7 @@ pub fn _show_status(chat_id: Option<&str>, status: &str, depth: usize) {
     println!();
 }
 
-/// 显示欢迎信息
+/// Display welcome message
 pub fn show_welcome(agent_name: &str, agent_slug: &str, has_workflow: bool) {
     eprintln!();
     eprintln!("● Agent: {}", agent_name);
@@ -61,7 +61,7 @@ pub fn show_welcome(agent_name: &str, agent_slug: &str, has_workflow: bool) {
     eprintln!();
 }
 
-/// 显示帮助信息
+/// Display help information
 pub fn show_shortcuts() {
     println!();
     println!("{}", "Keyboard Shortcuts:".bold());

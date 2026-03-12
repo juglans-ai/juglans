@@ -1,10 +1,4 @@
-name: "Python Error Handling Test"
-version: "0.1.0"
-
 python: ["json"]
-
-entry: [start]
-exit: [success, error_handled]
 
 # This will fail because we're passing invalid JSON
 [start]: json.loads(s="this is not valid json")

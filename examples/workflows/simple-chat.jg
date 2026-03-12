@@ -1,12 +1,4 @@
-name: "Simple Chat"
-version: "0.1.0"
-author: "Juglans Team"
-description: "A basic chat workflow demonstrating agent interaction"
-
 agents: ["../agents/*.jgagent"]
-
-entry: [start]
-exit: [end]
 
 # 开始节点
 [start]: notify(status="Chat started...")

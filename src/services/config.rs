@@ -18,7 +18,7 @@ pub struct WorkspaceConfig {
     pub id: String,
     pub name: String,
     pub members: Option<Vec<String>>,
-    // 【新增】资源路径配置
+    // Resource path configuration
     #[serde(default)]
     pub agents: Vec<String>,
     #[serde(default)]
@@ -32,66 +32,58 @@ pub struct WorkspaceConfig {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct McpServerConfig {
-    pub name: String,
-    pub base_url: String,
-    pub alias: Option<String>,
-    pub token: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Jug0Config {
     pub base_url: String,
 }
 
-// 【新增】Server 配置部分
+// Server configuration section
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ServerConfig {
     #[serde(default = "default_server_host")]
     pub host: String,
     #[serde(default = "default_server_port")]
     pub port: u16,
-    /// 公网 endpoint URL，用于 apply workflow 时写入 jug0
-    /// 示例: "https://agent.juglans.ai"
+    /// Public endpoint URL, written to jug0 when applying workflows.
+    /// Example: "https://agent.juglans.ai"
     pub endpoint_url: Option<String>,
 }
 
-// 【新增】Debug 配置部分
+// Debug configuration section
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct DebugConfig {
-    /// 显示节点执行信息
+    /// Show node execution info
     #[serde(default)]
     pub show_nodes: bool,
 
-    /// 显示上下文变量
+    /// Show context variables
     #[serde(default)]
     pub show_context: bool,
 
-    /// 显示条件评估详情
+    /// Show condition evaluation details
     #[serde(default)]
     pub show_conditions: bool,
 
-    /// 显示变量解析过程
+    /// Show variable resolution process
     #[serde(default)]
     pub show_variables: bool,
 }
 
-// 运行时限制配置
+// Runtime limits configuration
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct RuntimeLimits {
-    /// Loop 最大迭代次数 (default: 100)
+    /// Max loop iterations (default: 100)
     #[serde(default = "default_max_loop_iterations")]
     pub max_loop_iterations: usize,
 
-    /// 嵌套执行最大深度 (default: 10)
+    /// Max nested execution depth (default: 10)
     #[serde(default = "default_max_execution_depth")]
     pub max_execution_depth: usize,
 
-    /// HTTP 请求超时秒数 (default: 120)
+    /// HTTP request timeout in seconds (default: 120)
     #[serde(default = "default_http_timeout_secs")]
     pub http_timeout_secs: u64,
 
-    /// Python worker 数量 (default: 1)
+    /// Number of Python workers (default: 1)
     #[serde(default = "default_python_workers")]
     pub python_workers: usize,
 }
@@ -120,15 +112,15 @@ fn default_python_workers() -> usize {
     1
 }
 
-// 路径别名配置
+// Path alias configuration
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct PathsConfig {
-    /// @ 路径别名的基准目录（相对于 project root）
-    /// None = 功能禁用，Some(".") = @ 指向项目根
+    /// Base directory for @ path aliases (relative to project root).
+    /// None = feature disabled, Some(".") = @ points to project root
     pub base: Option<String>,
 }
 
-// Bot 配置
+// Bot configuration
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct BotConfig {
     pub telegram: Option<TelegramBotConfig>,
@@ -140,26 +132,29 @@ pub struct TelegramBotConfig {
     pub token: String,
     #[serde(default = "default_bot_agent")]
     pub agent: String,
+    /// Execution mode: "local" (local execution) or "jug0" (SSE client), auto-detected from jug0.base_url by default
+    #[serde(default)]
+    pub mode: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct FeishuBotConfig {
-    /// 事件订阅模式（双向）
+    /// Event subscription mode (bidirectional)
     pub app_id: Option<String>,
     pub app_secret: Option<String>,
-    /// Webhook 模式（单向推送）
+    /// Webhook mode (one-way push)
     pub webhook_url: Option<String>,
     #[serde(default = "default_bot_agent")]
     pub agent: String,
     #[serde(default = "default_feishu_port")]
     pub port: u16,
-    /// API base URL: "https://open.feishu.cn" (默认) 或 "https://open.larksuite.com" (Lark 国际版)
+    /// API base URL: "https://open.feishu.cn" (default) or "https://open.larksuite.com" (Lark international)
     #[serde(default = "default_feishu_base_url")]
     pub base_url: String,
-    /// 审批人列表（open_id）
+    /// List of approvers (open_id)
     #[serde(default)]
     pub approvers: Vec<String>,
-    /// 执行模式: "local" (本地执行) 或 "jug0" (SSE 客户端)，默认根据 jug0.base_url 自动判断
+    /// Execution mode: "local" (local execution) or "jug0" (SSE client), auto-detected from jug0.base_url by default
     #[serde(default)]
     pub mode: Option<String>,
 }
@@ -174,7 +169,7 @@ fn default_feishu_base_url() -> String {
     "https://open.feishu.cn".to_string()
 }
 
-// Package Registry 配置
+// Package Registry configuration
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct RegistryConfig {
     /// Registry URL for client commands (default: https://jgr.juglans.ai)
@@ -205,32 +200,29 @@ pub struct JuglansConfig {
     #[serde(default = "default_jug0_config")]
     pub jug0: Jug0Config,
 
-    // 【新增】Web Server 配置
+    // Web Server configuration
     #[serde(default)]
     pub server: ServerConfig,
 
     #[serde(default)]
-    pub mcp_servers: Vec<McpServerConfig>,
-
-    #[serde(default)]
     pub env: std::collections::HashMap<String, String>,
 
-    // 【新增】Debug 配置
+    // Debug configuration
     #[serde(default)]
     pub debug: DebugConfig,
 
-    // 运行时限制配置
+    // Runtime limits configuration
     #[serde(default)]
     pub limits: RuntimeLimits,
 
-    // Bot 配置
+    // Bot configuration
     pub bot: Option<BotConfig>,
 
-    // 路径别名配置
+    // Path alias configuration
     #[serde(default)]
     pub paths: PathsConfig,
 
-    // Package Registry 配置
+    // Package Registry configuration
     pub registry: Option<RegistryConfig>,
 }
 
@@ -240,7 +232,7 @@ fn default_jug0_config() -> Jug0Config {
     }
 }
 
-// 为 ServerConfig 提供默认实现，以便在配置文件缺失该段时正常工作
+// Default implementation for ServerConfig, used when the config file is missing this section
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
@@ -276,7 +268,6 @@ impl JuglansConfig {
                 }),
                 jug0: default_jug0_config(),
                 server: ServerConfig::default(),
-                mcp_servers: vec![],
                 env: Default::default(),
                 debug: DebugConfig::default(),
                 limits: RuntimeLimits::default(),
@@ -288,10 +279,67 @@ impl JuglansConfig {
 
         let content = fs::read_to_string(path).context("Failed to read juglans.toml")?;
 
-        let config: JuglansConfig =
+        let mut config: JuglansConfig =
             toml::from_str(&content).context("Failed to parse juglans.toml")?;
+
+        // Environment variable overrides (serverless deployment)
+        config.apply_env_overrides();
 
         debug!("✓ Config loaded for user: {}", config.account.name);
         Ok(config)
+    }
+
+    /// Override config fields with environment variables (for FC/Lambda and other serverless environments)
+    fn apply_env_overrides(&mut self) {
+        if let Ok(v) = std::env::var("JUG0_BASE_URL") {
+            self.jug0.base_url = v;
+        }
+        if let Ok(v) = std::env::var("JUG0_API_KEY") {
+            self.account.api_key = Some(v);
+        }
+        if let Ok(v) = std::env::var("SERVER_HOST") {
+            self.server.host = v;
+        }
+        if let Ok(Ok(v)) = std::env::var("SERVER_PORT").map(|s| s.parse::<u16>()) {
+            self.server.port = v;
+        }
+        // Feishu bot config
+        let feishu_app_id = std::env::var("FEISHU_APP_ID").ok();
+        let feishu_app_secret = std::env::var("FEISHU_APP_SECRET").ok();
+        if feishu_app_id.is_some() || feishu_app_secret.is_some() {
+            let bot = self.bot.get_or_insert(BotConfig {
+                telegram: None,
+                feishu: None,
+            });
+            let feishu = bot.feishu.get_or_insert_with(|| FeishuBotConfig {
+                app_id: None,
+                app_secret: None,
+                webhook_url: None,
+                agent: default_bot_agent(),
+                port: default_feishu_port(),
+                base_url: default_feishu_base_url(),
+                approvers: vec![],
+                mode: None,
+            });
+            if let Some(v) = feishu_app_id {
+                feishu.app_id = Some(v);
+            }
+            if let Some(v) = feishu_app_secret {
+                feishu.app_secret = Some(v);
+            }
+        }
+        // Telegram bot config
+        if let Ok(token) = std::env::var("TELEGRAM_BOT_TOKEN") {
+            let bot = self.bot.get_or_insert(BotConfig {
+                telegram: None,
+                feishu: None,
+            });
+            let tg = bot.telegram.get_or_insert_with(|| TelegramBotConfig {
+                token: String::new(),
+                agent: default_bot_agent(),
+                mode: None,
+            });
+            tg.token = token;
+        }
     }
 }

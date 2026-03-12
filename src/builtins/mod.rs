@@ -17,8 +17,8 @@ use crate::services::tool_registry::ToolRegistry;
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
 
-    /// 返回 OpenAI function calling 格式的 tool schema
-    /// 实现此方法的工具可被 LLM 自动发现和调用
+    /// Return tool schema in OpenAI function calling format
+    /// Tools implementing this method can be auto-discovered and invoked by the LLM
     fn schema(&self) -> Option<Value> {
         None
     }
@@ -35,21 +35,21 @@ pub trait Tool: Send + Sync {
 /// # Circular dependency pattern
 ///
 /// `WorkflowExecutor` owns `Arc<BuiltinRegistry>`, while `BuiltinRegistry` holds
-/// a `Weak<WorkflowExecutor>` back-reference for nested workflow execution, MCP tool
-/// dispatch, and tool registry resolution. This bidirectional relationship is required
+/// a `Weak<WorkflowExecutor>` back-reference for nested workflow execution
+/// and tool registry resolution. This bidirectional relationship is required
 /// because builtin tools (Chat, ExecuteWorkflow) need executor capabilities at runtime.
 ///
 /// The `Weak` reference breaks the ownership cycle and is set post-construction via
 /// `set_executor()`. Similarly, `Chat` and `ExecuteWorkflow` hold `Weak<BuiltinRegistry>`
 /// to access these capabilities without preventing deallocation.
 ///
-/// **Future improvement**: Extract the three executor capabilities (`execute_mcp_tool`,
-/// `get_tool_registry`, `execute_graph`) into a trait. The blocker is that `execute_graph`
+/// **Future improvement**: Extract the executor capabilities (`get_tool_registry`,
+/// `execute_graph`) into a trait. The blocker is that `execute_graph`
 /// uses `self: Arc<Self>` for `tokio::spawn`, which isn't compatible with `#[async_trait]`
 /// trait objects. A redesign of the parallel execution model would be needed first.
 pub struct BuiltinRegistry {
     tools: RwLock<HashMap<String, Arc<Box<dyn Tool>>>>,
-    /// Back-reference to WorkflowExecutor for nested execution and MCP dispatch.
+    /// Back-reference to WorkflowExecutor for nested execution.
     /// Set post-construction via `set_executor()`. See struct-level docs for rationale.
     executor: RwLock<Option<std::sync::Weak<crate::core::executor::WorkflowExecutor>>>,
     _prompt_registry: Arc<PromptRegistry>,
@@ -60,7 +60,7 @@ impl BuiltinRegistry {
     pub fn new(
         prompts: Arc<PromptRegistry>,
         agents: Arc<AgentRegistry>,
-        runtime: Arc<dyn JuglansRuntime>, // 【修改】接收 Trait Object
+        runtime: Arc<dyn JuglansRuntime>,
     ) -> Arc<Self> {
         let mut tool_map: HashMap<String, Arc<Box<dyn Tool>>> = HashMap::new();
 
@@ -84,14 +84,14 @@ impl BuiltinRegistry {
         reg!(http::Serve);
         reg!(http::HttpResponse);
 
-        // Devtools (Claude Code 风格)
+        // Devtools (Claude Code style)
         reg!(devtools::ReadFile);
         reg!(devtools::WriteFile);
         reg!(devtools::EditFile);
         reg!(devtools::GlobSearch);
         reg!(devtools::GrepSearch);
         reg!(devtools::Bash);
-        // "sh" 别名：向后兼容旧 sh(cmd=...) 语法
+        // "sh" alias: backward compatible with old sh(cmd=...) syntax
         tool_map.insert("sh".to_string(), Arc::new(Box::new(devtools::Bash)));
         reg!(ai::Prompt::new(prompts.clone(), runtime.clone()));
         reg!(ai::MemorySearch::new(runtime.clone()));
@@ -163,14 +163,14 @@ impl BuiltinRegistry {
         self.tools.read().ok()?.get(name).cloned()
     }
 
-    /// 收集所有实现了 schema() 的 builtin 工具的 OpenAI 格式 schema
+    /// Collect OpenAI-format schemas from all builtin tools that implement schema()
     pub fn list_schemas(&self) -> Vec<Value> {
         let guard = self.tools.read().unwrap();
         guard.values().filter_map(|tool| tool.schema()).collect()
     }
 
-    /// 将内置 devtools 的 schema 注册到 ToolRegistry 中
-    /// 使 devtools 可通过 "devtools" slug 被 resolve_tools() 发现
+    /// Register builtin devtools schemas into ToolRegistry
+    /// Makes devtools discoverable via "devtools" slug through resolve_tools()
     pub fn register_devtools_to_registry(&self, tool_registry: &mut ToolRegistry) {
         let schemas = self.list_schemas();
         if !schemas.is_empty() {
@@ -184,19 +184,19 @@ impl BuiltinRegistry {
         }
     }
 
-    /// 注入 WorkflowExecutor 引用（避免循环依赖）
+    /// Inject WorkflowExecutor reference (avoids circular dependency)
     pub fn set_executor(&self, executor: std::sync::Weak<crate::core::executor::WorkflowExecutor>) {
         if let Ok(mut guard) = self.executor.write() {
             *guard = Some(executor);
         }
     }
 
-    /// 获取 WorkflowExecutor 引用（用于访问 ToolRegistry）
+    /// Get WorkflowExecutor reference (for accessing ToolRegistry)
     pub fn get_executor(&self) -> Option<Arc<crate::core::executor::WorkflowExecutor>> {
         self.executor.read().ok()?.as_ref()?.upgrade()
     }
 
-    /// 执行嵌套 workflow（由 Chat tool 调用）
+    /// Execute nested workflow (called by Chat tool)
     pub async fn execute_nested_workflow(
         &self,
         workflow_path: &str,
@@ -208,10 +208,10 @@ impl BuiltinRegistry {
         use std::fs;
         use std::sync::Arc;
 
-        // 1. 检查递归（进入执行栈）
+        // 1. Check recursion (enter execution stack)
         context.enter_execution(identifier.clone())?;
 
-        // 2. 加载 workflow
+        // 2. Load workflow
         let abs_workflow_path = if std::path::Path::new(workflow_path).is_absolute() {
             std::path::PathBuf::from(workflow_path)
         } else {
@@ -223,19 +223,19 @@ impl BuiltinRegistry {
 
         let workflow_graph = GraphParser::parse(&workflow_content)?;
 
-        // 3. 加载 workflow 依赖的 prompts 和 agents
+        // 3. Load prompts and agents required by the workflow
         let _workflow_base_dir = abs_workflow_path
             .parent()
             .unwrap_or(std::path::Path::new("."));
 
-        // 解析并加载资源
+        // Parse and load resources
         if !workflow_graph.prompt_patterns.is_empty() || !workflow_graph.agent_patterns.is_empty() {
 
-            // TODO: 这里简化处理，实际应该有更好的资源隔离策略
-            // 可以考虑创建临时 registry 或合并到当前 registry
+            // TODO: Simplified handling; a better resource isolation strategy is needed
+            // Consider creating a temporary registry or merging into the current one
         }
 
-        // 4. 获取 executor 并执行
+        // 4. Get executor and run
         let executor_weak = {
             let guard = self
                 .executor
@@ -252,17 +252,17 @@ impl BuiltinRegistry {
 
         debug!("│   ├─ Executing nested workflow: {}", workflow_path);
 
-        // 执行 workflow
+        // Execute workflow
         executor
             .execute_graph(Arc::new(workflow_graph), context)
             .await?;
 
-        // 5. 退出执行栈
+        // 5. Exit execution stack
         context.exit_execution()?;
 
         debug!("│   └─ Nested workflow completed");
 
-        // 从 context 获取输出
+        // Get output from context
         let output = context
             .resolve_path("reply.output")?
             .unwrap_or(serde_json::json!(""));

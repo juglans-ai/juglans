@@ -21,7 +21,7 @@ multiline_string = ${ multiline_marker ~ (multiline_sep ~ multiline_line?)+ }
 list_item = { string }
 list = { "[" ~ (list_item ~ ("," ~ list_item)*)? ~ ","? ~ "]" }
 
-// JSON 支持
+// JSON support
 json_pair = { string ~ ":" ~ json_value }
 json_object = { "{" ~ (json_pair ~ ("," ~ json_pair)*)? ~ ","? ~ "}" }
 json_array = { "[" ~ (json_value ~ ("," ~ json_value)*)? ~ ","? ~ "]" }
@@ -35,11 +35,11 @@ key_model = { "model" ~ ":" ~ string }
 key_temp = { "temperature" ~ ":" ~ number }
 key_mcp = { "mcp" ~ ":" ~ list }
 key_skills = { "skills" ~ ":" ~ list }
-// 关联本地工作流源文件（仅本地执行用）
+// Associated local workflow source file (for local execution only)
 key_source = { "source" ~ ":" ~ string }
-// 部署端点 URL（push 到 jug0 时告知请求转发地址）
+// Deployment endpoint URL (tells jug0 where to forward requests on push)
 key_endpoint = { "endpoint" ~ ":" ~ string }
-// 默认 tools 配置（支持 JSON 数组、字符串引用、或字符串数组引用）
+// Default tools config (supports JSON array, string reference, or string array references)
 key_tools = { "tools" ~ ":" ~ (json_array | list | string) }
 // @username for this agent (auto-registers handle in jug0)
 key_username = { "username" ~ ":" ~ string }

@@ -8,7 +8,7 @@ use tracing::{debug, warn};
 
 use crate::core::agent_parser::{AgentParser, AgentResource};
 
-/// Agent 注册表
+/// Agent registry
 #[derive(Debug, Clone)]
 pub struct AgentRegistry {
     // slug -> (AgentResource, FilePath)
@@ -28,7 +28,7 @@ impl AgentRegistry {
         }
     }
 
-    /// 根据配置的 glob patterns 加载本地 agents
+    /// Load local agents from configured glob patterns
     pub fn load_from_paths(&mut self, patterns: &[String]) -> Result<()> {
         for pattern in patterns {
             let paths =
@@ -48,7 +48,7 @@ impl AgentRegistry {
         Ok(())
     }
 
-    /// 读取并解析单个 .jgagent 文件
+    /// Read and parse a single .jgagent file
     fn load_file(&mut self, path: &Path) -> Result<()> {
         if path.extension().and_then(|s| s.to_str()) != Some("jgagent") {
             return Ok(());
@@ -70,22 +70,22 @@ impl AgentRegistry {
         Ok(())
     }
 
-    /// 获取 Agent 定义
+    /// Get agent definition
     pub fn get(&self, slug: &str) -> Option<&AgentResource> {
         self.agents.get(slug).map(|(a, _)| a)
     }
 
-    /// 【新增】获取 Agent 定义及其来源文件路径
+    /// Get agent definition and its source file path
     pub fn get_with_path(&self, slug: &str) -> Option<(&AgentResource, &PathBuf)> {
         self.agents.get(slug).map(|(a, p)| (a, p))
     }
 
-    /// 获取所有加载的 Slug
+    /// Get all loaded slugs
     pub fn keys(&self) -> Vec<String> {
         self.agents.keys().cloned().collect()
     }
 
-    /// 【新增】手动注册一个 agent
+    /// Manually register an agent
     pub fn register(&mut self, agent: AgentResource, path: PathBuf) {
         debug!("  ✓ Agent registered: {} from {:?}", agent.slug, path);
         self.agents.insert(agent.slug.clone(), (agent, path));

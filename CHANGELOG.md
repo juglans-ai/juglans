@@ -5,6 +5,89 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.8] - 2026-03-12
+
+### Added
+
+#### WASM Full Engine
+- **Full WASM execution engine** — `JuglansEngine` upgraded from a stub to a fully functional engine capable of parsing and executing workflows with tool bridge support
+- Support running .jg workflows directly in the browser
+- Tool handler callbacks support JS function injection
+
+#### Type System & Class Definitions
+- **Type system** — `type_checker.rs`, `types.rs` for type inference and checking
+- **Instance management** — `instance_arena.rs` for object instance lifecycle management
+- **Manifest parser** — `manifest_parser.rs` for project manifest parsing
+
+#### Serverless Webhook Handlers
+- **Telegram webhook handler** — `TelegramWebhookHandler` embedded in `juglans web` at the `/webhook/telegram` route
+- **Feishu webhook handler** — `FeishuWebhookHandler` embedded at the `/webhook/feishu` route
+- Both handlers support local / jug0 dual-mode execution
+- `NoopToolExecutor` — General-purpose no-op tool executor
+- Update/event deduplication
+
+#### Web Server
+- **`/health` route** — Health check endpoint, returns `{"status": "ok"}`
+- **Environment variable overrides** — `JUG0_BASE_URL`, `JUG0_API_KEY`, `SERVER_HOST`, `SERVER_PORT`, `FEISHU_APP_ID`, `FEISHU_APP_SECRET`, `TELEGRAM_BOT_TOKEN`
+
+### Changed
+
+#### Parser Migration
+- **Removed Pest grammars** — `jwl.pest`, `expr.pest` fully removed; switched to hand-written recursive descent parser (RDP)
+- **parser.rs slimmed down** — Removed 1200+ lines of legacy Pest code
+- **expr_parser.rs** — Added hand-written Pratt precedence expression parser
+
+#### Core Refactoring
+- **context.rs** — Replaced `std::sync::Mutex/RwLock` with `parking_lot` for WASM target compatibility
+- **executor.rs** — Executor refactored with improved tool call chain
+- **Removed MCP module** — `services/mcp.rs` removed (168 lines); MCP functionality consolidated into other modules
+
+#### Config
+- `TelegramBotConfig` added `mode` field (`"local"` / `"jug0"`)
+
+### Documentation
+- Major rewrite of tutorials and reference documentation
+- Example files updated
+
+## [0.2.7] - 2026-03-09
+
+### Added
+- **Rust-style error handling** — `return err`, `switch ok/err`, `??` operator, `is_err()`/`is_ok()` functions
+- **RDP parser JSON object literals** — Support writing `{"key": value}` directly in expressions
+
+### Fixed
+- Eliminated all clippy warnings (strict `-D warnings` mode)
+
+## [0.2.6] - 2026-03-01
+
+### Added
+- **Class system** — Class definitions, instantiation, and method calls
+- **Database builtins** — Built-in tools for database operations
+- **Node events** — Node execution event system
+- **TUI improvements** — Terminal UI enhancements
+
+## [0.2.5] - 2026-02-25
+
+### Added
+- **`print()` builtin** — Direct output tool
+- **Removed mandatory juglans.toml requirement** — Can now run without a config file
+- **README rewrite**
+
+## [0.2.4] - 2026-02-20
+
+### Added
+- **Expression engine** — Hand-written Pratt precedence parser replacing Pest
+- **Endpoint override** — API endpoint override support
+- **CI cleanup** — Build pipeline optimization
+
+## [0.2.3] - 2026-02-15
+
+### Added
+- **Flow imports** — Cross-workflow graph composition (`flows: { alias: "path.jg" }`)
+- Compile-time subgraph merging with namespace prefixes
+- Support for recursive imports and circular import detection
+- Cross-workflow conditional edges: `[node] if $ctx.x -> [alias.child_node]`
+
 ## [0.2.2] - 2026-02-10
 
 ### Added
@@ -189,9 +272,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Agent and prompt management
 - Basic builtins (chat, notify, etc.)
 
+[0.2.8]: https://github.com/juglans-ai/juglans/compare/v0.2.7...v0.2.8
+[0.2.7]: https://github.com/juglans-ai/juglans/compare/v0.2.6...v0.2.7
+[0.2.6]: https://github.com/juglans-ai/juglans/compare/v0.2.5...v0.2.6
+[0.2.5]: https://github.com/juglans-ai/juglans/compare/v0.2.4...v0.2.5
+[0.2.4]: https://github.com/juglans-ai/juglans/compare/v0.2.3...v0.2.4
+[0.2.3]: https://github.com/juglans-ai/juglans/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/juglans-ai/juglans/compare/v0.2.1...v0.2.2
 [0.1.5]: https://github.com/juglans-ai/juglans/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/juglans-ai/juglans/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/juglans-ai/juglans/compare/v0.1.2...v0.1.3
-[0.1.2]: https://github.com/juglans-ai/juglans/compare/v0.1.1...v0.1.4
+[0.1.2]: https://github.com/juglans-ai/juglans/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/juglans-ai/juglans/releases/tag/v0.1.1

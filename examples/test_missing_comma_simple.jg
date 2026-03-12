@@ -1,7 +1,4 @@
-name: "Test Missing Comma Simple"
-entry: [start]
-
-[start]: notify(message="hello" status="ok")
+[start]: notify(message="hello", status="ok")
 [end]: notify(message="done")
 
 [start] -> [end]

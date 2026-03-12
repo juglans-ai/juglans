@@ -1,10 +1,10 @@
 # Tutorial 8: Workflow Composition
 
-本章学习如何消除重复代码：用**函数定义**封装可复用逻辑，用 **flows** 导入外部子工作流，用 **libs** 引入函数库，将大型 workflow 拆分成可组合的模块。
+This chapter covers how to eliminate duplicate code: use **function definitions** to encapsulate reusable logic, **flows** to import external sub-workflows, and **libs** to import function libraries, splitting large workflows into composable modules.
 
-## 8.1 问题：代码重复
+## 8.1 The Problem: Code Duplication
 
-假设你需要在 workflow 中多次执行同样的"记录日志"操作：
+Suppose you need to perform the same "logging" operation multiple times in a workflow:
 
 ```juglans
 [log1]: print(message="[LOG] Step 1 started")
@@ -17,13 +17,13 @@
 [log1] -> [work1] -> [log2] -> [work2] -> [log3] -> [work3]
 ```
 
-`print(message="[LOG] ...")` 重复了三次。如果日志格式要改，三处都要改。随着 workflow 增长，这种重复会越来越难维护。
+`print(message="[LOG] ...")` is repeated three times. If the log format needs to change, you have to update all three places. As the workflow grows, this kind of duplication becomes increasingly difficult to maintain.
 
-## 8.2 函数定义
+## 8.2 Function Definitions
 
-函数让你把重复的逻辑封装成一个可复用的单元。
+Functions let you encapsulate repeated logic into a reusable unit.
 
-### 最简示例
+### Minimal Example
 
 ```juglans
 [log(msg)]: print(message="[LOG] " + $msg)
@@ -35,22 +35,22 @@
 [step1] -> [step2] -> [step3]
 ```
 
-逐行解释：
+Line-by-line explanation:
 
-1. `[log(msg)]` — 定义一个名为 `log` 的函数，接受一个参数 `msg`。方括号内的 `(msg)` 就是参数列表。
-2. `: print(message="[LOG] " + $msg)` — 函数体。这里是单步函数，直接绑定一个工具调用。`$msg` 引用传入的参数。
-3. `[step1]: log(msg="Step 1 started")` — 调用函数。语法与调用内置工具完全相同：`函数名(参数=值)`。
-4. 函数定义**不会**出现在 DAG 中，它只是一个可被调用的模板。
+1. `[log(msg)]` -- defines a function named `log` that accepts one parameter `msg`. The `(msg)` inside the brackets is the parameter list.
+2. `: print(message="[LOG] " + $msg)` -- the function body. This is a single-step function that directly binds a tool call. `$msg` references the passed parameter.
+3. `[step1]: log(msg="Step 1 started")` -- calls the function. The syntax is identical to calling a built-in tool: `function_name(param=value)`.
+4. Function definitions **do not** appear in the DAG; they are simply callable templates.
 
-函数定义语法：
+Function definition syntax:
 
 ```text
-[函数名(参数1, 参数2, ...)]: 函数体
+[function_name(param1, param2, ...)]: function_body
 ```
 
-### 多参数
+### Multiple Parameters
 
-函数可以接受任意数量的参数：
+Functions can accept any number of parameters:
 
 ```juglans
 [greet(name, greeting)]: print(message=$greeting + ", " + $name + "!")
@@ -62,11 +62,11 @@
 [step1] -> [step2] -> [done]
 ```
 
-参数在函数体中通过 `$参数名` 访问。调用时必须提供所有参数。
+Parameters are accessed within the function body via `$parameter_name`. All parameters must be provided when calling.
 
-### 多步函数
+### Multi-Step Functions
 
-当函数体需要多个步骤时，用花括号 `{ ... }` 包裹：
+When the function body requires multiple steps, wrap them in curly braces `{ ... }`:
 
 ```juglans
 [deploy(service, env)]: {
@@ -81,18 +81,18 @@
 [step1] -> [step2] -> [done]
 ```
 
-逐行解释：
+Line-by-line explanation:
 
-1. `[deploy(service, env)]:` — 函数签名，两个参数。
-2. `{ ... }` — 多步函数体。内部的步骤按顺序执行，用换行或 `;` 分隔。
-3. 第一步 `print(...)` 输出日志，第二步 `notify(...)` 发送通知。
-4. 调用时 `deploy(service="api", env="staging")` 会依次执行两步。
+1. `[deploy(service, env)]:` -- function signature with two parameters.
+2. `{ ... }` -- multi-step function body. Steps inside are executed sequentially, separated by newlines or `;`.
+3. The first step `print(...)` outputs a log message, the second step `notify(...)` sends a notification.
+4. Calling `deploy(service="api", env="staging")` executes both steps in sequence.
 
-多步函数体内的步骤会被自动串联成一条执行链。
+Steps within a multi-step function body are automatically chained into a sequential execution pipeline.
 
-### 用分号分隔
+### Semicolon Separation
 
-多步函数体也可以写成一行，用 `;` 分隔：
+Multi-step function bodies can also be written on a single line, separated by `;`:
 
 ```juglans
 [ping(host)]: { print(message="Pinging " + $host); notify(status="Pinged " + $host) }
@@ -103,9 +103,9 @@
 [a] -> [b]
 ```
 
-## 8.3 函数调用
+## 8.3 Function Calls
 
-函数调用在节点位置使用，语法与工具调用相同：
+Function calls are used in node positions, with the same syntax as tool calls:
 
 ```juglans
 [check(item)]: print(message="Checking: " + $item)
@@ -118,22 +118,22 @@
 [c1] -> [c2] -> [c3] -> [report]
 ```
 
-调用时，引擎会：
+When a function is called, the engine:
 
-1. 查找名为 `check` 的函数定义。
-2. 将参数 `item="database"` 绑定到函数体中的 `$item`。
-3. 执行函数体。
-4. 将函数体的输出存入 `$output`，供后续节点使用。
+1. Looks up the function definition named `check`.
+2. Binds the parameter `item="database"` to `$item` in the function body.
+3. Executes the function body.
+4. Stores the function body's output in `$output`, available to subsequent nodes.
 
-函数调用和内置工具调用在语法上完全一致。引擎按如下顺序解析工具名：内置工具 -> 函数定义 -> Python -> MCP -> 客户端桥接。
+Function calls and built-in tool calls are syntactically identical. The engine resolves tool names in this order: built-in tools -> function definitions -> Python -> MCP -> client bridge.
 
 ## 8.4 Flow Import
 
-当 workflow 变大时，你会希望把逻辑拆分到多个文件中。`flows:` 让你导入外部 `.jg` 文件作为子工作流。
+As workflows grow larger, you will want to split logic across multiple files. `flows:` lets you import external `.jg` files as sub-workflows.
 
-### 基本用法
+### Basic Usage
 
-假设你有一个认证子工作流 `auth.jg`：
+Suppose you have an authentication sub-workflow `auth.jg`:
 
 ```text
 # auth.jg
@@ -144,7 +144,7 @@
 [login] -> [verify] -> [complete]
 ```
 
-在主工作流中导入它：
+Import it in the main workflow:
 
 ```juglans
 flows: {
@@ -158,27 +158,27 @@ flows: {
 [auth.complete] -> [done]
 ```
 
-逐行解释：
+Line-by-line explanation:
 
-1. `flows: { auth: "./auth.jg" }` — 在文件头部声明子工作流导入。`auth` 是别名，`"./auth.jg"` 是文件路径（相对于当前 `.jg` 文件）。
-2. `[auth.login]` — 引用子工作流中的节点。格式为 `[别名.节点名]`。
-3. 引擎在编译时将 `auth.jg` 的节点和边合并到主图中，所有节点自动加上 `auth.` 命名空间前缀。
+1. `flows: { auth: "./auth.jg" }` -- declares a sub-workflow import in the file header. `auth` is the alias, `"./auth.jg"` is the file path (relative to the current `.jg` file).
+2. `[auth.login]` -- references a node in the sub-workflow. The format is `[alias.node_name]`.
+3. At compile time, the engine merges the nodes and edges from `auth.jg` into the main graph, automatically prefixing all nodes with the `auth.` namespace.
 
-### 命名空间前缀
+### Namespace Prefixing
 
-导入后，子工作流的所有节点 ID 自动变为 `别名.原始ID`：
+After import, all node IDs in the sub-workflow are automatically prefixed with `alias.original_ID`:
 
-| auth.jg 中的节点 | 合并后的 ID |
-|-------------------|-------------|
+| Node in auth.jg | Merged ID |
+|------------------|-----------|
 | `[login]` | `[auth.login]` |
 | `[verify]` | `[auth.verify]` |
 | `[complete]` | `[auth.complete]` |
 
-命名空间隔离了不同子工作流的节点名，避免冲突。
+Namespace prefixing isolates node names from different sub-workflows, preventing conflicts.
 
-### 跨工作流连接
+### Cross-Workflow Connections
 
-在主工作流的边定义中引用子工作流节点：
+Reference sub-workflow nodes in the main workflow's edge definitions:
 
 ```juglans
 flows: {
@@ -194,11 +194,11 @@ flows: {
 [payment.done] -> [done]
 ```
 
-子工作流之间也可以通过主工作流的边相互连接。`[auth.complete] -> [payment.charge]` 将认证子流的输出接入支付子流。
+Sub-workflows can also be connected to each other through the main workflow's edges. `[auth.complete] -> [payment.charge]` connects the output of the authentication sub-flow into the payment sub-flow.
 
-### 多个 Flow Import
+### Multiple Flow Imports
 
-`flows:` 支持同时导入多个子工作流：
+`flows:` supports importing multiple sub-workflows simultaneously:
 
 ```juglans
 flows: {
@@ -216,15 +216,15 @@ flows: {
 [log.done] -> [done]
 ```
 
-每个子工作流都有独立的命名空间，节点名不会冲突。
+Each sub-workflow has its own independent namespace, so node names will not conflict.
 
 ## 8.5 Library Import
 
-`libs:` 用于导入**函数库**——只包含函数定义的 `.jg` 文件。与 `flows:` 不同，`libs:` 不会合并子图节点，只提取函数定义。
+`libs:` is used to import **function libraries** -- `.jg` files that contain only function definitions. Unlike `flows:`, `libs:` does not merge sub-graph nodes; it only extracts function definitions.
 
-### 库文件
+### Library Files
 
-一个典型的库文件（`utils.jg`）只包含函数定义：
+A typical library file (`utils.jg`) contains only function definitions:
 
 ```text
 # utils.jg
@@ -234,7 +234,7 @@ slug: "utils"
 [format_name(first, last)]: set_context(full_name=$first + " " + $last)
 ```
 
-### 列表形式导入
+### List-Style Import
 
 ```juglans
 libs: ["./utils.jg"]
@@ -245,19 +245,19 @@ libs: ["./utils.jg"]
 [step1] -> [step2]
 ```
 
-逐行解释：
+Line-by-line explanation:
 
-1. `libs: ["./utils.jg"]` — 列表形式导入库文件。可以同时导入多个：`libs: ["./utils.jg", "./math.jg"]`。
-2. `utils.log(msg="Starting")` — 调用库中的函数，格式为 `命名空间.函数名(参数)`。
+1. `libs: ["./utils.jg"]` -- list-style library import. You can import multiple libraries at once: `libs: ["./utils.jg", "./math.jg"]`.
+2. `utils.log(msg="Starting")` -- calls a function from the library, in the format `namespace.function_name(params)`.
 
-**命名空间规则**（列表形式）：
+**Namespace rules** (list-style):
 
-1. 如果库文件声明了 `slug`，用 slug 作为命名空间。
-2. 否则用文件名（不含扩展名）作为命名空间。
+1. If the library file declares a `slug`, the slug is used as the namespace.
+2. Otherwise, the filename (without extension) is used as the namespace.
 
-### 对象形式导入
+### Object-Style Import
 
-如果想自定义命名空间，用对象形式：
+To customize the namespace, use object-style import:
 
 ```juglans
 libs: {
@@ -267,9 +267,9 @@ libs: {
 [step1]: u.log(msg="Custom namespace")
 ```
 
-`u` 是你指定的命名空间，覆盖文件内的 slug 和文件名。
+`u` is the namespace you specify, overriding both the file's slug and filename.
 
-### 导入多个库
+### Importing Multiple Libraries
 
 ```juglans
 libs: ["./string_utils.jg", "./math_utils.jg"]
@@ -281,71 +281,65 @@ libs: ["./string_utils.jg", "./math_utils.jg"]
 [step1] -> [step2] -> [done]
 ```
 
-每个库文件的函数在各自的命名空间下，不会相互冲突。
+Each library's functions reside in their own namespace, preventing conflicts between libraries.
 
-## 8.6 综合示例
+## 8.6 Comprehensive Example
 
-将函数定义、flow import 和 library import 组合在一起：
+Combining function definitions, flow imports, and library imports together:
 
 ```juglans
-name: "Order Pipeline"
-version: "0.1.0"
-
 flows: {
   payment: "./flows/payment.jg"
 }
 libs: ["./lib/helpers.jg"]
 
-entry: [start]
-exit: [report]
-
-# 本地函数定义
+# Local function definition
 [validate(data)]: {
   print(message="Validating: " + $data)
   set_context(is_valid=true)
 }
 
-# 入口
+# Entry
 [start]: set_context(order_id="ORD-001")
 
-# 调用本地函数
+# Call local function
 [check]: validate(data=$ctx.order_id)
 
-# 调用库函数
+# Call library function
 [log]: helpers.log(msg="Order validated: " + $ctx.order_id)
 
-# 汇报
+# Report
 [report]: print(message="Order " + $ctx.order_id + " processed")
 
-# 执行流：本地 -> 子工作流 -> 汇报
+# Execution flow: local -> sub-workflow -> report
 [start] -> [check]
 [check] -> [log]
 [log] -> [payment.start]
 [payment.done] -> [report]
 ```
 
-这个 workflow 展示了三种组合机制的协作：
+This workflow demonstrates the collaboration of all three composition mechanisms:
 
-1. **本地函数** `validate` — 封装验证逻辑，可在当前文件中多次调用。
-2. **Flow import** `payment` — 完整的支付子流程，作为子图合并进来。
-3. **Library import** `helpers` — 复用工具函数，按命名空间调用。
+1. **Local function** `validate` -- encapsulates validation logic, callable multiple times within the current file.
+2. **Flow import** `payment` -- a complete payment sub-process, merged into the graph as a sub-graph.
+3. **Library import** `helpers` -- reuses utility functions, called via namespace.
 
-三者各有适用场景：
+Each mechanism has its own use case:
 
-| 机制 | 适用场景 | 特点 |
-|------|----------|------|
-| 函数定义 | 当前文件内的代码复用 | 最简单，就地定义 |
-| `flows:` | 导入完整的子工作流（有节点和边） | 合并子图，命名空间隔离 |
-| `libs:` | 导入纯函数库 | 只提取函数，不合并子图 |
+| Mechanism | Use Case | Characteristics |
+|-----------|----------|-----------------|
+| Function definitions | Code reuse within the current file | Simplest approach, defined in place |
+| `flows:` | Import complete sub-workflows (with nodes and edges) | Merges sub-graph, namespace-isolated |
+| `libs:` | Import pure function libraries | Extracts functions only, no sub-graph merging |
 
-## 小结
+## Summary
 
-- **函数定义** `[name(params)]: body` -- 封装可复用逻辑，调用语法与内置工具相同
-- **单步函数** `[f(x)]: tool(...)` -- 直接绑定一个工具调用
-- **多步函数** `[f(x)]: { step1; step2 }` -- 花括号内多步顺序执行
-- **Flow Import** `flows: { alias: "path.jg" }` -- 导入完整子工作流，节点自动加命名空间前缀
-- **跨工作流边** `[local] -> [alias.node]` -- 在边中引用子工作流节点
-- **Library Import** `libs: ["path.jg"]` -- 导入函数库，通过 `namespace.func()` 调用
-- 三种机制可以组合使用，各有适用场景
+- **Function definitions** `[name(params)]: body` -- encapsulate reusable logic; call syntax is identical to built-in tools
+- **Single-step functions** `[f(x)]: tool(...)` -- directly bind a single tool call
+- **Multi-step functions** `[f(x)]: { step1; step2 }` -- multiple steps executed sequentially inside curly braces
+- **Flow Import** `flows: { alias: "path.jg" }` -- import complete sub-workflows; nodes are automatically namespace-prefixed
+- **Cross-workflow edges** `[local] -> [alias.node]` -- reference sub-workflow nodes in edge definitions
+- **Library Import** `libs: ["path.jg"]` -- import function libraries, called via `namespace.func()`
+- All three mechanisms can be combined, each suited for different scenarios
 
-下一章：[Tutorial 9: Full Project](./full-project.md) -- 将前 8 章所有知识整合，从零构建一个完整的 AI 助手项目。
+Next chapter: [Tutorial 9: Full Project](./full-project.md) -- integrate all knowledge from the previous 8 chapters to build a complete AI assistant project from scratch.

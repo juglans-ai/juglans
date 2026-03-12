@@ -52,21 +52,21 @@ impl AgentParser {
                 Rule::key_source => agent.source = Some(Self::parse_string(pair)),
                 Rule::key_endpoint => agent.endpoint = Some(Self::parse_string(pair)),
                 Rule::key_tools => {
-                    // 支持三种格式：JSON 数组（内联）、字符串（单个引用）、list（多个引用）
+                    // Supports three formats: JSON array (inline), string (single reference), list (multiple references)
                     let inner = pair.into_inner().next().unwrap();
                     agent.tools = Some(match inner.as_rule() {
-                        // 内联 JSON 数组：tools: [{...}, {...}]
+                        // Inline JSON array: tools: [{...}, {...}]
                         Rule::json_array => Self::parse_json_value(inner),
 
-                        // 单个引用：tools: "web-tools"
-                        // 使用 @ 前缀标记为引用，便于运行时识别
+                        // Single reference: tools: "web-tools"
+                        // Uses @ prefix to mark as reference for runtime identification
                         Rule::string => {
                             let slug = inner.as_str().trim_matches('"');
                             format!("@{}", slug)
                         }
 
-                        // 多个引用：tools: ["web-tools", "data-tools"]
-                        // 解析为字符串数组并序列化为 JSON
+                        // Multiple references: tools: ["web-tools", "data-tools"]
+                        // Parsed as string array and serialized to JSON
                         Rule::list => {
                             let slugs = Self::parse_list(inner.clone());
                             serde_json::to_string(&slugs).unwrap_or_else(|_| "[]".to_string())
@@ -168,7 +168,7 @@ impl AgentParser {
         list
     }
 
-    /// 解析 JSON 值并转换为 JSON 字符串
+    /// Parse JSON value and convert to JSON string
     fn parse_json_value(pair: pest::iterators::Pair<Rule>) -> String {
         use serde_json::json;
 
@@ -222,23 +222,23 @@ mod tests {
 name: "Test Agent"
 model: "gpt-4o"
 system_prompt: |
-  你是一个专业的加密货币 AI 助手。
+  You are a professional cryptocurrency AI assistant.
 
-  你的能力：
-  - 回答行情、技术分析、币种相关问题
-  - 使用 navigate_to_page 导航到不同页面
-  - 使用 get_market_data 获取 K 线数据
+  Your capabilities:
+  - Answer questions about market trends, technical analysis, and tokens
+  - Use navigate_to_page to navigate to different pages
+  - Use get_market_data to fetch candlestick data
 
-  重要：如果用户在消息中表达了任何交易意图，
-  你必须调用 create_trade_suggestion 工具。
+  Important: If the user expresses any trading intent in their message,
+  you must call the create_trade_suggestion tool.
 "#;
         let agent = AgentParser::parse(input).expect("parse should succeed");
         assert_eq!(agent.slug, "test-agent");
         assert!(agent
             .system_prompt
-            .contains("你是一个专业的加密货币 AI 助手。"));
+            .contains("You are a professional cryptocurrency AI assistant."));
         assert!(agent.system_prompt.contains("\n\n"));
-        assert!(agent.system_prompt.contains("你的能力："));
+        assert!(agent.system_prompt.contains("Your capabilities:"));
         assert!(agent.system_prompt.contains("create_trade_suggestion"));
         println!("=== Parsed system_prompt ===\n{}", agent.system_prompt);
     }

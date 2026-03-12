@@ -8,10 +8,6 @@ Juglans can turn any workflow into an HTTP API using two builtins:
 ## Minimal HTTP API
 
 ```juglans
-name: "Hello API"
-
-entry: [request]
-
 [request]: serve()
 [hello]: response(status=200, body={"message": "Hello from Juglans!"})
 
@@ -33,10 +29,6 @@ curl http://localhost:8080/api/hello
 Use `switch $input.route` to dispatch requests. `$input.route` is auto-computed as `"METHOD /path"` (e.g., `"GET /api/users"`).
 
 ```juglans
-name: "REST API"
-
-entry: [request]
-
 [request]: serve()
 
 [list_users]: response(status=200, body={"users": ["alice", "bob"]})
@@ -90,10 +82,6 @@ On startup, the server scans all `**/*.jg` files. If a workflow contains `serve(
 When a `chat()` node runs inside a `serve()` workflow, its output streams back to the client as Server-Sent Events. This is automatic -- no extra configuration needed.
 
 ```juglans
-name: "Streaming API"
-
-entry: [request]
-
 [request]: serve()
 [ask]: chat(agent="assistant", message=$input.body.question)
 [done]: response(status=200, body=$output)

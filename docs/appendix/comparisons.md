@@ -19,9 +19,6 @@
 **Declarative over imperative.** Define *what* happens, not *how* to wire it:
 
 ```juglans
-entry: [input]
-exit: [respond]
-
 [input]: set_context(query=$input.question)
 [search]: fetch(url="https://api.example.com/search?q=" + $ctx.query)
 [respond]: chat(agent="assistant", message=$search)
@@ -36,9 +33,6 @@ The equivalent Python script requires explicit function definitions, error handl
 **Built-in routing without code.**  Conditional edges and switch routing are part of the DSL, not bolted-on logic:
 
 ```juglans
-entry: [classify]
-exit: [answer, execute, fallback]
-
 [classify]: chat(agent="router", message=$input.query, format="json")
 
 [answer]: chat(agent="qa", message=$input.query)

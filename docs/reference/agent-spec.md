@@ -203,13 +203,48 @@ skills: ["code_review", "documentation", "testing"]
 
 ### source
 
-Path to an associated workflow file (relative to the `.jgagent` file location). When set, the agent triggers this workflow on user interaction.
+Path to an associated workflow file (relative to the `.jgagent` file location). When set, the agent triggers this workflow on user interaction instead of a direct LLM call.
 
 ```jgagent
-slug: "workflow-agent"
-model: "gpt-4o"
-source: "./workflow.jg"
-system_prompt: "You are a workflow-powered assistant."
+slug: "assistant"
+name: "Assistant"
+description: "AI assistant powered by workflow"
+source: "../main.jg"
+```
+
+**Best practice: Workflow-bound agents vs Pure agents**
+
+There are two styles of agent configuration:
+
+| Style | Location | Has `source:` | Has `model:`/`system_prompt:` | Use case |
+|-------|----------|---------------|-------------------------------|----------|
+| **Workflow-bound** | `src/agents/` | Yes | No | Complex, multi-step agent behavior |
+| **Pure** | `src/pure-agents/` | No | Yes | Single-task agents called inside workflows |
+
+Workflow-bound agents delegate all behavior to their source workflow. The workflow uses `chat(agent="pure-agent")` with `p()` to render prompts dynamically, keeping system prompts in `.jgprompt` files rather than hardcoded in agent definitions.
+
+Example project structure:
+
+```
+src/
+├── main.jg                    # Workflow: the agent's brain
+├── agents/
+│   └── assistant.jgagent      # source: "../main.jg"
+├── pure-agents/
+│   └── helper.jgagent         # model + system_prompt
+└── prompts/
+    └── system.jgprompt        # System prompt template
+```
+
+```juglans
+# main.jg — uses p() for prompt rendering
+prompts: ["./prompts/*.jgprompt"]
+agents: ["./pure-agents/*.jgagent"]
+
+[respond]: chat(
+  agent="helper",
+  message=p(slug="system", user_message=$input.message)
+)
 ```
 
 ### endpoint
@@ -311,9 +346,6 @@ Import agent files with the `agents:` metadata, then reference by slug in `chat(
 ```juglans
 agents: ["./agents/*.jgagent"]
 
-entry: [ask]
-exit: [ask]
-
 [ask]: chat(agent="assistant", message=$input.question)
 ```
 
@@ -321,9 +353,6 @@ exit: [ask]
 
 ```juglans
 agents: ["./agents/*.jgagent"]
-
-entry: [classify]
-exit: [classify]
 
 [classify]: chat(
   agent="router",
@@ -336,9 +365,6 @@ exit: [classify]
 
 ```juglans
 agents: ["./agents/*.jgagent"]
-
-entry: [analyze]
-exit: [analyze]
 
 [analyze]: chat(
   agent="analyst",
@@ -353,9 +379,6 @@ The `stateless="true"` parameter prevents the message from being saved to conver
 
 ```juglans
 agents: ["./agents/*.jgagent"]
-
-entry: [classify]
-exit: [done]
 
 [classify]: chat(
   agent="router",

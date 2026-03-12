@@ -2,14 +2,178 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use anyhow::Result;
-use std::path::PathBuf;
+use dashmap::DashSet;
+use serde_json::{json, Value};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{error, info};
 
-use super::{run_agent_for_message, PlatformMessage};
+use super::{chat_via_jug0, run_agent_for_message, PlatformMessage};
 use crate::services::config::JuglansConfig;
 
-/// 启动 Telegram Bot（long polling 模式）
+// ======================================================================
+// Public webhook handler (for web_server.rs serverless integration)
+// ======================================================================
+
+/// Telegram webhook handler, embeddable in web_server.
+///
+/// Receives Telegram Bot API webhook pushes, processes messages and replies.
+/// Suitable for serverless deployment (FC containers are not suited for long-polling).
+pub struct TelegramWebhookHandler {
+    config: JuglansConfig,
+    project_root: PathBuf,
+    agent_slug: String,
+    token: String,
+    use_jug0: bool,
+    processed_updates: DashSet<i64>,
+}
+
+impl TelegramWebhookHandler {
+    /// Create from JuglansConfig; returns Some if Telegram config is complete
+    pub fn from_config(config: &JuglansConfig, project_root: &Path) -> Option<Self> {
+        let bot_config = config.bot.as_ref()?.telegram.as_ref()?;
+        let token = bot_config.token.clone();
+        let agent_slug = bot_config.agent.clone();
+
+        let use_jug0 = match bot_config.mode.as_deref() {
+            Some("local") => false,
+            Some("jug0") => true,
+            _ => !config.jug0.base_url.is_empty(),
+        };
+
+        Some(Self {
+            config: config.clone(),
+            project_root: project_root.to_path_buf(),
+            agent_slug,
+            token,
+            use_jug0,
+            processed_updates: DashSet::new(),
+        })
+    }
+
+    /// Handle Telegram webhook Update JSON, return response
+    pub async fn handle_update(&self, body: Value) -> Value {
+        let update_id = body["update_id"].as_i64().unwrap_or(0);
+
+        // Deduplication
+        if update_id != 0 && !self.processed_updates.insert(update_id) {
+            return json!({"ok": true, "description": "duplicate"});
+        }
+
+        // Extract message
+        let msg = match body.get("message") {
+            Some(m) => m,
+            None => return json!({"ok": true}),
+        };
+
+        let text = msg["text"].as_str().unwrap_or("").to_string();
+        if text.is_empty() {
+            return json!({"ok": true});
+        }
+
+        let chat_id = msg["chat"]["id"].as_i64().unwrap_or(0);
+        let user_id = msg["from"]["id"].as_i64().unwrap_or(0).to_string();
+        let username = msg["from"]["username"].as_str().map(|s| s.to_string());
+        let first_name = msg["from"]["first_name"].as_str().unwrap_or("User");
+
+        info!(
+            "[Telegram Webhook] {} (@{}): {}",
+            first_name,
+            username.as_deref().unwrap_or("?"),
+            if text.chars().count() > 50 {
+                &text[..text
+                    .char_indices()
+                    .nth(50)
+                    .map(|(i, _)| i)
+                    .unwrap_or(text.len())]
+            } else {
+                &text
+            }
+        );
+
+        let platform_msg = PlatformMessage {
+            event_type: "message".into(),
+            event_data: json!({ "text": &text }),
+            platform_user_id: user_id,
+            platform_chat_id: chat_id.to_string(),
+            text,
+            username,
+        };
+
+        // Process asynchronously (don't block webhook response)
+        let config = self.config.clone();
+        let project_root = self.project_root.clone();
+        let agent_slug = self.agent_slug.clone();
+        let token = self.token.clone();
+        let use_jug0 = self.use_jug0;
+
+        tokio::spawn(async move {
+            let base_url = format!("https://api.telegram.org/bot{}", token);
+            let client = reqwest::Client::new();
+
+            // Send typing status
+            let _ = client
+                .post(format!("{}/sendChatAction", base_url))
+                .json(&json!({"chat_id": chat_id, "action": "typing"}))
+                .send()
+                .await;
+
+            let result = if use_jug0 {
+                chat_via_jug0(
+                    &config,
+                    &agent_slug,
+                    &platform_msg,
+                    &super::NoopToolExecutor,
+                )
+                .await
+            } else {
+                run_agent_for_message(&config, &project_root, &agent_slug, &platform_msg, None)
+                    .await
+            };
+
+            match result {
+                Ok(reply) => {
+                    if reply.text.is_empty() || reply.text == "(No response)" {
+                        return;
+                    }
+                    let chunks = split_message(&reply.text, 4096);
+                    for chunk in chunks {
+                        let send_result = client
+                            .post(format!("{}/sendMessage", base_url))
+                            .json(&json!({
+                                "chat_id": chat_id,
+                                "text": chunk,
+                                "parse_mode": "Markdown"
+                            }))
+                            .send()
+                            .await;
+
+                        if let Err(e) = send_result {
+                            error!("[Telegram Webhook] Send failed: {}", e);
+                            let _ = client
+                                .post(format!("{}/sendMessage", base_url))
+                                .json(&json!({"chat_id": chat_id, "text": chunk}))
+                                .send()
+                                .await;
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("[Telegram Webhook] Agent error: {}", e);
+                    let _ = client
+                        .post(format!("{}/sendMessage", base_url))
+                        .json(&json!({"chat_id": chat_id, "text": format!("Error: {}", e)}))
+                        .send()
+                        .await;
+                }
+            }
+        });
+
+        json!({"ok": true})
+    }
+}
+
+/// Start Telegram Bot (long polling mode)
 pub async fn start(config: JuglansConfig, project_root: PathBuf, agent_slug: String) -> Result<()> {
     let bot_config = config
         .bot
@@ -25,7 +189,7 @@ pub async fn start(config: JuglansConfig, project_root: PathBuf, agent_slug: Str
     let client = reqwest::Client::new();
     let base_url = format!("https://api.telegram.org/bot{}", token);
 
-    // 验证 token
+    // Verify token
     let me_resp: serde_json::Value = client
         .get(format!("{}/getMe", base_url))
         .send()
@@ -78,7 +242,7 @@ pub async fn start(config: JuglansConfig, project_root: PathBuf, agent_slug: Str
                 let update_id = update["update_id"].as_i64().unwrap_or(0);
                 offset = update_id + 1;
 
-                // 提取消息
+                // Extract message
                 let msg = if let Some(m) = update.get("message") {
                     m
                 } else {
@@ -102,7 +266,7 @@ pub async fn start(config: JuglansConfig, project_root: PathBuf, agent_slug: Str
                     if text.len() > 50 { &text[..50] } else { &text }
                 );
 
-                // 异步处理消息
+                // Process message asynchronously
                 let config = config.clone();
                 let project_root = project_root.clone();
                 let agent_slug = agent_slug.clone();
@@ -119,7 +283,7 @@ pub async fn start(config: JuglansConfig, project_root: PathBuf, agent_slug: Str
                         username,
                     };
 
-                    // 发送 "typing" 状态
+                    // Send "typing" status
                     let _ = client
                         .post(format!("{}/sendChatAction", base_url))
                         .json(&serde_json::json!({
@@ -139,7 +303,7 @@ pub async fn start(config: JuglansConfig, project_root: PathBuf, agent_slug: Str
                     .await
                     {
                         Ok(reply) => {
-                            // 分段发送（Telegram 消息最大 4096 字符）
+                            // Send in chunks (Telegram message limit: 4096 characters)
                             let chunks = split_message(&reply.text, 4096);
                             for chunk in chunks {
                                 let send_result = client
@@ -154,7 +318,7 @@ pub async fn start(config: JuglansConfig, project_root: PathBuf, agent_slug: Str
 
                                 if let Err(e) = send_result {
                                     error!("Failed to send message: {}", e);
-                                    // 降级：不带 parse_mode 重试
+                                    // Fallback: retry without parse_mode
                                     let _ = client
                                         .post(format!("{}/sendMessage", base_url))
                                         .json(&serde_json::json!({
@@ -184,7 +348,7 @@ pub async fn start(config: JuglansConfig, project_root: PathBuf, agent_slug: Str
     }
 }
 
-/// 将长消息分割为多段（Telegram 限制 4096 字符）
+/// Split long message into chunks (Telegram limit: 4096 characters)
 fn split_message(text: &str, max_len: usize) -> Vec<String> {
     if text.len() <= max_len {
         return vec![text.to_string()];
@@ -199,7 +363,7 @@ fn split_message(text: &str, max_len: usize) -> Vec<String> {
             break;
         }
 
-        // 尝试在换行处分割
+        // Try to split at a newline
         let split_pos = remaining[..max_len].rfind('\n').unwrap_or(max_len);
 
         chunks.push(remaining[..split_pos].to_string());

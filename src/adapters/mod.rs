@@ -22,37 +22,50 @@ use crate::services::interface::JuglansRuntime;
 use crate::services::jug0::Jug0Client;
 use crate::services::prompt_loader::PromptRegistry;
 
-/// 标准化平台事件信封
+/// Standardized platform event envelope.
 ///
-/// 所有平台事件（消息、卡片回调等）统一格式，workflow 通过 $input.event_type 路由。
+/// All platform events (messages, card callbacks, etc.) use a uniform format; workflow routes via $input.event_type.
 pub struct PlatformMessage {
-    /// 事件类型: "message" | "card_action" | ...
+    /// Event type: "message" | "card_action" | ...
     pub event_type: String,
-    /// 事件专属数据（message: {"text": "..."}, card_action: {"action": "confirm", ...}）
+    /// Event-specific data (message: {"text": "..."}, card_action: {"action": "confirm", ...})
     pub event_data: Value,
     pub platform_user_id: String,
     pub platform_chat_id: String,
-    /// 便捷字段：消息文本（message 时有值，其他事件为空）
+    /// Convenience field: message text (populated for message events, empty for others)
     pub text: String,
     pub username: Option<String>,
 }
 
-/// Bot 回复
+/// Bot reply
 pub struct BotReply {
     pub text: String,
 }
 
-/// 工具执行器 trait — 由平台适配器实现
+/// Tool executor trait -- implemented by platform adapters
 #[async_trait::async_trait]
 pub trait ToolExecutor: Send + Sync {
     async fn execute(&self, tool_name: &str, args: Value) -> Result<String>;
 }
 
-/// 通过 jug0 聊天（SSE 客户端模式）
+/// No-op tool executor (for adapters without platform-specific tools, e.g. Telegram)
+pub struct NoopToolExecutor;
+
+#[async_trait::async_trait]
+impl ToolExecutor for NoopToolExecutor {
+    async fn execute(&self, tool_name: &str, _args: Value) -> Result<String> {
+        Ok(format!(
+            "Tool '{}' is not available in this context",
+            tool_name
+        ))
+    }
+}
+
+/// Chat via jug0 (SSE client mode).
 ///
-/// 发送消息到 jug0 /api/chat，读取 SSE 流：
-/// - content 事件 → 拼接回复文本
-/// - tool_call 事件 → 调用 tool_executor 执行工具 → POST /tool-result
+/// Sends message to jug0 /api/chat and reads the SSE stream:
+/// - content events -> concatenated into reply text
+/// - tool_call events -> invoke tool_executor to run tools -> POST /tool-result
 pub async fn chat_via_jug0(
     config: &JuglansConfig,
     agent_slug: &str,
@@ -89,7 +102,7 @@ pub async fn chat_via_jug0(
 
     let mut reply_text = String::new();
 
-    // 使用 eventsource-stream 解析 SSE
+    // Parse SSE using eventsource-stream
     use eventsource_stream::Eventsource;
     let mut stream = resp.bytes_stream().eventsource();
 
@@ -106,7 +119,7 @@ pub async fn chat_via_jug0(
 
         match event_type {
             "" | "message" => {
-                // 默认事件 = content token
+                // Default event = content token
                 if let Ok(data) = serde_json::from_str::<Value>(&event.data) {
                     if let Some(text) = data["text"].as_str() {
                         reply_text.push_str(text);
@@ -114,7 +127,7 @@ pub async fn chat_via_jug0(
                 }
             }
             "tool_call" => {
-                // Client tool bridge: 执行工具并返回结果
+                // Client tool bridge: execute tools and return results
                 if let Ok(data) = serde_json::from_str::<Value>(&event.data) {
                     let call_id = data["call_id"].as_str().unwrap_or("").to_string();
                     let tools = data["tools"].as_array().cloned().unwrap_or_default();
@@ -199,11 +212,11 @@ pub async fn chat_via_jug0(
     Ok(BotReply { text: reply_text })
 }
 
-/// 复用 web_server handle_chat 的核心逻辑，去除 SSE/HTTP 部分：
-/// 1. 加载 agent → 创建 executor
-/// 2. 创建 WorkflowContext，设置 $input.message
-/// 3. 执行 workflow 或 direct chat
-/// 4. 收集所有 Token 事件 → 拼接为回复文本
+/// Reuse core logic from web_server handle_chat, without the SSE/HTTP parts:
+/// 1. Load agent -> create executor
+/// 2. Create WorkflowContext, set $input.message
+/// 3. Execute workflow or direct chat
+/// 4. Collect all Token events -> concatenate into reply text
 pub async fn run_agent_for_message(
     config: &JuglansConfig,
     project_root: &Path,
@@ -211,7 +224,7 @@ pub async fn run_agent_for_message(
     message: &PlatformMessage,
     tool_executor: Option<&dyn ToolExecutor>,
 ) -> Result<BotReply> {
-    // 1. 加载 agent registry
+    // 1. Load agent registry
     let mut agent_registry = AgentRegistry::new();
     let agent_pattern = project_root
         .join("**/*.jgagent")
@@ -229,7 +242,7 @@ pub async fn run_agent_for_message(
         .unwrap_or(Path::new("."))
         .to_path_buf();
 
-    // 2. 创建 runtime + executor
+    // 2. Create runtime + executor
     let runtime: Arc<dyn JuglansRuntime> = Arc::new(Jug0Client::new(config));
 
     let mut prompt_registry = PromptRegistry::new();
@@ -246,7 +259,7 @@ pub async fn run_agent_for_message(
     )
     .await;
 
-    // 加载 tool definitions
+    // Load tool definitions
     {
         use crate::core::tool_loader::ToolLoader;
         use crate::services::tool_registry::ToolRegistry;
@@ -259,9 +272,7 @@ pub async fn run_agent_for_message(
             }
         }
     }
-    executor.load_mcp_tools(config).await;
-
-    // 提前解析 workflow（在 Arc 包装前），以便调用 init_python_runtime / load_tools
+    // Parse workflow early (before Arc wrapping) to call init_python_runtime / load_tools
     let parsed_workflow = if let Some(wf_ref) = &agent_meta.source {
         let is_file_path = wf_ref.ends_with(".jg")
             || wf_ref.ends_with(".jgflow")
@@ -310,7 +321,7 @@ pub async fn run_agent_for_message(
         None
     };
 
-    // 初始化 Python runtime + load workflow tools（需要 &mut self，必须在 Arc 前）
+    // Initialize Python runtime + load workflow tools (requires &mut self, must be before Arc)
     if let Some(ref wf) = parsed_workflow {
         executor.load_tools(wf).await;
         executor.apply_limits(&config.limits);
@@ -324,11 +335,11 @@ pub async fn run_agent_for_message(
         .get_registry()
         .set_executor(Arc::downgrade(&executor));
 
-    // 3. 创建 context + 事件通道（用于收集 Token）
+    // 3. Create context + event channel (for collecting tokens)
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<WorkflowEvent>();
     let ctx = WorkflowContext::with_sender(tx.clone());
 
-    // 设置标准化事件输入
+    // Set standardized event input
     ctx.set("input.event_type".into(), json!(message.event_type))
         .ok();
     ctx.set("input.event_data".into(), message.event_data.clone())
@@ -338,7 +349,7 @@ pub async fn run_agent_for_message(
     ctx.set("input.chat_id".into(), json!(message.platform_chat_id))
         .ok();
     ctx.set("input.text".into(), json!(message.text)).ok();
-    ctx.set("input.message".into(), json!(message.text)).ok(); // 兼容
+    ctx.set("input.message".into(), json!(message.text)).ok(); // backward compat
     ctx.set(
         "input.platform_chat_id".into(),
         json!(message.platform_chat_id),
@@ -353,12 +364,12 @@ pub async fn run_agent_for_message(
         ctx.set("input.username".into(), json!(username)).ok();
     }
 
-    // 注入 juglans.toml 配置到 $config
+    // Inject juglans.toml config into $config
     if let Ok(config_value) = serde_json::to_value(config) {
         ctx.set("config".to_string(), config_value).ok();
     }
 
-    // 尝试解析消息为 JSON
+    // Try to parse message as JSON
     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&message.text) {
         if let Some(obj) = parsed.as_object() {
             for (k, v) in obj {
@@ -367,7 +378,7 @@ pub async fn run_agent_for_message(
         }
     }
 
-    // 4. 异步执行 workflow
+    // 4. Execute workflow asynchronously
     let executor_clone = executor.clone();
     let agent_meta_clone = agent_meta.clone();
 
@@ -375,7 +386,7 @@ pub async fn run_agent_for_message(
         let result = if let Some(workflow) = parsed_workflow {
             executor_clone.execute_graph(workflow, &ctx).await
         } else {
-            // 直接 chat 模式
+            // Direct chat mode
             let mut params = HashMap::new();
             params.insert("agent".to_string(), agent_meta_clone.slug.clone());
             params.insert("message".to_string(), "$input.message".to_string());
@@ -392,7 +403,7 @@ pub async fn run_agent_for_message(
         }
     });
 
-    // 5. 收集所有 Token 事件 → 拼接为回复文本
+    // 5. Collect all Token events -> concatenate into reply text
     let mut reply_text = String::new();
 
     while let Some(event) = rx.recv().await {
@@ -451,15 +462,15 @@ pub async fn run_agent_for_message(
             | WorkflowEvent::ToolComplete(_)
             | WorkflowEvent::NodeStart(_)
             | WorkflowEvent::NodeComplete(_) => {
-                // Bot 模式忽略 meta / tool / node 事件
+                // Bot mode ignores meta / tool / node events
             }
         }
     }
 
-    // 等待执行结束
+    // Wait for execution to finish
     let _ = exec_handle.await;
 
-    // 如果 reply_text 为空，尝试从 context 获取
+    // If reply_text is empty, try to get from context
     if reply_text.is_empty() {
         if let Ok(Some(val)) = WorkflowContext::new().resolve_path("reply.output") {
             if let Some(s) = val.as_str() {

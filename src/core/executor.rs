@@ -19,12 +19,12 @@ use crate::builtins::BuiltinRegistry;
 use crate::core::context::WorkflowContext;
 use crate::core::expr_eval::{self, ExprEvaluator};
 use crate::core::graph::{self, NodeType, WorkflowGraph};
+use crate::core::instance_arena::{MethodScope, TypedSlot};
 use crate::core::parser::GraphParser;
 use crate::runtime::python::PythonRuntime;
 use crate::services::agent_loader::AgentRegistry;
 use crate::services::config::{DebugConfig, JuglansConfig};
 use crate::services::interface::JuglansRuntime;
-use crate::services::mcp::{McpClient, McpTool};
 use crate::services::prompt_loader::PromptRegistry;
 use crate::services::tool_registry::ToolRegistry;
 
@@ -47,8 +47,6 @@ struct EdgeEvalContext<'a> {
 
 pub struct WorkflowExecutor {
     builtin_registry: Arc<BuiltinRegistry>,
-    mcp_client: McpClient,
-    mcp_tools_map: HashMap<String, McpTool>,
     tool_registry: Arc<ToolRegistry>,
     expr_eval: ExprEvaluator,
     debug_config: DebugConfig,
@@ -83,14 +81,12 @@ impl WorkflowExecutor {
     ) -> Self {
         let registry_arc = BuiltinRegistry::new(prompt_registry, agent_registry, runtime);
 
-        // 将 devtools schema 自动注册到 ToolRegistry（slug: "devtools"）
+        // Auto-register devtools schema to ToolRegistry (slug: "devtools")
         let mut tool_registry = ToolRegistry::new();
         registry_arc.register_devtools_to_registry(&mut tool_registry);
 
         Self {
             builtin_registry: registry_arc,
-            mcp_client: McpClient::new(),
-            mcp_tools_map: HashMap::new(),
             tool_registry: Arc::new(tool_registry),
             expr_eval: ExprEvaluator::new(),
             debug_config,
@@ -105,7 +101,7 @@ impl WorkflowExecutor {
         self.max_loop_iterations = limits.max_loop_iterations;
     }
 
-    /// 获取 builtin registry 的引用（用于注入 executor）
+    /// Get a reference to the builtin registry (for injecting into executor)
     pub fn get_registry(&self) -> &Arc<BuiltinRegistry> {
         &self.builtin_registry
     }
@@ -124,15 +120,15 @@ impl WorkflowExecutor {
             workflow.tool_patterns.len()
         );
 
-        let workflow_base_dir = Path::new("."); // 可以从 workflow 文件路径推导
+        let workflow_base_dir = Path::new("."); // Can be derived from workflow file path
         let mut loaded_count = 0;
 
         for pattern in &workflow.tool_patterns {
             match ToolLoader::load_from_glob(pattern, workflow_base_dir) {
                 Ok(tools) => {
                     loaded_count += tools.len();
-                    // 需要获取可变引用，所以使用 Arc::get_mut 或 Mutex
-                    // 这里暂时创建一个新的 registry 并替换
+                    // Need a mutable reference, so use Arc::get_mut or Mutex
+                    // For now, create a new registry and replace it
                     let mut registry = (*self.tool_registry).clone();
                     registry.register_all(tools);
                     self.tool_registry = Arc::new(registry);
@@ -160,51 +156,6 @@ impl WorkflowExecutor {
     /// Replace the tool registry
     pub fn set_tool_registry(&mut self, registry: Arc<ToolRegistry>) {
         self.tool_registry = registry;
-    }
-
-    pub async fn load_mcp_tools(&mut self, config: &JuglansConfig) {
-        if config.mcp_servers.is_empty() {
-            return;
-        }
-
-        info!(
-            "🔌 Connecting to {} MCP servers concurrently...",
-            config.mcp_servers.len()
-        );
-
-        // Fetch tool schemas from all MCP servers concurrently
-        let fetch_futures: Vec<_> = config
-            .mcp_servers
-            .iter()
-            .map(|server_conf| {
-                let client = self.mcp_client.clone();
-                let server_conf = server_conf.clone();
-                async move {
-                    let result = client.fetch_tools(&server_conf).await;
-                    (server_conf, result)
-                }
-            })
-            .collect();
-        let results = futures::future::join_all(fetch_futures).await;
-
-        for (server_conf, result) in results {
-            match result {
-                Ok(tools) => {
-                    info!(
-                        "  ✅ Connected to [{}], found {} tools.",
-                        server_conf.name,
-                        tools.len()
-                    );
-                    let namespace = server_conf.alias.as_deref().unwrap_or(&server_conf.name);
-                    for tool in tools {
-                        let namespaced_key = format!("{}.{}", namespace, tool.name);
-                        debug!("    Registered tool: {}", namespaced_key);
-                        self.mcp_tools_map.insert(namespaced_key, tool);
-                    }
-                }
-                Err(e) => warn!("  ❌ Failed to connect to [{}]: {}", server_conf.name, e),
-            }
-        }
     }
 
     /// Initialize Python runtime if the workflow has python imports
@@ -297,9 +248,8 @@ impl WorkflowExecutor {
 
             // Only dispatch as tool call if it's a registered tool
             // (not an expression function like len(), str(), filter(), etc.)
-            let is_registered_tool = self.builtin_registry.get(tool_name).is_some()
-                || self.mcp_tools_map.contains_key(tool_name)
-                || self.is_python_call(tool_name);
+            let is_registered_tool =
+                self.builtin_registry.get(tool_name).is_some() || self.is_python_call(tool_name);
 
             if is_registered_tool {
                 let args_str = &caps[2];
@@ -333,34 +283,59 @@ impl WorkflowExecutor {
             // else: fall through to expression evaluator below
         }
 
-        // 引号包裹 → 字符串字面量，直接返回，不经过表达式求值器
-        // 防止 "display_only" 被当作变量解析为 Null，"trade-extractor" 被当作 trade - extractor = 0
+        // Quoted -> string literal, return directly without going through expression evaluator.
+        // Prevents "display_only" from being resolved as a variable to Null, "trade-extractor" being parsed as trade - extractor = 0
         if clean_param.starts_with('"') && clean_param.ends_with('"') {
             let inner = &clean_param[1..clean_param.len() - 1];
-            // 内部无引号 → 纯字符串字面量，直接返回
-            // 内部有引号 → "str" + expr + "str" 拼接表达式，交给求值器
+            // No inner quotes -> pure string literal, return directly
+            // Has inner quotes -> "str" + expr + "str" concatenation expression, pass to evaluator
             if !inner.contains('"') {
                 return Ok(Value::String(inner.to_string()));
             }
         }
 
-        // 使用表达式求值器解析和求值（替代 Rhai）
-        // resolver 负责将变量路径（如 "ctx.intent" → "intent"）映射到 WorkflowContext
+        // Parse and evaluate using expression evaluator (replaces Rhai).
+        // Resolver maps variable paths (e.g. "ctx.intent" -> "intent") to WorkflowContext.
         let context_ref = context;
         let show_variables = self.debug_config.show_variables;
-        let resolver = |path: &str| -> Option<Value> {
+
+        // Phase C-2: prefer direct-index evaluation inside method body (zero HashMap, zero locks)
+        // parse_cached → optimize_for_method → eval_method_expr
+        let method_result = context_ref
+            .with_method_scope(|scope| {
+                let ast = self.expr_eval.parse_cached(clean_param).ok()?;
+                let optimized = expr_eval::ExprEvaluator::optimize_for_method(
+                    &ast,
+                    &scope.class_def,
+                    &scope.method_params,
+                );
+                self.expr_eval
+                    .eval_method_expr(&optimized, &scope.field_cache, &scope.param_values)
+                    .ok()
+            })
+            .flatten();
+        if let Some(slot) = method_result {
+            return Ok(slot.to_value());
+        }
+
+        // General path: TypedSlot fast path + Value fallback
+        let typed_resolver = |path: &str| -> Option<TypedSlot> {
             let clean = path.strip_prefix("ctx.").unwrap_or(path);
+            if let Some(slot) = context_ref.resolve_path_typed(clean) {
+                return Some(slot);
+            }
             let resolved = context_ref.resolve_path(clean).ok().flatten();
             if show_variables {
-                info!("🔍 [Debug] Resolve: ${} → {:?}", path, resolved);
+                tracing::info!("🔍 [Debug] Resolve: ${} → {:?}", path, resolved);
             }
-            resolved
+            resolved.map(TypedSlot::from_value)
         };
 
-        match self.expr_eval.eval(clean_param, &resolver) {
-            Ok(val) => Ok(val),
-            Err(_) => {
-                // 解析失败时作为字符串字面量返回
+        match self.expr_eval.eval_typed(clean_param, &typed_resolver) {
+            Ok(slot) => Ok(slot.to_value()),
+            Err(e) => {
+                // On evaluation failure, return as string literal
+                debug!("  [Expr] Failed to evaluate '{}': {}", clean_param, e);
                 Ok(json!(clean_param))
             }
         }
@@ -377,22 +352,7 @@ impl WorkflowExecutor {
             return tool.execute(params, context).await;
         }
 
-        // 2. Check MCP tools
-        if let Some(mcp_tool) = self.mcp_tools_map.get(name) {
-            let mut args = serde_json::Map::new();
-            for (k, v) in params {
-                let val = serde_json::from_str(v).unwrap_or(Value::String(v.clone()));
-                args.insert(k.clone(), val);
-            }
-            let output_str = self
-                .mcp_client
-                .execute_tool(mcp_tool, Value::Object(args))
-                .await?;
-            let parsed_val = serde_json::from_str(&output_str).unwrap_or(Value::String(output_str));
-            return Ok(Some(parsed_val));
-        }
-
-        // 3. Check Python imports
+        // 2. Check Python imports
         if self.is_python_call(name) {
             debug!("🐍 Executing Python call: {}", name);
             return self.execute_python_call(name, params);
@@ -401,24 +361,13 @@ impl WorkflowExecutor {
         Err(anyhow!("Function/Tool '{}' not found", name))
     }
 
-    /// 尝试执行 MCP tool（供 Chat builtin 的 tool call loop 使用）
-    /// 如果 tool 不在 mcp_tools_map 中，返回 None
-    pub async fn execute_mcp_tool(&self, name: &str, args_json_str: &str) -> Option<String> {
-        let mcp_tool = self.mcp_tools_map.get(name)?;
-        let args: Value = serde_json::from_str(args_json_str).unwrap_or(json!({}));
-        match self.mcp_client.execute_tool(mcp_tool, args).await {
-            Ok(output) => Some(output),
-            Err(e) => Some(format!("MCP tool error: {}", e)),
-        }
-    }
-
     async fn evaluate_condition_async(
         &self,
         script: &str,
         context: &WorkflowContext,
     ) -> Result<bool> {
         let val = self.process_parameter(script, context).await?;
-        // Python-like truthiness 代替 Rhai 的 as_bool
+        // Python-like truthiness replaces Rhai's as_bool
         let result = expr_eval::is_truthy(&val);
         if self.debug_config.show_conditions {
             info!(
@@ -460,11 +409,10 @@ impl WorkflowExecutor {
                 Ok(Some(val.clone()))
             }
             NodeType::Task(action) => {
-                // 检查是否是 struct/class 实例化（函数调用式：Name(field=value)）
+                // Check if this is struct/class instantiation (function call style: Name(field=value))
                 if workflow.classes.contains_key(&action.name) {
-                    let class_def = workflow.classes.get(&action.name).unwrap().clone();
-                    let mut instance = serde_json::Map::new();
-                    instance.insert("__class__".to_string(), serde_json::json!(&action.name));
+                    let class_def = workflow.classes.get(&action.name).unwrap();
+                    let mut fields_vec = Vec::with_capacity(class_def.fields.len());
                     for field in &class_def.fields {
                         let value = if let Some(arg_expr) = action.params.get(&field.name) {
                             self.process_parameter(arg_expr, context).await?
@@ -473,14 +421,20 @@ impl WorkflowExecutor {
                         } else {
                             Value::Null
                         };
-                        instance.insert(field.name.clone(), value);
+                        fields_vec.push(value);
                     }
-                    let instance_val = Value::Object(instance);
-                    context.set(node.id.clone(), instance_val.clone())?;
-                    return Ok(Some(instance_val));
+                    let class_def_arc = Arc::clone(class_def);
+                    let id = context.alloc_instance(
+                        node.id.clone(),
+                        action.name.clone(),
+                        class_def_arc,
+                        fields_vec,
+                    )?;
+                    // Deferred materialization: return arena proxy, resolve_path lazy-loads on demand
+                    return Ok(Some(json!({"__arena_ref__": id.0})));
                 }
 
-                // 检查是否是函数节点调用
+                // Check if this is a function node call
                 if workflow.functions.contains_key(&action.name) {
                     // Resolve all function args concurrently
                     let param_futures: Vec<_> = action
@@ -503,7 +457,7 @@ impl WorkflowExecutor {
                         let (key, val) = result?;
                         args.insert(key, val);
                     }
-                    // emit tool_start（将 Value args 转为 String 用于展示）
+                    // emit tool_start (convert Value args to String for display)
                     let display_params: HashMap<String, String> = args
                         .iter()
                         .map(|(k, v)| {
@@ -706,7 +660,7 @@ impl WorkflowExecutor {
                     info!("│   Foreach parallel: {} iterations", array.len());
                     let mut tasks = vec![];
                     for (i, val) in array.iter().enumerate() {
-                        let ctx_clone = context.clone();
+                        let ctx_clone = context.fork();
                         ctx_clone.set(item.clone(), val.clone())?;
                         ctx_clone.set("_index".to_string(), serde_json::json!(i))?;
                         let body_arc = Arc::new(*body.clone());
@@ -737,8 +691,9 @@ impl WorkflowExecutor {
                             }
                         }
                     }
-                    context.set("output".to_string(), serde_json::json!(outputs))?;
-                    Ok(None)
+                    let collected = serde_json::json!(outputs);
+                    context.set("output".to_string(), collected.clone())?;
+                    Ok(Some(collected))
                 } else {
                     // Sequential foreach: original behavior
                     for (i, val) in array.iter().enumerate() {
@@ -838,9 +793,7 @@ impl WorkflowExecutor {
                     .get(class_name)
                     .ok_or_else(|| anyhow!("Class '{}' not found", class_name))?;
 
-                let mut instance = serde_json::Map::new();
-                instance.insert("__class__".to_string(), serde_json::json!(class_name));
-
+                let mut fields_vec = Vec::with_capacity(class_def.fields.len());
                 for field in &class_def.fields {
                     let value = if let Some(arg_expr) = args.get(&field.name) {
                         self.process_parameter(arg_expr, context).await?
@@ -853,13 +806,18 @@ impl WorkflowExecutor {
                             field.name
                         ));
                     };
-                    instance.insert(field.name.clone(), value);
+                    fields_vec.push(value);
                 }
 
-                let instance_val = Value::Object(instance);
-                // Store instance directly at the node id for ergonomic $instance access
-                context.set(node.id.clone(), instance_val.clone())?;
-                Ok(Some(instance_val))
+                let class_def_arc = Arc::clone(class_def);
+                let id = context.alloc_instance(
+                    node.id.clone(),
+                    class_name.clone(),
+                    class_def_arc,
+                    fields_vec,
+                )?;
+                // Deferred materialization: return arena proxy
+                Ok(Some(json!({"__arena_ref__": id.0})))
             }
             NodeType::MethodCall {
                 instance_path,
@@ -871,75 +829,57 @@ impl WorkflowExecutor {
                     instance_path, method_name, args
                 );
 
-                // 1. Resolve instance from context
-                let instance_val = context
-                    .resolve_path(instance_path)?
-                    .ok_or_else(|| anyhow!("Instance '${}' not found in context", instance_path))?;
+                // 1. Arena lookup (no clone)
+                let instance_id = context.lookup_instance(instance_path)?;
+                let class_def = context.arena().class_def(instance_id).ok_or_else(|| {
+                    anyhow!("Instance '{}' class_def not found in arena", instance_path)
+                })?;
+                let class_name = context.arena().class_name(instance_id).unwrap_or_default();
 
-                let instance_obj = instance_val
-                    .as_object()
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "'${}' is not an object (cannot call methods)",
-                            instance_path
-                        )
-                    })?
-                    .clone();
+                let method_def = class_def.methods.get(method_name).ok_or_else(|| {
+                    anyhow!("Class '{}' has no method '{}'", class_name, method_name)
+                })?;
 
-                // 2. Get class name from __class__ marker
-                let class_name = instance_obj
-                    .get("__class__")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow!("'${}' has no __class__ marker", instance_path))?
-                    .to_string();
+                // 2. Snapshot fields + push method scope (single lock, then zero-lock reads)
+                let field_cache = context
+                    .arena()
+                    .snapshot_fields(instance_id)
+                    .unwrap_or_default();
+                let scope = MethodScope {
+                    instance_id,
+                    class_def: Arc::clone(&class_def),
+                    instance_path: instance_path.to_string(),
+                    dirty: HashMap::new(),
+                    field_cache,
+                    method_params: method_def.params.clone(),
+                    param_values: Vec::new(),
+                };
+                context.push_method_scope(scope)?;
 
-                // 3. Look up ClassDef and method
-                let class_def = workflow
-                    .classes
-                    .get(&class_name)
-                    .ok_or_else(|| anyhow!("Class '{}' not found", class_name))?
-                    .clone();
-                let method_def = class_def
-                    .methods
-                    .get(method_name)
-                    .ok_or_else(|| {
-                        anyhow!("Class '{}' has no method '{}'", class_name, method_name)
-                    })?
-                    .clone();
-
-                // 4. Bind $self and pre-populate class fields in context
-                context.set("self".to_string(), instance_val.clone())?;
-                for field in &class_def.fields {
-                    if let Some(field_val) = instance_obj.get(&field.name) {
-                        context.set(field.name.clone(), field_val.clone())?;
-                    }
-                }
-
-                // 5. Bind method parameters
+                // 3. Bind method parameters + store TypedSlot values for C-2 fast path
+                let mut param_slots = Vec::with_capacity(method_def.params.len());
                 for param_name in &method_def.params {
                     if let Some(arg_expr) = args.get(param_name) {
                         let val = self.process_parameter(arg_expr, context).await?;
+                        param_slots.push(TypedSlot::from_value(val.clone()));
                         context.set(param_name.clone(), val)?;
+                    } else {
+                        param_slots.push(TypedSlot::Null);
                     }
                 }
+                context.set_method_param_values(param_slots.clone())?;
 
-                // 6. Execute method body
-                let body_arc = Arc::new(*method_def.body.clone());
+                // 4. Execute method body
+                let body_arc = Arc::clone(&method_def.body);
                 self.clone().execute_graph(body_arc, context).await?;
 
-                // 7. Write back field values to instance
-                let mut updated_instance = instance_obj.clone();
-                for field in &class_def.fields {
-                    if let Ok(Some(val)) = context.resolve_path(&field.name) {
-                        updated_instance.insert(field.name.clone(), val);
-                    }
+                // 6. Pop scope, flush dirty to arena (minimal clones)
+                if let Some(scope) = context.pop_method_scope()? {
+                    context.flush_dirty_to_arena(&scope);
                 }
-                updated_instance.insert("__class__".to_string(), serde_json::json!(class_name));
-                let updated = Value::Object(updated_instance);
-                context.set(instance_path.to_string(), updated.clone())?;
 
-                // 8. Return updated instance as $output
-                Ok(Some(updated))
+                // 7. Deferred materialization: return arena proxy, resolve_path lazy-loads on demand
+                Ok(Some(json!({"__arena_ref__": instance_id.0})))
             }
         }
     }
@@ -965,19 +905,19 @@ impl WorkflowExecutor {
         debug!("👤 User: {}", config.account.name);
         let context = WorkflowContext::new();
 
-        // 注入 juglans.toml 配置到 $config
+        // Inject juglans.toml configuration into $config
         if let Ok(config_value) = serde_json::to_value(config) {
             context.set("config".to_string(), config_value)?;
         }
 
-        // 设置输入数据到 ctx.input
+        // Set input data to ctx.input
         if let Some(input_val) = input {
             if let Some(obj) = input_val.as_object() {
                 for (key, val) in obj {
                     context.set(format!("input.{}", key), val.clone())?;
                 }
             }
-            // 同时设置完整的 input 对象
+            // Also set the complete input object
             context.set("input".to_string(), input_val)?;
         }
 
@@ -987,8 +927,9 @@ impl WorkflowExecutor {
         Ok(())
     }
 
-    /// 清理不可达节点：检查并跳过那些所有前驱都已完成但仍有入度的节点
-    /// 这些节点永远无法执行（因为前驱都没有激活通往它们的边）
+    /// Clean up unreachable nodes: check and skip nodes whose predecessors have all completed
+    /// but still have non-zero in-degree. These nodes can never execute (predecessors didn't
+    /// activate edges leading to them).
     fn cleanup_unreachable_nodes(
         workflow: &Arc<WorkflowGraph>,
         in_degrees: &Arc<Mutex<HashMap<NodeIndex, usize>>>,
@@ -999,7 +940,7 @@ impl WorkflowExecutor {
         let completed = completed_nodes.lock().unwrap().clone();
         let degrees = in_degrees.lock().unwrap();
 
-        // 找出所有不可达的节点（跳过 test_* 节点）
+        // Find all unreachable nodes (skip test_* nodes)
         let unreachable: Vec<NodeIndex> = degrees
             .iter()
             .filter(|(idx, &degree)| {
@@ -1007,12 +948,19 @@ impl WorkflowExecutor {
                     return false;
                 }
 
-                // Skip test nodes — they are intentionally not executed
-                if graph::is_test_node_id(&workflow.graph[**idx].id) {
+                // Skip test ROOT nodes — they are intentionally not executed
+                // (test nodes with incoming edges are part of the main flow)
+                if graph::is_test_node_id(&workflow.graph[**idx].id)
+                    && workflow
+                        .graph
+                        .edges_directed(**idx, Direction::Incoming)
+                        .count()
+                        == 0
+                {
                     return false;
                 }
 
-                // 检查所有前驱是否都已完成
+                // Check if all predecessors have completed
                 let all_predecessors_done = workflow
                     .graph
                     .edges_directed(**idx, Direction::Incoming)
@@ -1026,7 +974,7 @@ impl WorkflowExecutor {
         drop(degrees);
         drop(completed);
 
-        // 递归处理不可达节点
+        // Recursively process unreachable nodes
         for node_idx in unreachable {
             Self::mark_unreachable_recursive(
                 node_idx,
@@ -1039,7 +987,7 @@ impl WorkflowExecutor {
         }
     }
 
-    /// 递归标记节点及其后继为不可达
+    /// Recursively mark a node and its successors as unreachable
     fn mark_unreachable_recursive(
         node_idx: NodeIndex,
         workflow: &Arc<WorkflowGraph>,
@@ -1048,7 +996,7 @@ impl WorkflowExecutor {
         completed_nodes: &Arc<Mutex<HashSet<NodeIndex>>>,
         unreachable_nodes: &Arc<Mutex<HashSet<NodeIndex>>>,
     ) {
-        // 检查是否已经处理过
+        // Check if already processed
         if completed_nodes.lock().unwrap().contains(&node_idx) {
             return;
         }
@@ -1058,12 +1006,12 @@ impl WorkflowExecutor {
             workflow.graph[node_idx].id
         );
 
-        // 标记为已完成（虽然没有执行）
+        // Mark as completed (even though not executed)
         completed_nodes.lock().unwrap().insert(node_idx);
-        // 同时标记为不可达
+        // Also mark as unreachable
         unreachable_nodes.lock().unwrap().insert(node_idx);
 
-        // 处理所有后继节点
+        // Process all successor nodes
         for edge in workflow.graph.edges(node_idx) {
             let successor_idx = edge.target();
 
@@ -1074,7 +1022,7 @@ impl WorkflowExecutor {
                 drop(degrees);
 
                 if new_degree == 0 {
-                    // 检查该后继的所有前驱是否都是不可达的
+                    // Check if all predecessors of this successor are unreachable
                     let unreachable = unreachable_nodes.lock().unwrap();
                     let all_preds_unreachable = workflow
                         .graph
@@ -1083,7 +1031,7 @@ impl WorkflowExecutor {
                     drop(unreachable);
 
                     if all_preds_unreachable {
-                        // 所有前驱都不可达，继续递归标记
+                        // All predecessors unreachable, continue recursive marking
                         Self::mark_unreachable_recursive(
                             successor_idx,
                             workflow,
@@ -1093,7 +1041,7 @@ impl WorkflowExecutor {
                             unreachable_nodes,
                         );
                     } else {
-                        // 有前驱是正常执行的，加入队列
+                        // Has normally-executed predecessors, add to queue
                         info!(
                             "Node [{}] is now ready to run.",
                             workflow.graph[successor_idx].id
@@ -1415,7 +1363,7 @@ impl WorkflowExecutor {
         }
     }
 
-    /// 执行函数节点：绑定参数到 context，执行子图，返回 output
+    /// Execute a function node: bind parameters to context, execute sub-graph, return output
     pub fn execute_function<'a>(
         self: Arc<Self>,
         func_name: String,
@@ -1440,23 +1388,23 @@ impl WorkflowExecutor {
                     .join(", ")
             );
 
-            // 绑定参数到 context
+            // Bind parameters to context
             for param_name in &func_def.params {
                 if let Some(val) = args.get(param_name) {
                     context.set(param_name.clone(), val.clone())?;
                 }
             }
 
-            // 执行函数体子图
-            let body_arc = Arc::new(*func_def.body.clone());
+            // Execute function body sub-graph
+            let body_arc = Arc::clone(&func_def.body);
             self.clone().execute_graph(body_arc, context).await?;
 
-            // 返回子图 output
+            // Return sub-graph output
             Ok(context.resolve_path("output")?.or(Some(Value::Null)))
         })
     }
 
-    /// 通过节点名查找并执行单个节点（供 on_tool handler 使用）
+    /// Find and execute a single node by name (used by on_tool handler)
     pub async fn run_single_node_by_name(
         self: Arc<Self>,
         name: &str,
@@ -1476,14 +1424,29 @@ impl WorkflowExecutor {
         context: &'a WorkflowContext,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
-            // 注入当前 workflow 到 context（供 on_tool=[node] handler 使用）
+            // Inject current workflow into context (used by on_tool=[node] handler)
             context.set_current_workflow(workflow.clone());
 
-            // Exclude test_* nodes from normal execution count
+            // Inject class definition registry into context and expr_eval (for instance field index lookup)
+            if !workflow.classes.is_empty() {
+                context.set_class_registry(&workflow.classes);
+                self.expr_eval
+                    .set_class_registry(Arc::new(workflow.classes.clone()));
+            }
+
+            // Exclude test_* ROOT nodes (in_degree=0) from normal execution count.
+            // test_* nodes connected to the main flow (in_degree>0) are regular nodes.
             let test_node_count = workflow
                 .graph
                 .node_indices()
-                .filter(|&idx| graph::is_test_node_id(&workflow.graph[idx].id))
+                .filter(|&idx| {
+                    graph::is_test_node_id(&workflow.graph[idx].id)
+                        && workflow
+                            .graph
+                            .edges_directed(idx, Direction::Incoming)
+                            .count()
+                            == 0
+                })
                 .count();
             let total_nodes = workflow.graph.node_count() - test_node_count;
             if total_nodes == 0 {
@@ -1523,7 +1486,7 @@ impl WorkflowExecutor {
                 if current_batch.is_empty() {
                     let completed = completed_nodes.lock().unwrap().len();
                     if completed < total_nodes {
-                        // 尝试清理不可达节点
+                        // Try to clean up unreachable nodes
                         info!("Detecting unreachable nodes...");
                         Self::cleanup_unreachable_nodes(
                             &workflow,
@@ -1532,12 +1495,12 @@ impl WorkflowExecutor {
                             &completed_nodes,
                         );
 
-                        // 检查是否有新的节点加入队列
+                        // Check if new nodes were added to the queue
                         if ready_queue.lock().unwrap().is_empty() {
                             info!("Workflow graph execution finished early/deadlocked. ({} / {} nodes ran)", completed, total_nodes);
                             break;
                         }
-                        // 否则继续执行新加入的节点
+                        // Otherwise continue executing newly added nodes
                         continue;
                     }
                     break;
@@ -1601,7 +1564,7 @@ impl WorkflowExecutor {
                 join_all(tasks).await;
             }
 
-            // 检查是否有未处理的节点错误（导致 deadlock 的根因）
+            // Check for unhandled node errors (root cause of deadlocks)
             if let Ok(Some(error_val)) = context.resolve_path("error") {
                 if !error_val.is_null() {
                     let node = error_val

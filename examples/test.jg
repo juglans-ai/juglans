@@ -2,11 +2,6 @@
 # 演示如何使用 prompt 模板、意图分析和条件路由
 # 使用方法：juglans examples/test.jgagent
 
-name: "Intent-based Chat Workflow"
-version: "0.1.0"
-description: "意图识别 + 智能回复工作流"
-author: "Juglans Team"
-
 # 加载本地资源（相对于 workflow 文件的路径）
 prompts: ["./test.jgprompt"]
 agents: ["./agents/test-worker.jgagent"]
@@ -15,10 +10,6 @@ agents: ["./agents/test-worker.jgagent"]
 # - workflow 中应该使用 pure agents（不绑定 workflow 的 agent）
 # - 这样可以避免递归调用和依赖混乱
 # - test-worker.jgagent 是一个 pure agent，专门用于 workflow 内部
-
-# 定义入口和出口节点
-entry: [start]
-exit: [reply]
 
 # ========== 节点定义 ==========
 

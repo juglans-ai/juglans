@@ -25,7 +25,7 @@ impl Validator for MultilineHelper {
     fn validate(&self, ctx: &mut ValidationContext) -> Result<ValidationResult, ReadlineError> {
         let input = ctx.input();
 
-        // 如果以 \ 结尾（且不是转义的 \\），表示继续输入（多行）
+        // If ending with \ (and not escaped \\), continue input (multiline)
         if input.ends_with('\\') && !input.ends_with("\\\\") {
             Ok(ValidationResult::Incomplete)
         } else {
@@ -34,7 +34,7 @@ impl Validator for MultilineHelper {
     }
 
     fn validate_while_typing(&self) -> bool {
-        false  // 只在按 Enter 时验证
+        false  // Only validate on Enter press
     }
 }
 

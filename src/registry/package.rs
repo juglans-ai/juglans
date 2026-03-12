@@ -1,6 +1,6 @@
 // src/registry/package.rs
 //
-// jgpackage.toml 解析 + 打包逻辑
+// jgpackage.toml parsing + packaging logic
 
 use anyhow::{anyhow, Context, Result};
 use flate2::write::GzEncoder;

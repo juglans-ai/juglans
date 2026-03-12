@@ -1,0 +1,18 @@
+libs: ["../std/mcps.jg"]
+
+# Connect to mock MCP server — auto-discovers tools
+[mock]: mcps.MCP(name="mock", url="http://localhost:9876", token="")
+
+# Verify tools were discovered
+[check]: print(message="Discovered tools: " + str(len($ctx.mcp_tools)))
+
+# Use chat with MCP tools — LLM calls mock.echo / mock.add
+[ask]: chat(
+  message=$input.message,
+  tools=$ctx.mcp_tools,
+  on_tool=[mcps.handle]
+)
+
+[done]: print(message="Result: " + str($output))
+
+[mock] -> [check] -> [ask] -> [done]

@@ -335,10 +335,6 @@ Mark a workflow node as the HTTP entry point. When `juglans web` starts, it scan
 **Example:**
 
 ```juglans
-slug: "my-api"
-name: "HTTP API"
-entry: [request]
-
 [request]: serve()
 
 [hello]: response(status=200, body={"message": "Hello!"})
@@ -810,14 +806,8 @@ $item not in $ctx.list # Negated membership
 ## Complete Workflow Example
 
 ```juglans
-name: "Data Processing"
-version: "0.1.0"
-
 prompts: ["./prompts/*.jgprompt"]
 agents: ["./agents/*.jgagent"]
-
-entry: [init]
-exit: [done]
 
 [init]: set_context(results=[], processed=0)
 [start_notify]: notify(status="Starting data processing...")

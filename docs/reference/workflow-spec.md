@@ -7,7 +7,7 @@ Complete syntax specification for Juglans `.jg` workflow files.
 A `.jg` file consists of three sections in order:
 
 ```text
-1. Metadata      — name, version, imports, entry/exit
+1. Metadata      — imports, schedule, visibility
 2. Node definitions  — [id]: tool(params) or [id]: "literal"
 3. Edge definitions  — [a] -> [b], conditionals, switch
 ```
@@ -23,13 +23,8 @@ Metadata lines appear at the top of the file. Each line follows `key: value` for
 | Field | Type | Description |
 |---|---|---|
 | `slug` | string | Unique identifier (for registry) |
-| `name` | string | Workflow display name |
-| `version` | string | Version string |
-| `description` | string | Human-readable description |
 | `author` | string | Author name |
 | `source` | string | Source file path |
-| `entry` | node ref | Entry node: `[node_id]` |
-| `exit` | node ref / list | Exit node(s): `[a]` or `[a, b]` |
 | `prompts` | string list | Prompt file glob patterns |
 | `agents` | string list | Agent file glob patterns |
 | `tools` | string list | Tool definition file patterns |
@@ -44,38 +39,23 @@ Metadata lines appear at the top of the file. Each line follows `key: value` for
 Minimal metadata:
 
 ```juglans
-name: "Hello"
-entry: [start]
 [start]: notify(status="hello")
 ```
 
 Full metadata:
 
 ```juglans
-slug: "my-workflow"
-name: "My Workflow"
-version: "1.0.0"
-description: "A demo workflow"
-author: "Team"
-is_public: true
-
 prompts: ["./prompts/*.jgprompt"]
 agents: ["./agents/*.jgagent"]
-
-entry: [start]
-exit: [done]
 
 [start]: notify(status="begin")
 [done]: notify(status="end")
 [start] -> [done]
 ```
 
-Multiple exit nodes:
+Multiple terminal nodes:
 
 ```juglans
-entry: [start]
-exit: [success, failure]
-
 [start]: notify(status="begin")
 [success]: notify(status="ok")
 [failure]: notify(status="fail")
@@ -84,13 +64,14 @@ exit: [success, failure]
 [start] on error -> [failure]
 ```
 
+Entry nodes are determined automatically by topological sort (nodes with in-degree 0).
+
 ### Resource Imports
 
 ```juglans
 prompts: ["./prompts/*.jgprompt", "./shared/*.jgprompt"]
 agents: ["./agents/main.jgagent"]
 
-entry: [step]
 [step]: notify(status="imported")
 ```
 
@@ -101,9 +82,6 @@ flows: {
   auth: "./auth.jg"
   trading: "./trading.jg"
 }
-
-entry: [start]
-exit: [done]
 
 [start]: notify(status="routing")
 [done]: notify(status="complete")
@@ -118,7 +96,6 @@ Map form (explicit namespace):
 ```juglans
 libs: { db: "./libs/sqlite.jg" }
 
-entry: [step1]
 [step1]: db.read(table="users")
 ```
 
@@ -127,7 +104,6 @@ List form (auto namespace from filename stem):
 ```juglans
 libs: ["./libs/utils.jg"]
 
-entry: [step1]
 [step1]: utils.helper(x="test")
 ```
 
@@ -136,7 +112,6 @@ entry: [step1]
 ```juglans
 python: ["pandas", "sklearn.ensemble", "./utils.py"]
 
-entry: [load]
 [load]: notify(status="python ready")
 ```
 
@@ -171,7 +146,6 @@ With multiple parameters:
 ### Variable References in Parameters
 
 ```juglans
-entry: [a]
 [a]: chat(message=$input.question)
 [b]: notify(status=$output)
 [c]: set_context(data=$ctx.results)
@@ -329,9 +303,6 @@ flows: {
   auth: "./auth.jg"
 }
 
-entry: [start]
-exit: [done]
-
 [start]: notify(status="begin")
 [done]: notify(status="end")
 
@@ -414,9 +385,6 @@ Steps separated by newlines or semicolons. The function returns `$output` from i
 Iterate over a collection:
 
 ```juglans
-entry: [init]
-exit: [done]
-
 [init]: set_context(results=[])
 
 [loop]: foreach($item in $input.items) {
@@ -445,9 +413,6 @@ Run iterations concurrently:
 Condition-based loop:
 
 ```juglans
-entry: [init]
-exit: [done]
-
 [init]: set_context(count=0)
 
 [loop]: while($ctx.count < 5) {
@@ -466,9 +431,6 @@ exit: [done]
 Loop bodies contain their own node definitions and edge definitions:
 
 ```juglans
-entry: [start]
-exit: [end]
-
 [start]: set_context(total=0)
 
 [process]: foreach($item in $input.data) {
@@ -490,10 +452,8 @@ Line comments start with `#`:
 
 ```juglans
 # This is a comment
-name: "Demo"
-entry: [start]
 
-# Entry node
+# First node
 [start]: notify(status="hello")
 
 # Another comment
@@ -521,15 +481,8 @@ Variables use dot notation for nested access: `$output.data.items[0].name`.
 ## Complete Example
 
 ```juglans
-name: "Intent Router"
-version: "1.0.0"
-description: "Route queries by intent"
-
 agents: ["./agents/*.jgagent"]
 prompts: ["./prompts/*.jgprompt"]
-
-entry: [classify]
-exit: [done]
 
 # Classify user intent
 [classify]: chat(

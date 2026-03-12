@@ -41,6 +41,9 @@ use crate::services::interface::JuglansRuntime;
 use crate::services::jug0::Jug0Client;
 use crate::services::prompt_loader::PromptRegistry;
 
+use crate::adapters::feishu::FeishuWebhookHandler;
+use crate::adapters::telegram::TelegramWebhookHandler;
+
 // --- File Watcher (hot-reload feedback) ---
 
 fn watch_workspace(project_root: PathBuf) {
@@ -114,7 +117,7 @@ fn log_file_change(path: &Path, rel: &Path, ext: &str) {
     }
 }
 
-// --- API Models (兼容 Jug0) ---
+// --- API Models (Jug0 compatible) ---
 
 #[derive(Serialize)]
 pub struct AgentApiModel {
@@ -123,12 +126,12 @@ pub struct AgentApiModel {
     pub user_id: String,
     pub name: String,
     pub description: Option<String>,
-    // 简化处理：本地没有 system_prompt_id，这里填空或造一个
+    // Simplified: no system_prompt_id locally, fill with empty or generated value
     pub system_prompt_id: Option<Uuid>,
     pub default_model: String,
     pub temperature: Option<f64>,
     pub skills: Option<Vec<String>>,
-    // 额外字段：Juglans 特有
+    // Extra field: Juglans-specific
     pub source: Option<String>,
     pub created_at: String,
 }
@@ -162,7 +165,6 @@ struct WebState {
     pub host: String,
     pub port: u16,
     pub jug0_base_url: String,
-    pub mcp_server_count: usize,
     /// Pending client tool calls waiting for frontend results
     pub pending_tool_calls: Arc<Mutex<HashMap<String, oneshot::Sender<Vec<ToolResultPayload>>>>>,
     /// Discovered serve() workflow for HTTP backend
@@ -206,10 +208,10 @@ pub enum ChatIdInput {
     Handle(String),
 }
 
-// 兼容 Jug0 的 Chat 请求结构
+// Jug0-compatible chat request structure
 #[derive(Deserialize, Clone)]
 pub struct ChatRequest {
-    // jug0 标准字段
+    // jug0 standard fields
     /// Chat ID: UUID for existing chat, or @handle to start with agent
     pub chat_id: Option<ChatIdInput>,
     pub messages: Option<Vec<MessagePart>>,
@@ -222,15 +224,15 @@ pub struct ChatRequest {
     #[serde(rename = "memory")]
     pub _memory: Option<bool>,
 
-    // Juglans 额外字段
+    // Juglans extra fields
     pub variables: Option<Value>,
-    /// 消息状态：context_visible | context_hidden | display_only | silent
+    /// Message state: context_visible | context_hidden | display_only | silent
     pub state: Option<String>,
-    /// jug0 传入的用户消息 ID（workflow 模式下用于回溯更新用户消息状态）
+    /// User message ID from jug0 (used in workflow mode to retroactively update user message state)
     pub user_message_id: Option<i32>,
-    /// 是否推送内部 tool 执行事件到 SSE 流（默认 false）
+    /// Whether to push internal tool execution events to the SSE stream (default false)
     pub stream_tool_events: Option<bool>,
-    /// 是否推送 workflow node 执行事件到 SSE 流（默认 false）
+    /// Whether to push workflow node execution events to the SSE stream (default false)
     pub stream_node_events: Option<bool>,
 }
 
@@ -260,13 +262,13 @@ fn default_message_type() -> String {
     "text".to_string()
 }
 
-// 辅助函数：根据 Slug 生成确定的 UUID v5
+// Helper: generate deterministic UUID v5 from slug
 fn generate_deterministic_id(slug: &str) -> Uuid {
     let namespace = Uuid::NAMESPACE_DNS;
     Uuid::new_v5(&namespace, slug.as_bytes())
 }
 
-// 格式化运行时长
+// Format uptime duration
 fn format_uptime(secs: u64) -> String {
     let days = secs / 86400;
     let hours = (secs % 86400) / 3600;
@@ -284,7 +286,7 @@ fn format_uptime(secs: u64) -> String {
     }
 }
 
-/// 扫描 project_root 下所有 .jg/.jgflow，找到含 serve() 节点的 workflow
+/// Scan all .jg/.jgflow files under project_root, find workflow containing serve() node
 fn discover_serve_workflow(project_root: &Path) -> Option<ServeWorkflowInfo> {
     use crate::core::graph::NodeType;
 
@@ -360,7 +362,7 @@ async fn handle_serve_request(
         }
     };
 
-    // 解析 workflow
+    // Parse workflow
     let content = match fs::read_to_string(&serve_info.file_path) {
         Ok(c) => c,
         Err(e) => {
@@ -432,7 +434,7 @@ async fn handle_serve_request(
             .unwrap();
     }
 
-    // 构建 executor
+    // Build executor
     let config = match JuglansConfig::load() {
         Ok(c) => c,
         Err(e) => {
@@ -468,7 +470,7 @@ async fn handle_serve_request(
     )
     .await;
 
-    // 加载 tool definitions
+    // Load tool definitions
     {
         use crate::core::tool_loader::ToolLoader;
         use crate::services::tool_registry::ToolRegistry;
@@ -485,18 +487,16 @@ async fn handle_serve_request(
             }
         }
     }
-    executor.load_mcp_tools(&config).await;
-
     let executor = Arc::new(executor);
     executor
         .get_registry()
         .set_executor(Arc::downgrade(&executor));
 
-    // 创建 context，注入请求数据到 $input
+    // Create context, inject request data into $input
     let (tx, _rx) = mpsc::unbounded_channel::<WorkflowEvent>();
     let ctx = WorkflowContext::with_sender(tx);
 
-    // 解析 query string
+    // Parse query string
     let query_map: HashMap<String, String> = uri
         .query()
         .map(|q| {
@@ -511,7 +511,7 @@ async fn handle_serve_request(
         })
         .unwrap_or_default();
 
-    // 解析 body — 检测 multipart 或常规 body
+    // Parse body -- detect multipart or regular body
     let content_type = headers
         .get("content-type")
         .and_then(|v| v.to_str().ok())
@@ -519,7 +519,7 @@ async fn handle_serve_request(
         .to_string();
 
     if content_type.starts_with("multipart/form-data") {
-        // Multipart: 文本字段 → $input.fields, 文件 → 写临时文件 → $input.files
+        // Multipart: text fields -> $input.fields, files -> write to temp -> $input.files
         let multipart_result: Result<Multipart, _> = Multipart::from_request(request, &()).await;
         match multipart_result {
             Ok(mut multipart) => {
@@ -531,7 +531,7 @@ async fn handle_serve_request(
                     let file_name = field.file_name().map(|f| f.to_string());
 
                     if let Some(filename) = file_name {
-                        // 文件字段 → 写到临时目录
+                        // File field -> write to temp directory
                         match field.bytes().await {
                             Ok(data) => {
                                 let tmp_dir = std::env::temp_dir().join("jg_uploads");
@@ -562,7 +562,7 @@ async fn handle_serve_request(
                             }
                         }
                     } else {
-                        // 文本字段
+                        // Text field
                         if let Ok(text) = field.text().await {
                             let val: Value =
                                 serde_json::from_str(&text).unwrap_or_else(|_| json!(text));
@@ -584,7 +584,7 @@ async fn handle_serve_request(
             }
         }
     } else {
-        // 常规 body (JSON / string)
+        // Regular body (JSON / string)
         let body = match axum::body::to_bytes(request.into_body(), 64 * 1024 * 1024).await {
             Ok(b) => b,
             Err(e) => {
@@ -611,7 +611,7 @@ async fn handle_serve_request(
     ctx.set("input.headers".to_string(), headers_to_json(&headers))
         .ok();
 
-    // 注入 path_parts — 按 / 拆分，方便工作流提取 path params
+    // Inject path_parts -- split by /, convenient for workflow to extract path params
     let path_parts: Vec<&str> = uri
         .path()
         .trim_start_matches('/')
@@ -628,7 +628,7 @@ async fn handle_serve_request(
         serve_info.slug
     );
 
-    // 执行 workflow
+    // Execute workflow
     if let Err(e) = executor.execute_graph(Arc::new(graph), &ctx).await {
         error!("❌ [Serve] Execution error: {}", e);
         return error_response(
@@ -637,7 +637,7 @@ async fn handle_serve_request(
         );
     }
 
-    // 读取 response
+    // Read response
     let status_code = ctx.get_jvalue("response.status").i64().unwrap_or(200) as u16;
     let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
 
@@ -647,7 +647,7 @@ async fn handle_serve_request(
     let mut builder = Response::builder().status(status);
     let mut has_content_type = false;
 
-    // 应用自定义 headers
+    // Apply custom headers
     if let Some(Value::Object(map)) = resp_headers {
         for (k, v) in &map {
             if let Some(val) = v.as_str() {
@@ -660,7 +660,7 @@ async fn handle_serve_request(
     }
 
     if let Some(file_path) = resp_file {
-        // 二进制文件响应
+        // Binary file response
         match tokio::fs::read(&file_path).await {
             Ok(bytes) => {
                 if !has_content_type {
@@ -682,8 +682,8 @@ async fn handle_serve_request(
             }
         }
     } else {
-        // JSON 响应（默认）
-        // 兜底：如果没有 response.body 但有 $error，返回 500
+        // JSON response (default)
+        // Fallback: if no response.body but $error exists, return 500
         let resp_body_jv = ctx.get_jvalue("response.body");
         if resp_body_jv.is_null() {
             let error_jv = ctx.get_jvalue("error");
@@ -727,11 +727,32 @@ fn error_response(status: StatusCode, message: &str) -> Response {
         })
 }
 
-/// Dashboard 页面
+/// Health check (serverless platform liveness probe)
+async fn health_check() -> Json<Value> {
+    Json(json!({"status": "ok"}))
+}
+
+/// Feishu webhook event receiver (serverless deployment)
+async fn handle_feishu_webhook(
+    Extension(handler): Extension<Arc<FeishuWebhookHandler>>,
+    Json(body): Json<Value>,
+) -> Json<Value> {
+    Json(handler.handle_event(body).await)
+}
+
+/// Telegram webhook event receiver (serverless deployment)
+async fn handle_telegram_webhook(
+    Extension(handler): Extension<Arc<TelegramWebhookHandler>>,
+    Json(body): Json<Value>,
+) -> Json<Value> {
+    Json(handler.handle_update(body).await)
+}
+
+/// Dashboard page
 async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
     let uptime = format_uptime(state.start_time.elapsed().as_secs());
 
-    // 扫描 prompts
+    // Scan prompts
     let mut prompt_registry = PromptRegistry::new();
     let prompt_pattern = state
         .project_root
@@ -755,7 +776,7 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
         prompts_html = "    (none)\n".to_string();
     }
 
-    // 扫描 agents
+    // Scan agents
     let mut agent_registry = AgentRegistry::new();
     let agent_pattern = state
         .project_root
@@ -782,7 +803,7 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
         agents_html = "    (none)\n".to_string();
     }
 
-    // 扫描 workflows (.jg and .jgflow)
+    // Scan workflows (.jg and .jgflow)
     let wf_pattern_jg = state
         .project_root
         .join("**/*.jg")
@@ -797,8 +818,8 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
     let mut workflow_count = 0;
     let mut workflow_valid_count = 0;
     let mut workflow_error_count = 0;
-    let mut cron_jobs_html = String::new();
-    let mut cron_count = 0;
+    let cron_jobs_html = String::new();
+    let cron_count = 0;
 
     let wf_paths = glob::glob(&wf_pattern_jg)
         .into_iter()
@@ -862,15 +883,6 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
                         node_count,
                         status_text
                     ));
-
-                    // Collect cron-scheduled workflows
-                    if let Some(ref schedule) = graph.schedule {
-                        cron_jobs_html.push_str(&format!(
-                            "    <span class=\"status\">⏰</span> {} - {} [schedule: {}]\n",
-                            slug, name, schedule
-                        ));
-                        cron_count += 1;
-                    }
 
                     // Show first few issues
                     for err in validation.errors.iter().take(3) {
@@ -949,7 +961,6 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
 <span class="label">Started:</span>      {}
 <span class="label">Uptime:</span>       {}
 <span class="label">Jug0 API:</span>     {}
-<span class="label">MCP Servers:</span>  {}
 </pre>
 
 <h2>Prompts ({} found)</h2>
@@ -985,7 +996,6 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
         state.start_datetime.format("%Y-%m-%d %H:%M:%S UTC"),
         uptime,
         state.jug0_base_url,
-        state.mcp_server_count,
         prompt_registry.keys().len(),
         prompts_html,
         agent_registry.keys().len(),
@@ -1010,7 +1020,7 @@ pub async fn start_web_server(
 ) -> anyhow::Result<()> {
     let config = JuglansConfig::load().ok();
 
-    // 扫描 serve() workflow
+    // Scan for serve() workflow
     let serve_workflow = discover_serve_workflow(&project_root);
 
     let state = Arc::new(WebState {
@@ -1023,7 +1033,6 @@ pub async fn start_web_server(
             .as_ref()
             .map(|c| c.jug0.base_url.clone())
             .unwrap_or_else(|| "N/A".to_string()),
-        mcp_server_count: config.as_ref().map(|c| c.mcp_servers.len()).unwrap_or(0),
         pending_tool_calls: Arc::new(Mutex::new(HashMap::new())),
         serve_workflow: serve_workflow.clone(),
     });
@@ -1034,9 +1043,40 @@ pub async fn start_web_server(
         .route("/api/prompts", get(list_local_prompts))
         .route("/api/workflows", get(list_local_workflows))
         .route("/api/chat", post(handle_chat))
-        .route("/api/chat/tool-result", post(handle_tool_result));
+        .route("/api/chat/tool-result", post(handle_tool_result))
+        .route("/health", get(health_check));
 
-    // 如果发现 serve() workflow，注册 catch-all fallback
+    // Feishu Webhook (if feishu app_id + app_secret are configured)
+    let feishu_enabled = if let Some(ref cfg) = config {
+        if let Some(handler) = FeishuWebhookHandler::from_config(cfg, &project_root) {
+            let handler = Arc::new(handler);
+            app = app
+                .route("/webhook/feishu", post(handle_feishu_webhook))
+                .layer(Extension(handler));
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    // Telegram Webhook (if telegram token is configured)
+    let telegram_enabled = if let Some(ref cfg) = config {
+        if let Some(handler) = TelegramWebhookHandler::from_config(cfg, &project_root) {
+            let handler = Arc::new(handler);
+            app = app
+                .route("/webhook/telegram", post(handle_telegram_webhook))
+                .layer(Extension(handler));
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    // If serve() workflow is found, register catch-all fallback
     if serve_workflow.is_some() {
         app = app.fallback(handle_serve_request);
     }
@@ -1062,6 +1102,12 @@ pub async fn start_web_server(
     info!("   - GET  /api/prompts");
     info!("   - GET  /api/workflows");
     info!("   - POST /api/chat");
+    if feishu_enabled {
+        info!("   - POST /webhook/feishu");
+    }
+    if telegram_enabled {
+        info!("   - POST /webhook/telegram");
+    }
     if let Some(ref sw) = serve_workflow {
         info!("🌐 HTTP Backend: {} (entry: [{}])", sw.slug, sw.entry_node);
         info!("   - All other routes -> serve() workflow");
@@ -1085,7 +1131,6 @@ async fn list_local_agents(
     Extension(state): Extension<Arc<WebState>>,
     Query(params): Query<AgentQuery>,
 ) -> Json<Vec<AgentApiModel>> {
-    // 【修改】返回类型
     let mut registry = AgentRegistry::new();
     let pattern = params.pattern.unwrap_or_else(|| "**/*.jgagent".to_string());
     let full_pattern = state
@@ -1099,7 +1144,7 @@ async fn list_local_agents(
         Ok(_) => {
             for key in registry.keys() {
                 if let Some(agent) = registry.get(&key) {
-                    // 转换为兼容模型
+                    // Convert to compatible model
                     results.push(AgentApiModel {
                         id: generate_deterministic_id(&agent.slug),
                         slug: agent.slug.clone(),
@@ -1128,7 +1173,6 @@ async fn list_local_prompts(
     Extension(state): Extension<Arc<WebState>>,
     Query(params): Query<PromptQuery>,
 ) -> Json<Vec<PromptApiModel>> {
-    // 【修改】返回类型
     let mut registry = PromptRegistry::new();
     let pattern = params
         .pattern
@@ -1154,7 +1198,7 @@ async fn list_local_prompts(
                             input_variables: res.inputs,
                             r#type: res.r#type,
                             is_public: true,
-                            is_system: false, // 暂无法从文件推断，默认 false
+                            is_system: false, // Cannot be inferred from file, default false
                             created_at: Utc::now().to_rfc3339(),
                         });
                     }
@@ -1296,7 +1340,7 @@ async fn handle_chat(
         _ => None,
     };
 
-    // 提取 agent slug（兼容 jug0 格式）
+    // Extract agent slug (jug0-compatible format)
     // Priority: @handle > agent.slug > agent.id > default
     let agent_slug = if let Some(slug) = handle_agent_slug {
         slug
@@ -1310,9 +1354,9 @@ async fn handle_chat(
         "default".to_string()
     };
 
-    // 提取 user message（兼容 jug0 的 messages 数组格式）
+    // Extract user message (jug0-compatible messages array format)
     let message_text = if let Some(ref msgs) = req.messages {
-        // 取最后一条 user/text 消息
+        // Get the last user/text message
         msgs.iter()
             .rfind(|m| m.role.as_deref() == Some("user") || m.part_type == "text")
             .and_then(|m| m.content.clone())
@@ -1321,7 +1365,7 @@ async fn handle_chat(
         String::new()
     };
 
-    // 提取 chat_id（用于继承会话）
+    // Extract chat_id (for session continuation)
     // Only extract UUID, @handle means new chat
     let chat_id_str = match &req.chat_id {
         Some(ChatIdInput::Uuid(id)) => Some(id.to_string()),
@@ -1329,13 +1373,13 @@ async fn handle_chat(
         None => None,
     };
 
-    // 提取自定义 tools
+    // Extract custom tools
     let custom_tools = req
         .tools
         .clone()
         .or_else(|| req.agent.as_ref().and_then(|a| a.tools.clone()));
 
-    // 提取 system_prompt 覆盖
+    // Extract system_prompt override
     let system_prompt_override = req.agent.as_ref().and_then(|a| a.system_prompt.clone());
 
     let (agent_meta, agent_file_path) =
@@ -1374,7 +1418,7 @@ async fn handle_chat(
     )
     .await;
 
-    // 加载 tool definitions（从 project_root 下搜索 *.json tool files）
+    // Load tool definitions (search for *.json tool files under project_root)
     {
         use crate::core::tool_loader::ToolLoader;
         use crate::services::tool_registry::ToolRegistry;
@@ -1391,10 +1435,8 @@ async fn handle_chat(
             }
         }
     }
-    executor.load_mcp_tools(&config).await;
-
     let executor = Arc::new(executor);
-    // 注入 executor 引用到 BuiltinRegistry，让 chat() 能解析 tool slug
+    // Inject executor reference into BuiltinRegistry so chat() can resolve tool slugs
     executor
         .get_registry()
         .set_executor(Arc::downgrade(&executor));
@@ -1402,22 +1444,22 @@ async fn handle_chat(
     let (tx, rx) = mpsc::unbounded_channel::<WorkflowEvent>();
     let ctx = WorkflowContext::with_sender(tx.clone());
 
-    // 设置 stream_tool_events 开关
+    // Set stream_tool_events flag
     if req.stream_tool_events.unwrap_or(false) {
         ctx.set_stream_tool_events(true);
     }
 
-    // 设置 stream_node_events 开关
+    // Set stream_node_events flag
     if req.stream_node_events.unwrap_or(false) {
         ctx.set_stream_node_events(true);
     }
 
-    // 设置输入上下文
+    // Set input context
     ctx.set("input.message".to_string(), json!(message_text.clone()))
         .ok();
 
-    // 尝试解析消息内容为 JSON，如果成功则展开到 $input.*
-    // 这样 workflow 可以直接用 $input.event_type 等字段进行路由
+    // Try to parse message content as JSON; if successful, expand into $input.*
+    // This allows workflow to route directly using fields like $input.event_type
     if let Ok(parsed) = serde_json::from_str::<Value>(&message_text) {
         if let Some(obj) = parsed.as_object() {
             for (k, v) in obj {
@@ -1430,18 +1472,18 @@ async fn handle_chat(
         }
     }
 
-    // 如果有 chat_id，存入上下文供后续继承
+    // If chat_id exists, store in context for session continuation
     if let Some(ref cid) = chat_id_str {
         ctx.set("reply.chat_id".to_string(), json!(cid)).ok();
     }
 
-    // 如果有 user_message_id，存入上下文供 reply()/chat() 回溯更新用户消息状态
+    // If user_message_id exists, store in context for reply()/chat() to retroactively update user message state
     if let Some(umid) = req.user_message_id {
         ctx.set("reply.user_message_id".to_string(), json!(umid))
             .ok();
     }
 
-    // variables 字段会覆盖从 message 解析的值（优先级更高）
+    // variables field overrides values parsed from message (higher priority)
     if let Some(vars) = req.variables {
         if let Some(obj) = vars.as_object() {
             for (k, v) in obj {
@@ -1450,9 +1492,9 @@ async fn handle_chat(
         }
     }
 
-    // 构建 chat 参数
+    // Build chat parameters
     let tools_json = custom_tools.map(|t| serde_json::to_string(&t).unwrap_or_default());
-    // 将前端 client tools 注入 context，供 workflow 内 chat() builtin 及 DSL 访问
+    // Inject frontend client tools into context for chat() builtin and DSL access within workflow
     if let Some(ref tools_str) = tools_json {
         ctx.set("input.tools".to_string(), json!(tools_str)).ok();
     }
@@ -1461,7 +1503,7 @@ async fn handle_chat(
 
     tokio::spawn(async move {
         let result = if let Some(wf_ref) = &agent_meta.source {
-            // 判断是文件路径还是 slug
+            // Determine if it's a file path or slug
             let is_file_path = wf_ref.ends_with(".jg")
                 || wf_ref.ends_with(".jgflow")
                 || wf_ref.starts_with("./")
@@ -1469,7 +1511,7 @@ async fn handle_chat(
                 || Path::new(wf_ref).is_absolute();
 
             let wf_result: Result<(String, PathBuf), anyhow::Error> = if is_file_path {
-                // 文件路径格式：按现有逻辑解析
+                // File path format: parse using existing logic
                 let full_wf_path = if Path::new(wf_ref).is_absolute() {
                     PathBuf::from(wf_ref)
                 } else {
@@ -1482,7 +1524,7 @@ async fn handle_chat(
                         anyhow::anyhow!("Workflow File Error: {} (tried {:?})", e, full_wf_path)
                     })
             } else {
-                // Slug 格式：在 project_root 下搜索 **/{slug}.jg，回退到 **/{slug}.jgflow
+                // Slug format: search **/{slug}.jg under project_root, fall back to **/{slug}.jgflow
                 debug!(
                     "🔍 Resolving workflow by slug: '{}' in {:?}",
                     wf_ref, project_root
@@ -1522,7 +1564,7 @@ async fn handle_chat(
 
             match wf_result {
                 Ok((content, wf_path)) => {
-                    // .jgflow 清单：跟随 source: 字段加载 .jg 文件并合并 metadata
+                    // .jgflow manifest: follow source: field to load .jg file and merge metadata
                     // Track source file's directory for correct flow import resolution
                     let mut source_base_dir: Option<PathBuf> = None;
                     let parse_result = if wf_path.extension().and_then(|e| e.to_str())
@@ -1544,39 +1586,7 @@ async fn handle_chat(
                                                     .unwrap_or(Path::new("."))
                                                     .to_path_buf(),
                                             );
-                                            if !manifest.slug.is_empty() {
-                                                g.slug = manifest.slug;
-                                            }
-                                            if !manifest.name.is_empty() {
-                                                g.name = manifest.name;
-                                            }
-                                            if !manifest.version.is_empty() {
-                                                g.version = manifest.version;
-                                            }
-                                            if !manifest.author.is_empty() {
-                                                g.author = manifest.author;
-                                            }
-                                            if !manifest.description.is_empty() {
-                                                g.description = manifest.description;
-                                            }
-                                            if !manifest.libs.is_empty() {
-                                                g.libs = manifest.libs;
-                                                g.lib_imports = manifest.lib_imports;
-                                                g.lib_auto_namespaces =
-                                                    manifest.lib_auto_namespaces;
-                                            }
-                                            if !manifest.entry_node.is_empty() {
-                                                g.entry_node = manifest.entry_node;
-                                            }
-                                            if !manifest.prompt_patterns.is_empty() {
-                                                g.prompt_patterns = manifest.prompt_patterns;
-                                            }
-                                            if !manifest.agent_patterns.is_empty() {
-                                                g.agent_patterns = manifest.agent_patterns;
-                                            }
-                                            if !manifest.tool_patterns.is_empty() {
-                                                g.tool_patterns = manifest.tool_patterns;
-                                            }
+                                            manifest.apply_to(&mut g);
                                             Ok(g)
                                         }
                                         Err(e) => Err(anyhow::anyhow!(
@@ -1601,8 +1611,8 @@ async fn handle_chat(
 
                     match parse_result {
                         Ok(mut graph) => {
-                            // 解析 lib imports + flow imports
-                            // .jgflow + source: flow imports 相对于 source .jg 文件目录
+                            // Resolve lib imports + flow imports
+                            // .jgflow + source: flow imports are relative to the source .jg file directory
                             let wf_base_dir = source_base_dir
                                 .as_deref()
                                 .unwrap_or_else(|| wf_path.parent().unwrap_or(Path::new(".")));
@@ -1654,22 +1664,22 @@ async fn handle_chat(
                 Err(e) => Err(e),
             }
         } else {
-            // 直接 chat 模式
+            // Direct chat mode
             let mut params = std::collections::HashMap::new();
             params.insert("agent".to_string(), agent_meta.slug.clone());
             params.insert("message".to_string(), message_text.clone());
 
-            // 传递 state 参数
+            // Pass state parameter
             if let Some(ref state_val) = req.state {
                 params.insert("state".to_string(), state_val.clone());
             }
 
-            // 传递自定义 tools
+            // Pass custom tools
             if let Some(tools_str) = tools_json {
                 params.insert("tools".to_string(), tools_str);
             }
 
-            // 传递 system_prompt 覆盖
+            // Pass system_prompt override
             if let Some(sp) = sys_prompt {
                 params.insert("system_prompt".to_string(), sp);
             }
@@ -1686,19 +1696,19 @@ async fn handle_chat(
         }
     });
 
-    // SSE 事件格式对齐 Jug0 (使用标准 SSE event 类型)
+    // SSE event format aligned with Jug0 (using standard SSE event types)
     let pending_calls = state.pending_tool_calls.clone();
     let stream = UnboundedReceiverStream::new(rx).map(move |event| {
         match event {
-            // Token 流: 与 jug0 一致的 content 格式
+            // Token stream: content format consistent with jug0
             WorkflowEvent::Token(t) => {
                 Ok(Event::default().data(json!({ "type": "content", "text": t }).to_string()))
             }
-            // Status → event: meta (workflow 状态更新)
+            // Status -> event: meta (workflow status update)
             WorkflowEvent::Status(s) => Ok(Event::default()
                 .event("meta")
                 .data(json!({ "type": "meta", "status": s }).to_string())),
-            // Meta → event: meta (chat_id, user_message_id 等)
+            // Meta -> event: meta (chat_id, user_message_id, etc.)
             WorkflowEvent::Meta(data) => Ok(Event::default().event("meta").data(data.to_string())),
             // Error → event: error
             WorkflowEvent::Error(e) => Ok(Event::default()

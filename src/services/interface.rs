@@ -6,13 +6,13 @@ use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
 
-/// 工具执行回调 — 由调用方提供，runtime.chat() 收到 tool_call 事件时内联调用
+/// Tool execution callback -- provided by the caller, invoked inline when runtime.chat() receives a tool_call event
 #[async_trait]
 pub trait ChatToolHandler: Send + Sync {
     async fn handle_tool_call(&self, tool_name: &str, arguments_json: &str) -> Result<String>;
 }
 
-/// Chat 请求参数，替代 9 个独立参数
+/// Chat request parameters, replacing 9 individual arguments
 pub struct ChatRequest {
     pub agent_config: Value,
     pub messages: Vec<Value>,
@@ -25,25 +25,25 @@ pub struct ChatRequest {
     pub tool_handler: Option<Arc<dyn ChatToolHandler>>,
 }
 
-/// 定义 JWL 运行时所需的外部能力接口
+/// External capability interface required by the Juglans runtime
 #[async_trait]
 pub trait JuglansRuntime: Send + Sync {
-    /// 核心对话能力（SSE 统一流）
+    /// Core chat capability (SSE unified stream).
     ///
-    /// 当 tool_handler 为 Some 时，tool_call 事件在 SSE 流内处理（执行工具 + POST /tool-result），
-    /// 始终返回 ChatOutput::Final。当为 None 时，遇到 tool_call 即 break 返回 ChatOutput::ToolCalls。
+    /// When tool_handler is Some, tool_call events are handled within the SSE stream (execute tools + POST /tool-result),
+    /// always returning ChatOutput::Final. When None, breaks on tool_call and returns ChatOutput::ToolCalls.
     async fn chat(&self, req: ChatRequest) -> Result<ChatOutput>;
 
-    /// 资源加载能力：获取提示词内容
+    /// Resource loading: fetch prompt content
     async fn fetch_prompt(&self, slug: &str) -> Result<String>;
 
-    /// 记忆能力：语义搜索
+    /// Memory: semantic search
     async fn search_memories(&self, query: &str, limit: u64) -> Result<Vec<Value>>;
 
-    /// 获取聊天历史
+    /// Fetch chat history
     async fn fetch_chat_history(&self, chat_id: &str, include_all: bool) -> Result<Vec<Value>>;
 
-    /// 创建消息（reply 等非 AI 工具持久化消息到 jug0）
+    /// Create message (persist non-AI tool messages like reply to jug0)
     async fn create_message(
         &self,
         chat_id: &str,
@@ -52,7 +52,7 @@ pub trait JuglansRuntime: Send + Sync {
         state: &str,
     ) -> Result<()>;
 
-    /// 更新消息状态（workflow 节点回溯控制用户消息可见性）
+    /// Update message state (workflow node retroactively controls user message visibility)
     async fn update_message_state(&self, chat_id: &str, message_id: i32, state: &str)
         -> Result<()>;
 

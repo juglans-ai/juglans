@@ -1,12 +1,6 @@
-name: "Tool Reference Example"
-description: "Demonstrates how to use tool definition files"
-
 # 导入工具定义文件
 tools: ["./tools/*.json"]
 agents: ["./agents/*.jgagent"]
-
-entry: [start]
-exit: [done]
 
 [start]: notify(status="🔧 Tool reference example started")
 

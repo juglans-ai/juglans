@@ -1,10 +1,10 @@
 # Tutorial 3: Branching & Routing
 
-本章学习两种路由方式：**条件边（if）** 和 **多路切换（switch）**，让 workflow 根据数据做出决策。
+This chapter covers two routing mechanisms: **conditional edges (if)** and **multi-way switching (switch)**, enabling workflows to make decisions based on data.
 
-## 条件边 -- if
+## Conditional Edges -- if
 
-最基本的分支：根据条件走不同路径。
+The most basic branching: take different paths based on a condition.
 
 ```juglans
 [check]: set_context(score=85)
@@ -18,45 +18,45 @@
 [fail] -> [done]
 ```
 
-逐行解释：
+Line-by-line explanation:
 
-1. `[check]` 节点将 `score` 写入上下文，值为 85。
-2. `[check] if $ctx.score >= 60 -> [pass]` -- 如果分数 >= 60，走 `[pass]`。
-3. `[check] if $ctx.score < 60 -> [fail]` -- 如果分数 < 60，走 `[fail]`。
-4. 两条路径最终都汇聚到 `[done]`。
+1. The `[check]` node writes `score` to the context with a value of 85.
+2. `[check] if $ctx.score >= 60 -> [pass]` -- if the score >= 60, take the `[pass]` path.
+3. `[check] if $ctx.score < 60 -> [fail]` -- if the score < 60, take the `[fail]` path.
+4. Both paths ultimately converge at `[done]`.
 
-条件边的语法：
+Conditional edge syntax:
 
 ```text
-[源节点] if 条件表达式 -> [目标节点]
+[source_node] if condition_expression -> [target_node]
 ```
 
-条件为真时，边才会被执行。
+The edge is only traversed when the condition evaluates to true.
 
-### 支持的运算符
+### Supported Operators
 
-**比较运算符：**
+**Comparison operators:**
 
-| 运算符 | 含义 | 示例 |
-|--------|------|------|
-| `==` | 等于 | `$ctx.status == "ok"` |
-| `!=` | 不等于 | `$ctx.status != "error"` |
-| `>` | 大于 | `$ctx.score > 80` |
-| `<` | 小于 | `$ctx.score < 60` |
-| `>=` | 大于等于 | `$ctx.level >= 3` |
-| `<=` | 小于等于 | `$ctx.count <= 10` |
+| Operator | Meaning | Example |
+|----------|---------|---------|
+| `==` | Equal to | `$ctx.status == "ok"` |
+| `!=` | Not equal to | `$ctx.status != "error"` |
+| `>` | Greater than | `$ctx.score > 80` |
+| `<` | Less than | `$ctx.score < 60` |
+| `>=` | Greater than or equal to | `$ctx.level >= 3` |
+| `<=` | Less than or equal to | `$ctx.count <= 10` |
 
-**逻辑运算符：**
+**Logical operators:**
 
-| 运算符 | 含义 | 示例 |
-|--------|------|------|
-| `&&` 或 `and` | 与 | `$ctx.a && $ctx.b` |
-| `\|\|` 或 `or` | 或 | `$ctx.a \|\| $ctx.b` |
-| `!` 或 `not` | 非 | `!$ctx.banned` |
+| Operator | Meaning | Example |
+|----------|---------|---------|
+| `&&` or `and` | And | `$ctx.a && $ctx.b` |
+| `\|\|` or `or` | Or | `$ctx.a \|\| $ctx.b` |
+| `!` or `not` | Not | `!$ctx.banned` |
 
-### 字符串比较
+### String Comparison
 
-字符串值用双引号包裹：
+String values are wrapped in double quotes:
 
 ```juglans
 [input]: set_context(type="question")
@@ -69,11 +69,11 @@
 [input] -> [other]
 ```
 
-注意最后一行 `[input] -> [other]` -- 这是**无条件边**，当前面所有条件都不满足时作为默认路径。
+Note the last line `[input] -> [other]` -- this is an **unconditional edge**, serving as the default path when none of the preceding conditions are satisfied.
 
-## 多条件组合
+## Multi-Condition Combinations
 
-用逻辑运算符组合多个条件：
+Combine multiple conditions with logical operators:
 
 ```juglans
 [check]: set_context(role="admin", level=5, banned=false)
@@ -88,11 +88,11 @@
 [check] -> [normal]
 ```
 
-条件按定义顺序逐条求值。第一个为真的条件胜出，后续条件**不再检查**。所以要把最具体的条件放在前面。
+Conditions are evaluated in the order they are defined. The first condition that evaluates to true wins, and subsequent conditions are **not checked**. Therefore, place the most specific conditions first.
 
-### 分支汇聚
+### Branch Convergence
 
-多条路径汇聚到同一个节点是常见模式：
+Multiple paths converging at a single node is a common pattern:
 
 ```juglans
 [evaluate]: set_context(grade="B")
@@ -110,11 +110,11 @@
 [average] -> [summary]
 ```
 
-`[summary]` 有三个前驱节点，但只有一条路径会被执行。Juglans 使用 **OR 语义**：任意一个前驱完成，汇聚节点就执行。未走到的分支会被自动标记为不可达。
+`[summary]` has three predecessor nodes, but only one path will actually execute. Juglans uses **OR semantics**: the convergence node executes as soon as any one predecessor completes. Branches that were not taken are automatically marked as unreachable.
 
-## switch 路由 -- 多路互斥
+## Switch Routing -- Multi-Way Exclusive
 
-当分支基于某个变量的值做多路选择时，`switch` 比多条 `if` 更清晰：
+When branching is based on the value of a single variable with multiple possible outcomes, `switch` is cleaner than multiple `if` edges:
 
 ```juglans
 [classify]: set_context(intent="question")
@@ -136,38 +136,38 @@
 [fallback] -> [done]
 ```
 
-语法结构：
+Syntax structure:
 
 ```text
-[源节点] -> switch $变量 {
-    "值1": [目标1]
-    "值2": [目标2]
-    default: [兜底节点]
+[source_node] -> switch $variable {
+    "value1": [target1]
+    "value2": [target2]
+    default: [fallback_node]
 }
 ```
 
-规则：
+Rules:
 
-- 变量的值与每个 case 逐一匹配，只走**第一个**匹配的分支。
-- `default` 处理所有未匹配的情况。
-- `default` 不是必须的，但强烈建议总是写上，避免出现"无路可走"的死路。
+- The variable's value is matched against each case in order. Only the **first** matching branch is taken.
+- `default` handles all unmatched cases.
+- `default` is not required, but it is strongly recommended to always include one to avoid dead-end situations where no path is taken.
 
 ### switch vs if
 
-什么时候用哪个？
+When should you use which?
 
-| 场景 | 推荐 | 原因 |
-|------|------|------|
-| 基于一个变量的值做多路选择 | `switch` | 语义清晰，一个 block 搞定 |
-| 二选一 | `if` | 简洁，两行就够 |
-| 需要复杂条件（范围、逻辑组合） | `if` | switch 只做等值匹配 |
-| 需要默认路径 | 都行 | switch 用 `default`，if 用无条件边 |
+| Scenario | Recommended | Reason |
+|----------|-------------|--------|
+| Multi-way selection based on a single variable's value | `switch` | Semantically clear, one block handles everything |
+| Binary choice | `if` | Concise, two lines are enough |
+| Complex conditions (ranges, logical combinations) | `if` | switch only does equality matching |
+| Need a default path | Either | switch uses `default`, if uses an unconditional edge |
 
-核心区别：`switch` 保证只走一个分支，`if` 条件边在理论上可以同时满足多条（虽然引擎按顺序只走第一个为真的）。
+The key difference: `switch` guarantees that only one branch is taken, while `if` conditional edges can theoretically satisfy multiple conditions simultaneously (though the engine only takes the first true one, in order).
 
-## 无条件边 + 条件边混合
+## Mixing Unconditional and Conditional Edges
 
-一个节点可以同时拥有无条件边和条件边：
+A node can have both unconditional and conditional edges:
 
 ```juglans
 [start]: set_context(priority="high")
@@ -181,30 +181,24 @@
 [fast_track] -> [done]
 ```
 
-执行行为：
+Execution behavior:
 
-- 无条件边 `[start] -> [log]` **总是**执行。
-- 条件边 `[start] if ... -> [fast_track]` 只在条件为真时执行。
-- 如果条件为真，`[log]` 和 `[fast_track]` **都会**执行，最终都汇聚到 `[done]`。
+- The unconditional edge `[start] -> [log]` is **always** executed.
+- The conditional edge `[start] if ... -> [fast_track]` is only executed when the condition is true.
+- If the condition is true, **both** `[log]` and `[fast_track]` will execute, and both will converge at `[done]`.
 
-这和 `switch` 的"只走一个分支"不同。如果你需要严格互斥，用 `switch` 或确保 `if` 条件互斥。
+This differs from `switch`'s "only one branch" behavior. If you need strict mutual exclusivity, use `switch` or ensure your `if` conditions are mutually exclusive.
 
-## 综合示例
+## Comprehensive Example
 
-一个根据消息类型和优先级路由的 workflow：
+A workflow that routes based on message type and priority:
 
 ```juglans
-name: "Message Router"
-version: "0.1.0"
-
-entry: [receive]
-exit: [done]
-
 [receive]: set_context(type="task", priority="high")
 
 [done]: print(message="Routing complete")
 
-# 第一层：按消息类型路由
+# Layer 1: Route by message type
 [route_type]: print(message="Routing by type...")
 [handle_question]: print(message="Answering question")
 [route_task]: print(message="Processing task...")
@@ -218,35 +212,35 @@ exit: [done]
     default: [handle_other]
 }
 
-# 第二层：task 按优先级路由
+# Layer 2: Route tasks by priority
 [urgent]: print(message="URGENT: handling immediately")
 [normal]: print(message="Queued for processing")
 
 [route_task] if $ctx.priority == "high" -> [urgent]
 [route_task] -> [normal]
 
-# 所有路径汇聚
+# All paths converge
 [handle_question] -> [done]
 [urgent] -> [done]
 [normal] -> [done]
 [handle_other] -> [done]
 ```
 
-这个例子展示了两层路由的组合：
+This example demonstrates two-layer routing composition:
 
-1. 第一层用 `switch` 按类型分流。
-2. 第二层用 `if` 按优先级细分 task 路径。
-3. 所有分支最终汇聚到 `[done]`。
+1. The first layer uses `switch` to route by type.
+2. The second layer uses `if` to further split the task path by priority.
+3. All branches ultimately converge at `[done]`.
 
-这是实际项目中最常见的路由模式：先粗分，再细分，最终合流。
+This is the most common routing pattern in real projects: coarse-grained routing first, fine-grained routing second, then merge all paths.
 
-## 小结
+## Summary
 
-- **条件边** `[node] if expr -> [target]` -- 条件为真时走这条边
-- **switch** `[node] -> switch $var { "val": [target], default: [fb] }` -- 基于变量值的多路互斥选择
-- 条件按定义顺序求值，第一个为真的胜出
-- 无条件边 `[node] -> [target]` 可作为默认路径
-- 分支汇聚使用 OR 语义：任一前驱完成即触发
-- `switch` 适合等值多选，`if` 适合复杂条件和二选一
+- **Conditional edges** `[node] if expr -> [target]` -- the edge is taken when the condition is true
+- **switch** `[node] -> switch $var { "val": [target], default: [fb] }` -- multi-way exclusive selection based on a variable's value
+- Conditions are evaluated in definition order; the first true condition wins
+- Unconditional edges `[node] -> [target]` can serve as a default path
+- Branch convergence uses OR semantics: the convergence node triggers when any predecessor completes
+- `switch` is best for equality-based multi-way selection; `if` is best for complex conditions and binary choices
 
-下一章：[Tutorial 4: 循环](./loops.md) -- 学习 `foreach` 和 `while`，让 workflow 重复执行。
+Next chapter: [Tutorial 4: Loops](./loops.md) -- learn `foreach` and `while` to make workflows repeat execution.

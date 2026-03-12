@@ -2,148 +2,87 @@
 
 MCP (Model Context Protocol) is an open protocol that lets Juglans call external tool servers -- filesystem, GitHub, database, or your own custom services.
 
-## Configure MCP Server
+Juglans handles MCP entirely in the DSL via the `std/mcps.jg` standard library. No engine-level configuration is needed.
 
-In `juglans.toml`, add `[[mcp_servers]]` entries. Juglans connects via HTTP/JSON-RPC, so you need to start the MCP server first.
+## Quick Start
 
-```toml
-[[mcp_servers]]
-name = "filesystem"
-base_url = "http://localhost:3001/mcp/filesystem"
-alias = "fs"
-
-[[mcp_servers]]
-name = "github"
-base_url = "http://localhost:3001/mcp/github"
-token = "${GITHUB_TOKEN}"
-
-[[mcp_servers]]
-name = "postgres"
-base_url = "http://localhost:3001/mcp/postgres"
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `name` | string | Yes | Server name, used as default namespace |
-| `base_url` | string | Yes | MCP server HTTP address |
-| `alias` | string | No | Short namespace alias |
-| `token` | string | No | Bearer token for authentication |
-
-## Call MCP Tools in Workflows
-
-Use `namespace.tool_name(params)` format. If `alias` is set, use alias as the namespace; otherwise use `name`.
+Import the MCP library, declare your servers, and use the auto-discovered tools in `chat()`:
 
 ```juglans
-entry: [read]
-exit: [done]
+libs: ["std/mcps.jg"]
 
-# Read a file via filesystem MCP
-[read]: fs.read_file(path="/data/config.json")
+# Declare MCP servers — tools are auto-discovered via tools/list
+[github]: mcps.MCP(name="github", url="http://localhost:3001/mcp/github")
+[fs]: mcps.MCP(name="fs", url="http://localhost:3001/mcp/filesystem")
 
-# Create a GitHub issue
-[issue]: github.create_issue(
-  repo="owner/repo",
-  title="Bug Report",
-  body=$output
+# $ctx.mcp_tools contains all discovered tools in OpenAI function calling format
+[ask]: chat(
+  message=$input.message,
+  tools=$ctx.mcp_tools,
+  on_tool=[mcps.handle]
 )
 
-# Query database
-[query]: postgres.query(sql="SELECT * FROM users LIMIT 10")
-
-[done]: notify(status="All done")
-
-[read] -> [issue] -> [query] -> [done]
+[github] -> [fs] -> [ask]
 ```
 
-## Common MCP Tools
+That's it. Each `mcps.MCP()` call fetches the server's `tools/list`, converts schemas to OpenAI format, and accumulates them into `$ctx.mcp_tools`. The `mcps.handle` function routes tool calls to the correct server by name prefix.
 
-### filesystem
+## How It Works
 
-| Tool | Description |
-|------|-------------|
-| `read_file` | Read file contents |
-| `write_file` | Write to a file |
-| `list_directory` | List directory entries |
-| `create_directory` | Create a directory |
-| `delete_file` | Delete a file |
-| `move_file` | Move or rename a file |
-| `search_files` | Search for files |
+### Tool Discovery
 
-### github
+`mcps.MCP(name, url, token)` sends a JSON-RPC `tools/list` request to the server, then converts each tool's `inputSchema` to OpenAI function calling format. Tool names are prefixed with the server name:
 
-| Tool | Description |
-|------|-------------|
-| `get_repo` | Get repository info |
-| `list_issues` | List issues |
-| `create_issue` | Create an issue |
-| `get_pull_request` | Get a pull request |
-| `create_pull_request` | Create a pull request |
-| `list_pr_files` | List changed files in a PR |
-| `search_code` | Search code |
+- `read_file` → `fs.read_file`
+- `create_issue` → `github.create_issue`
 
-### postgres
+### Tool Routing
 
-| Tool | Description |
-|------|-------------|
-| `query` | Execute a SQL query |
-| `execute` | Execute a SQL command |
-| `list_tables` | List all tables |
-| `describe_table` | Describe table structure |
+When the LLM calls a tool like `github.create_issue`, `mcps.handle` splits the name on `.` to find the server, then forwards the call via JSON-RPC `tools/call`.
 
-## Error Handling
+### Authentication
 
-Use `on error` edges to handle MCP call failures (network errors, server down, invalid params, etc.):
+Pass a `token` parameter for servers that require authentication:
 
 ```juglans
-name: "MCP with Error Handling"
+libs: ["std/mcps.jg"]
 
-entry: [fetch_repo]
-exit: [done]
+[github]: mcps.MCP(
+  name="github",
+  url="http://localhost:3001/mcp/github",
+  token=$input.github_token
+)
 
-[fetch_repo]: github.get_repo(repo=$input.repo)
-[process]: chat(agent="reviewer", message="Review: " + json($output))
-[handle_error]: notify(status="GitHub API error: " + $error.message)
-[fallback]: set_context(repo_info=null)
-[done]: notify(status="Complete")
+[ask]: chat(
+  message=$input.message,
+  tools=$ctx.mcp_tools,
+  on_tool=[mcps.handle]
+)
 
-[fetch_repo] -> [process] -> [done]
-[fetch_repo] on error -> [handle_error]
-[handle_error] -> [fallback] -> [done]
+[github] -> [ask]
 ```
 
 ## Complete Example: Code Review Workflow
 
 ```juglans
-name: "Code Review"
+libs: ["std/mcps.jg"]
+agents: ["./agents/*.jgagent"]
 
-entry: [fetch_pr]
-exit: [done]
+# Connect to GitHub and filesystem MCP servers
+[github]: mcps.MCP(name="github", url="http://localhost:3001/mcp/github", token=$input.github_token)
+[fs]: mcps.MCP(name="fs", url="http://localhost:3001/mcp/filesystem")
 
-[fetch_pr]: github.get_pull_request(
-  repo=$input.repo,
-  number=$input.pr_number
-)
-
-[get_files]: github.list_pr_files(
-  repo=$input.repo,
-  number=$input.pr_number
-)
-
+# AI agent with access to all MCP tools
 [review]: chat(
   agent="code-reviewer",
-  message="Review these changes:\n" + json($output)
+  message="Review PR #" + str($input.pr_number) + " in " + $input.repo,
+  tools=$ctx.mcp_tools,
+  on_tool=[mcps.handle]
 )
 
-[comment]: github.create_review_comment(
-  repo=$input.repo,
-  number=$input.pr_number,
-  body=$output
-)
+[notify]: print(message="Review completed: " + $output)
 
-[done]: notify(status="Review completed")
-
-[fetch_pr] -> [get_files] -> [review] -> [comment] -> [done]
-[fetch_pr] on error -> [done]
+[github] -> [fs] -> [review] -> [notify]
 ```
 
 ## Build a Custom MCP Server
@@ -195,14 +134,13 @@ def handle():
 app.run(port=5000)
 ```
 
-Then configure and use it:
-
-```toml
-[[mcp_servers]]
-name = "my-tools"
-base_url = "http://localhost:5000"
-```
+Then use it:
 
 ```juglans
-[result]: my_tools.my_tool(input="hello")
+libs: ["std/mcps.jg"]
+
+[my_server]: mcps.MCP(name="my-tools", url="http://localhost:5000")
+[ask]: chat(message=$input.query, tools=$ctx.mcp_tools, on_tool=[mcps.handle])
+
+[my_server] -> [ask]
 ```

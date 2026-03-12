@@ -1,10 +1,10 @@
 # Tutorial 7: Prompt Templates
 
-本章学习如何用 `.jgprompt` 文件管理提示词模板，以及在 workflow 中用 `p()` 工具渲染它们——让提示词可复用、可参数化、可维护。
+This chapter covers how to manage prompt templates using `.jgprompt` files, and how to render them in workflows using the `p()` tool — making prompts reusable, parameterizable, and maintainable.
 
-## 7.1 为什么需要 Prompt 模板
+## 7.1 Why Prompt Templates
 
-先看一个硬编码 prompt 的 workflow：
+Consider a workflow with a hardcoded prompt:
 
 ```juglans
 agents: ["./agents/*.jgagent"]
@@ -15,17 +15,17 @@ agents: ["./agents/*.jgagent"]
 [ask] -> [show]
 ```
 
-这能工作，但有三个问题：
+This works, but has three problems:
 
-1. **不可复用** — 另一个 workflow 要用同样的 prompt，只能复制粘贴。
-2. **难以维护** — 修改 prompt 需要打开 `.jg` 文件，在长字符串里找位置改。
-3. **无法测试** — 你不能单独验证 prompt 的渲染结果。
+1. **Not reusable** — If another workflow needs the same prompt, you can only copy and paste it.
+2. **Hard to maintain** — Modifying the prompt requires opening the `.jg` file and finding the right place within a long string.
+3. **Cannot be tested** — You cannot independently verify the prompt's rendering result.
 
-解决方案：把 prompt 抽到 `.jgprompt` 文件，用 `p()` 工具渲染。
+The solution: extract the prompt into a `.jgprompt` file and render it with the `p()` tool.
 
-## 7.2 .jgprompt 文件结构
+## 7.2 .jgprompt File Structure
 
-创建 `prompts/greeting.jgprompt`：
+Create `prompts/greeting.jgprompt`:
 
 ```jgprompt
 ---
@@ -44,21 +44,21 @@ How may I assist you today?
 {% endif %}
 ```
 
-文件分两部分：
+The file has two parts:
 
-### Frontmatter（`---` 之间）
+### Frontmatter (between the `---` markers)
 
-| 字段 | 作用 | 必填 |
+| Field | Purpose | Required |
 |------|------|------|
-| `slug` | 唯一标识符，`p()` 通过它引用模板 | 是 |
-| `name` | 显示名称，用于 UI 和日志 | 是 |
-| `inputs` | 输入变量及其默认值 | 否 |
+| `slug` | Unique identifier; `p()` references the template by this value | Yes |
+| `name` | Display name, used in UI and logs | Yes |
+| `inputs` | Input variables and their default values | No |
 
-### Body（第二个 `---` 之后）
+### Body (after the second `---`)
 
-模板正文，支持 Jinja 风格的模板语法：`{{ }}` 插值、`{% %}` 逻辑控制。
+The template body, supporting Jinja-style template syntax: `{{ }}` for interpolation, `{% %}` for control logic.
 
-### 目录结构
+### Directory Structure
 
 ```text
 my-project/
@@ -68,9 +68,9 @@ my-project/
     └── review.jgprompt
 ```
 
-## 7.3 在 workflow 中使用 p()
+## 7.3 Using p() in Workflows
 
-用 `p()` 工具渲染模板，用 `prompts:` 元数据加载文件：
+Use the `p()` tool to render templates, and `prompts:` metadata to load files:
 
 ```juglans
 prompts: ["./prompts/*.jgprompt"]
@@ -81,20 +81,20 @@ prompts: ["./prompts/*.jgprompt"]
 [render] -> [show]
 ```
 
-逐行解释：
+Line-by-line explanation:
 
-1. `prompts: ["./prompts/*.jgprompt"]` — 加载 `prompts/` 目录下所有 `.jgprompt` 文件到 PromptRegistry。
-2. `p(slug="greeting", name="Alice", style="casual")` — 渲染 slug 为 `"greeting"` 的模板，传入 `name="Alice"` 和 `style="casual"`。
-3. `$output` — 存储渲染后的纯文本结果。
+1. `prompts: ["./prompts/*.jgprompt"]` — Loads all `.jgprompt` files from the `prompts/` directory into the PromptRegistry.
+2. `p(slug="greeting", name="Alice", style="casual")` — Renders the template with slug `"greeting"`, passing `name="Alice"` and `style="casual"`.
+3. `$output` — Stores the rendered plain text result.
 
-`p()` 的参数规则：
+`p()` parameter rules:
 
-| 参数 | 作用 |
+| Parameter | Purpose |
 |------|------|
-| `slug` | 必填。对应 `.jgprompt` 文件中的 `slug` 字段 |
-| 其他 key=value | 对应模板中的变量，覆盖 `inputs` 的默认值 |
+| `slug` | Required. Corresponds to the `slug` field in the `.jgprompt` file |
+| Other key=value pairs | Correspond to template variables, overriding `inputs` default values |
 
-上面的例子会输出：
+The example above outputs:
 
 ```text
 Hello, Alice!
@@ -102,13 +102,13 @@ Hello, Alice!
 What's up?
 ```
 
-因为 `style="casual"` 触发了 `{% if style == "casual" %}` 分支。
+Because `style="casual"` triggers the `{% if style == "casual" %}` branch.
 
-## 7.4 变量和默认值
+## 7.4 Variables and Default Values
 
-`inputs` 中定义的值是默认值。调用 `p()` 时，传入的参数会覆盖默认值；未传入的参数使用默认值。
+Values defined in `inputs` are defaults. When calling `p()`, provided parameters override the defaults; omitted parameters use the defaults.
 
-创建 `prompts/welcome.jgprompt`：
+Create `prompts/welcome.jgprompt`:
 
 ```jgprompt
 ---
@@ -124,7 +124,7 @@ Your role: {{ role }}
 Language: {{ lang }}
 ```
 
-在 workflow 中只覆盖部分变量：
+In a workflow, override only some variables:
 
 ```juglans
 prompts: ["./prompts/*.jgprompt"]
@@ -138,11 +138,11 @@ prompts: ["./prompts/*.jgprompt"]
 [full] -> [show1] -> [partial] -> [show2]
 ```
 
-`[full]` 覆盖了所有三个变量。`[partial]` 只传入 `name="Bob"`，`role` 和 `lang` 使用默认值 `"user"` 和 `"English"`。
+`[full]` overrides all three variables. `[partial]` only passes `name="Bob"` — `role` and `lang` use their default values `"user"` and `"English"`.
 
-### 用 $input 传递动态值
+### Passing Dynamic Values with $input
 
-变量值可以来自 workflow 的输入：
+Variable values can come from workflow input:
 
 ```juglans
 prompts: ["./prompts/*.jgprompt"]
@@ -157,13 +157,13 @@ prompts: ["./prompts/*.jgprompt"]
 juglans app.jg --input '{"name": "Alice", "role": "admin"}'
 ```
 
-`$input.name` 和 `$input.role` 在执行时被解析为实际值，传入模板渲染。
+`$input.name` and `$input.role` are resolved to their actual values at execution time and passed into the template for rendering.
 
-## 7.5 条件渲染
+## 7.5 Conditional Rendering
 
-用 `{% if %}` / `{% elif %}` / `{% else %}` / `{% endif %}` 控制渲染内容。
+Use `{% if %}` / `{% elif %}` / `{% else %}` / `{% endif %}` to control rendered content.
 
-创建 `prompts/tone.jgprompt`：
+Create `prompts/tone.jgprompt`:
 
 ```jgprompt
 ---
@@ -184,7 +184,7 @@ Use clear, accessible language. Balance depth with readability.
 {% endif %}
 ```
 
-在 workflow 中使用：
+Use in a workflow:
 
 ```juglans
 prompts: ["./prompts/*.jgprompt"]
@@ -195,7 +195,7 @@ prompts: ["./prompts/*.jgprompt"]
 [expert] -> [show]
 ```
 
-`audience="expert"` 命中第一个分支，输出：
+`audience="expert"` matches the first branch, outputting:
 
 ```text
 Explain Transformer architecture.
@@ -203,9 +203,9 @@ Explain Transformer architecture.
 Use technical terminology. Assume deep domain knowledge. Focus on nuances and edge cases.
 ```
 
-### 嵌套条件
+### Nested Conditions
 
-条件可以嵌套：
+Conditions can be nested:
 
 ```jgprompt
 ---
@@ -225,11 +225,11 @@ Use Chinese.
 {% endif %}
 ```
 
-## 7.6 循环渲染
+## 7.6 Loop Rendering
 
-用 `{% for item in list %}` / `{% endfor %}` 遍历数组。
+Use `{% for item in list %}` / `{% endfor %}` to iterate over arrays.
 
-创建 `prompts/checklist.jgprompt`：
+Create `prompts/checklist.jgprompt`:
 
 ```jgprompt
 ---
@@ -247,7 +247,7 @@ Please review the following aspects:
 Provide feedback for each.
 ```
 
-渲染结果：
+Rendered result:
 
 ```text
 Please review the following aspects:
@@ -259,16 +259,16 @@ Please review the following aspects:
 Provide feedback for each.
 ```
 
-### loop 变量
+### The loop Variable
 
-在 `{% for %}` 块中，`loop` 对象提供迭代元数据：
+Inside `{% for %}` blocks, the `loop` object provides iteration metadata:
 
-| 字段 | 类型 | 说明 |
+| Field | Type | Description |
 |------|------|------|
-| `loop.index` | number | 当前索引（从 1 开始） |
-| `loop.index0` | number | 当前索引（从 0 开始） |
-| `loop.first` | bool | 是否第一个元素 |
-| `loop.last` | bool | 是否最后一个元素 |
+| `loop.index` | number | Current index (1-based) |
+| `loop.index0` | number | Current index (0-based) |
+| `loop.first` | bool | Whether this is the first element |
+| `loop.last` | bool | Whether this is the last element |
 
 ```jgprompt
 ---
@@ -282,7 +282,7 @@ inputs:
 {% endfor %}
 ```
 
-渲染结果：
+Rendered result:
 
 ```text
 1. Parse input
@@ -290,9 +290,9 @@ inputs:
 3. Execute workflow
 ```
 
-## 7.7 过滤器
+## 7.7 Filters
 
-在 `{{ }}` 插值中使用函数对值进行转换。Juglans 模板使用函数调用语法（而非 Jinja 的管道语法）：
+Use functions within `{{ }}` interpolation to transform values. Juglans templates use function call syntax (rather than Jinja's pipe syntax):
 
 ```jgprompt
 ---
@@ -308,7 +308,7 @@ Title: {{ default(title, "Untitled") }}
 Score: {{ str(score) }} points
 ```
 
-渲染结果（使用默认值）：
+Rendered result (using default values):
 
 ```text
 Name: ALICE
@@ -316,21 +316,21 @@ Title: Untitled
 Score: 95 points
 ```
 
-### 常用函数
+### Common Functions
 
-| 函数 | 说明 | 示例 |
+| Function | Description | Example |
 |------|------|------|
-| `upper(x)` | 转大写 | `upper("hello")` -> `"HELLO"` |
-| `lower(x)` | 转小写 | `lower("HELLO")` -> `"hello"` |
-| `default(x, fallback)` | 空值回退 | `default("", "N/A")` -> `"N/A"` |
-| `str(x)` | 转字符串 | `str(42)` -> `"42"` |
-| `len(x)` | 取长度 | `len("hello")` -> `5` |
-| `replace(x, old, new)` | 替换子串 | `replace("hi all", "hi", "hello")` -> `"hello all"` |
-| `join(list, sep)` | 数组拼接 | `join(["a","b"], ", ")` -> `"a, b"` |
+| `upper(x)` | Convert to uppercase | `upper("hello")` -> `"HELLO"` |
+| `lower(x)` | Convert to lowercase | `lower("HELLO")` -> `"hello"` |
+| `default(x, fallback)` | Fallback for empty values | `default("", "N/A")` -> `"N/A"` |
+| `str(x)` | Convert to string | `str(42)` -> `"42"` |
+| `len(x)` | Get length | `len("hello")` -> `5` |
+| `replace(x, old, new)` | Replace substring | `replace("hi all", "hi", "hello")` -> `"hello all"` |
+| `join(list, sep)` | Join array elements | `join(["a","b"], ", ")` -> `"a, b"` |
 
-## 7.8 配合 chat() 使用
+## 7.8 Using with chat()
 
-`p()` 渲染模板 + `chat()` 发送给 AI —— 这是 juglans 中最经典的模式：
+`p()` renders the template + `chat()` sends it to the AI — this is the most classic pattern in Juglans:
 
 ```juglans
 prompts: ["./prompts/*.jgprompt"]
@@ -343,15 +343,15 @@ agents: ["./agents/*.jgagent"]
 [render] -> [ask] -> [show]
 ```
 
-执行流程：
+Execution flow:
 
-1. `[render]` — `p()` 渲染模板，生成完整的 prompt 文本，存入 `$output`。
-2. `[ask]` — `chat()` 读取 `$output` 作为 `message`，发送给 AI。
-3. `[show]` — 打印 AI 的回复。
+1. `[render]` — `p()` renders the template, generating the complete prompt text, stored in `$output`.
+2. `[ask]` — `chat()` reads `$output` as the `message` and sends it to the AI.
+3. `[show]` — Prints the AI's response.
 
-### 内联用法
+### Inline Usage
 
-`p()` 也可以直接作为 `chat()` 的 `message` 参数值：
+`p()` can also be used directly as the value of `chat()`'s `message` parameter:
 
 ```juglans
 prompts: ["./prompts/*.jgprompt"]
@@ -363,11 +363,11 @@ agents: ["./agents/*.jgagent"]
 [ask] -> [show]
 ```
 
-这将 `p()` 的渲染结果直接传给 `chat()`，省去一个中间节点。
+This passes the rendered result of `p()` directly to `chat()`, eliminating an intermediate node.
 
-### 多模板串联
+### Chaining Multiple Templates
 
-复杂场景中，可以用多个模板组合 prompt：
+In complex scenarios, you can combine prompts from multiple templates:
 
 ```juglans
 prompts: ["./prompts/*.jgprompt"]
@@ -382,29 +382,29 @@ agents: ["./agents/*.jgagent"]
 [system] -> [save_sys] -> [user_msg] -> [ask] -> [show]
 ```
 
-`[system]` 渲染角色设定模板，`[user_msg]` 渲染检查清单模板，两者拼接后发送给 AI。
+`[system]` renders the role-setting template, `[user_msg]` renders the checklist template, and the two are concatenated before being sent to the AI.
 
-## 小结
+## Summary
 
-| 概念 | 语法 | 作用 |
+| Concept | Syntax | Purpose |
 |------|------|------|
-| Prompt 文件 | `.jgprompt` | 可复用的模板文件，frontmatter + body |
-| 加载模板 | `prompts: ["./prompts/*.jgprompt"]` | 在 workflow 中引入模板文件 |
-| 渲染模板 | `p(slug="name", key=value)` | 渲染指定模板，传入参数 |
-| 变量插值 | `{{ variable }}` | 输出变量值 |
-| 条件渲染 | `{% if %}` / `{% elif %}` / `{% else %}` / `{% endif %}` | 按条件选择内容 |
-| 循环渲染 | `{% for item in list %}` / `{% endfor %}` | 遍历数组生成内容 |
-| 函数调用 | `{{ upper(name) }}` | 转换变量值 |
-| 默认值 | `inputs` 中的值 | 未传参数时的回退值 |
+| Prompt file | `.jgprompt` | Reusable template file with frontmatter + body |
+| Loading templates | `prompts: ["./prompts/*.jgprompt"]` | Import template files into a workflow |
+| Rendering templates | `p(slug="name", key=value)` | Render a specified template with parameters |
+| Variable interpolation | `{{ variable }}` | Output variable values |
+| Conditional rendering | `{% if %}` / `{% elif %}` / `{% else %}` / `{% endif %}` | Select content based on conditions |
+| Loop rendering | `{% for item in list %}` / `{% endfor %}` | Generate content by iterating over arrays |
+| Function calls | `{{ upper(name) }}` | Transform variable values |
+| Default values | Values in `inputs` | Fallback values when parameters are not provided |
 
-关键规则：
+Key rules:
 
-1. 使用 `p()` 前必须通过 `prompts:` 元数据加载模板文件。
-2. `slug` 参数必填，其他参数对应模板中的变量。
-3. `inputs` 中的值是默认值，`p()` 传入的参数会覆盖它们。
-4. `p()` 返回渲染后的纯文本字符串，存入 `$output`。
-5. `p()` + `chat()` 是最常用的组合：先渲染 prompt，再发送给 AI。
+1. Before using `p()`, you must load template files via `prompts:` metadata.
+2. The `slug` parameter is required; other parameters correspond to template variables.
+3. Values in `inputs` are defaults; parameters passed to `p()` override them.
+4. `p()` returns a rendered plain text string, stored in `$output`.
+5. `p()` + `chat()` is the most common combination: render the prompt first, then send it to the AI.
 
-## 下一章
+## Next Chapter
 
-**[Tutorial 8: Workflow Composition](./composition.md)** — 学习 `flows:` 导入和 `libs:` 库引用，将多个 workflow 组合成复杂的执行图。
+**[Tutorial 8: Workflow Composition](./composition.md)** — Learn about `flows:` imports and `libs:` library references to compose multiple workflows into complex execution graphs.

@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// 将字符串解析为 context 值，保留超大整数为字符串以避免 f64 精度丢失。
+/// Parse a string into a context value, preserving large integers as strings to avoid f64 precision loss.
 fn parse_context_value(value_str: &str) -> Value {
     match serde_json::from_str::<Value>(value_str) {
         Ok(Value::Number(n))
@@ -17,7 +17,7 @@ fn parse_context_value(value_str: &str) -> Value {
                 .unwrap_or(false)
                 && value_str.bytes().all(|b| b.is_ascii_digit() || b == b'-') =>
         {
-            // 超过 f64 精度的大整数（如 Google/Apple user ID），保留为字符串
+            // Large integer exceeding f64 precision (e.g. Google/Apple user ID), keep as string
             json!(value_str)
         }
         Ok(v) => v,
@@ -66,27 +66,31 @@ impl Tool for SetContext {
         params: &HashMap<String, String>,
         context: &WorkflowContext,
     ) -> Result<Option<Value>> {
-        // 支持两种模式：
-        // 1. 传统模式：set_context(path="key", value="val")
-        // 2. 多字段模式：set_context(key1=$input.val1, key2=$input.val2)
+        // Supports two modes:
+        // 1. Legacy mode: set_context(path="key", value="val")
+        // 2. Multi-field mode: set_context(key1=$input.val1, key2=$input.val2)
+
+        let mut last_value: Option<Value> = None;
 
         if let (Some(path), Some(value_str)) = (params.get("path"), params.get("value")) {
-            // 传统模式
+            // Legacy mode
             let value = parse_context_value(value_str);
             let stripped_path = path.strip_prefix("$ctx.").unwrap_or(path).trim_matches('"');
-            context.set(stripped_path.to_string(), value)?;
+            context.set(stripped_path.to_string(), value.clone())?;
+            last_value = Some(value);
         } else {
-            // 多字段模式：每个 key=value 对都设置到 ctx 中
+            // Multi-field mode: set each key=value pair into ctx
             for (key, value_str) in params {
-                // 跳过保留字段
+                // Skip reserved fields
                 if key == "path" || key == "value" {
                     continue;
                 }
                 let value = parse_context_value(value_str);
-                context.set(key.clone(), value)?;
+                context.set(key.clone(), value.clone())?;
+                last_value = Some(value);
             }
         }
-        Ok(None)
+        Ok(last_value)
     }
 }
 
@@ -101,7 +105,7 @@ impl Tool for Notify {
         params: &HashMap<String, String>,
         context: &WorkflowContext,
     ) -> Result<Option<Value>> {
-        // 如果传入 status，则更新 ctx.reply.status，实现透明思维流
+        // If status is provided, update ctx.reply.status for transparent thinking stream
         if let Some(status) = params.get("status") {
             context.set("reply.status".to_string(), json!(status))?;
             if !context.has_event_sender() {
@@ -118,8 +122,8 @@ impl Tool for Notify {
     }
 }
 
-/// print(message="text") — 纯输出，无 emoji 前缀，不修改 context
-/// 与 notify 的区别：print 只做 println，适合调试和 Hello World
+/// print(message="text") — plain output, no emoji prefix, does not modify context
+/// Unlike notify, print only does println, suitable for debugging and Hello World
 pub struct Print;
 #[async_trait]
 impl Tool for Print {
@@ -143,9 +147,9 @@ impl Tool for Print {
     }
 }
 
-/// reply(message="内容", state="context_visible") - 直接返回内容，不调用 AI
-/// 用于系统事件处理等场景，需要返回固定文本但不走 LLM
-/// 支持 state 参数控制 SSE/持久化，包括组合语法 input:output
+/// reply(message="content", state="context_visible") - return content directly without calling AI
+/// Used for system event handling where fixed text is needed without going through the LLM
+/// Supports state parameter for SSE/persistence control, including compound syntax input:output
 pub struct Reply {
     runtime: Arc<dyn JuglansRuntime>,
 }
@@ -168,7 +172,7 @@ impl Tool for Reply {
     ) -> Result<Option<Value>> {
         let message = params.get("message").map(|s| s.as_str()).unwrap_or("");
 
-        // 支持组合语法 input:output（与 chat() 一致）
+        // Support compound syntax input:output (consistent with chat())
         let state_raw = params
             .get("state")
             .map(|s| s.as_str())
@@ -178,15 +182,15 @@ impl Tool for Reply {
             None => (state_raw, state_raw),
         };
 
-        // should_stream 基于 output_state
+        // should_stream based on output_state
         let should_stream = output_state == "context_visible" || output_state == "display_only";
 
-        // SSE 输出
+        // SSE output
         if should_stream {
             context.emit(WorkflowEvent::Token(message.to_string()));
         }
 
-        // 持久化 reply 消息到 jug0（用 output_state 控制 reply 自身的持久化）
+        // Persist reply message to jug0 (output_state controls reply persistence)
         let should_persist_reply =
             output_state == "context_visible" || output_state == "context_hidden";
         if should_persist_reply {
@@ -200,7 +204,7 @@ impl Tool for Reply {
             }
         }
 
-        // 用 input_state 回溯更新原始用户消息状态
+        // Retroactively update original user message state using input_state
         if let (Ok(Some(chat_id_val)), Ok(Some(umid_val))) = (
             context.resolve_path("reply.chat_id"),
             context.resolve_path("reply.user_message_id"),
@@ -213,7 +217,7 @@ impl Tool for Reply {
             }
         }
 
-        // 更新 reply.output（与 chat() 一致）
+        // Update reply.output (consistent with chat())
         let current = context
             .resolve_path("reply.output")
             .ok()
@@ -232,8 +236,8 @@ impl Tool for Reply {
     }
 }
 
-/// feishu_webhook(message="内容") - 通过飞书 Webhook 推送消息到群
-/// 从 juglans.toml [bot.feishu] webhook_url 读取地址
+/// feishu_webhook(message="content") - Push messages to group chat via Feishu Webhook
+/// Reads webhook URL from juglans.toml [bot.feishu] webhook_url
 pub struct FeishuWebhook;
 
 #[async_trait]
@@ -251,13 +255,13 @@ impl Tool for FeishuWebhook {
             .get("message")
             .ok_or_else(|| anyhow!("feishu_webhook() requires 'message' parameter"))?;
 
-        // 优先从参数获取 webhook_url，否则从 context 获取（bot 启动时注入）
+        // Prefer webhook_url from params, otherwise get from context (injected at bot startup)
         let webhook_url = if let Some(url) = params.get("webhook_url") {
             url.clone()
         } else if let Ok(Some(url_val)) = context.resolve_path("bot.feishu_webhook_url") {
             url_val.as_str().unwrap_or("").to_string()
         } else {
-            // 尝试从配置文件加载
+            // Try to load from config file
             match crate::services::config::JuglansConfig::load() {
                 Ok(config) => config
                     .bot
@@ -269,7 +273,7 @@ impl Tool for FeishuWebhook {
             }
         };
 
-        // 直接调用飞书 webhook API
+        // Call Feishu webhook API directly
         let client = reqwest::Client::new();
         let resp = client
             .post(&webhook_url)
@@ -297,8 +301,8 @@ impl Tool for FeishuWebhook {
     }
 }
 
-/// return(value=expr) — 将表达式求值结果作为 $output 返回
-/// 用于函数定义中返回计算结果：`[add(a, b)]: return(value=$ctx.a + $ctx.b)`
+/// return(value=expr) — Return the evaluated expression result as $output
+/// Used in function definitions to return computed results: `[add(a, b)]: return(value=$ctx.a + $ctx.b)`
 pub struct Return;
 #[async_trait]
 impl Tool for Return {
@@ -322,4 +326,4 @@ impl Tool for Return {
     }
 }
 
-// Shell 已被 devtools::Bash 替代（注册为 "bash" + "sh" 别名）
+// Shell has been replaced by devtools::Bash (registered as "bash" + "sh" alias)

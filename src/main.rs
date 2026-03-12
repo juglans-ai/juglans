@@ -21,7 +21,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use core::agent_parser::AgentParser;
 use core::context::WorkflowContext;
@@ -31,13 +31,13 @@ use core::prompt_parser::PromptParser;
 use core::renderer::JwlRenderer;
 use core::resolver;
 use core::skill_parser;
+use core::type_checker::TypeChecker;
 use core::validator::{ProjectContext, WorkflowValidator};
 use services::agent_loader::AgentRegistry;
 use services::config::JuglansConfig;
 use services::github;
 use services::interface::JuglansRuntime;
 use services::jug0::Jug0Client;
-use services::mcp::McpClient;
 use services::prompt_loader::PromptRegistry;
 use services::web_server;
 use ui::{render::render_markdown, render::show_shortcuts, render::show_welcome, MultilineInput};
@@ -334,7 +334,6 @@ async fn build_executor(
     )
     .await;
 
-    executor.load_mcp_tools(config).await;
     executor.apply_limits(&config.limits);
 
     if let Some(wf) = workflow {
@@ -489,7 +488,7 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
             info!("🚀 Starting Workflow Graph Logic: {:?}", source_file_path);
             let local_config = JuglansConfig::load()?;
 
-            // 计算 @ 路径别名的基准目录
+            // Compute base directory for @ path alias
             let at_base: Option<PathBuf> = local_config
                 .paths
                 .base
@@ -497,93 +496,26 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
                 .map(|b| project_root_path.join(b));
 
             let mut workflow_definition_obj = if file_ext_name == "jgflow" {
-                GraphParser::parse_manifest(&source_raw_text)?
+                let manifest = GraphParser::parse_manifest(&source_raw_text)?;
+                if manifest.source.is_empty() {
+                    anyhow::bail!(".jgflow manifest requires a 'source' field pointing to a .jg file.\nExample: source: \"./main.jg\"");
+                }
+                let source_path = file_parent_context.join(&manifest.source);
+                let source_content = fs::read_to_string(&source_path)
+                    .with_context(|| format!("Failed to read source: {}", manifest.source))?;
+                let mut wf = GraphParser::parse(&source_content)?;
+                manifest.apply_to(&mut wf);
+
+                // Switch base_dir to the directory of the source file
+                let source_parent = source_path.parent().unwrap_or(Path::new("."));
+                relative_base_offset = pathdiff::diff_paths(source_parent, &project_root_path)
+                    .unwrap_or(PathBuf::from("."));
+                wf
             } else {
                 GraphParser::parse(&source_raw_text)?
             };
 
-            // .jg 文件：metadata keys 仅作注释，warn 用户
-            if file_ext_name == "jg" {
-                let has_meta = !workflow_definition_obj.slug.is_empty()
-                    || !workflow_definition_obj.name.is_empty()
-                    || !workflow_definition_obj.version.is_empty()
-                    || !workflow_definition_obj.author.is_empty()
-                    || !workflow_definition_obj.description.is_empty();
-                if has_meta {
-                    warn!("Metadata in .jg files has no effect (use a .jgflow manifest instead)");
-                }
-                workflow_definition_obj.slug = String::new();
-                workflow_definition_obj.name = String::new();
-                workflow_definition_obj.version = String::new();
-                workflow_definition_obj.author = String::new();
-                workflow_definition_obj.description = String::new();
-            }
-
-            // .jgflow 文件：纯清单，不允许节点/边定义
-            if file_ext_name == "jgflow" {
-                if workflow_definition_obj.graph.node_count() > 0 {
-                    anyhow::bail!(".jgflow is a manifest file — node definitions [name] and edges are not allowed.\nPut logic in a .jg file and reference it with: source: \"./your_file.jg\"");
-                }
-                if workflow_definition_obj.source.is_empty() {
-                    anyhow::bail!(".jgflow manifest requires a 'source' field pointing to a .jg file.\nExample: source: \"./main.jg\"");
-                }
-            }
-
-            // .jgflow 文件：读取 source 指向的 .jg 文件，合并逻辑
-            if file_ext_name == "jgflow" && !workflow_definition_obj.source.is_empty() {
-                let source_path = file_parent_context.join(&workflow_definition_obj.source);
-                let source_content = fs::read_to_string(&source_path).with_context(|| {
-                    format!("Failed to read source: {}", workflow_definition_obj.source)
-                })?;
-                let source_wf = GraphParser::parse(&source_content)?;
-
-                // 保存清单的 metadata
-                let manifest = workflow_definition_obj.clone();
-
-                // 用源文件的逻辑替换（graph, nodes, edges, functions 等）
-                workflow_definition_obj = source_wf;
-
-                // 清单 metadata 覆盖（非空字段）
-                if !manifest.slug.is_empty() {
-                    workflow_definition_obj.slug = manifest.slug;
-                }
-                if !manifest.name.is_empty() {
-                    workflow_definition_obj.name = manifest.name;
-                }
-                if !manifest.version.is_empty() {
-                    workflow_definition_obj.version = manifest.version;
-                }
-                if !manifest.author.is_empty() {
-                    workflow_definition_obj.author = manifest.author;
-                }
-                if !manifest.description.is_empty() {
-                    workflow_definition_obj.description = manifest.description;
-                }
-                if !manifest.libs.is_empty() {
-                    workflow_definition_obj.libs = manifest.libs;
-                    workflow_definition_obj.lib_imports = manifest.lib_imports;
-                    workflow_definition_obj.lib_auto_namespaces = manifest.lib_auto_namespaces;
-                }
-                if !manifest.entry_node.is_empty() {
-                    workflow_definition_obj.entry_node = manifest.entry_node;
-                }
-                if !manifest.prompt_patterns.is_empty() {
-                    workflow_definition_obj.prompt_patterns = manifest.prompt_patterns;
-                }
-                if !manifest.agent_patterns.is_empty() {
-                    workflow_definition_obj.agent_patterns = manifest.agent_patterns;
-                }
-                if !manifest.tool_patterns.is_empty() {
-                    workflow_definition_obj.tool_patterns = manifest.tool_patterns;
-                }
-
-                // base_dir 切换到 source 文件所在目录
-                let source_parent = source_path.parent().unwrap_or(Path::new("."));
-                relative_base_offset = pathdiff::diff_paths(source_parent, &project_root_path)
-                    .unwrap_or(PathBuf::from("."));
-            }
-
-            // 解析 lib imports（提取函数定义到命名空间）
+            // Resolve lib imports (extract function definitions into namespace)
             let mut import_stack = vec![absolute_target_path.clone()];
             resolver::resolve_lib_imports(
                 &mut workflow_definition_obj,
@@ -592,7 +524,7 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
                 at_base.as_deref(),
             )?;
 
-            // 解析 flow imports 并合并子图（编译时图合并）
+            // Resolve flow imports and merge subgraphs (compile-time graph merging)
             import_stack = vec![absolute_target_path.clone()];
             resolver::resolve_flow_imports(
                 &mut workflow_definition_obj,
@@ -655,7 +587,7 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
             )
             .await?;
 
-            // 解析 CLI 输入
+            // Parse CLI input
             let input_value: Option<serde_json::Value> =
                 resolve_input_data(cli)?.and_then(|s| serde_json::from_str(&s).ok());
 
@@ -667,7 +599,7 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
         "jgagent" => {
             let agent_meta_definition = AgentParser::parse(&source_raw_text)?;
 
-            // 显示欢迎信息
+            // Display welcome message
             show_welcome(
                 &agent_meta_definition.name,
                 &agent_meta_definition.slug,
@@ -676,7 +608,7 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
 
             let global_system_config = JuglansConfig::load()?;
 
-            // 计算 @ 路径别名的基准目录
+            // Compute base directory for @ path alias
             let at_base: Option<PathBuf> = global_system_config
                 .paths
                 .base
@@ -686,7 +618,7 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
             let mut local_p_store = PromptRegistry::new();
             let mut local_a_store = AgentRegistry::new();
 
-            // 【修复】将当前 agent 注册到本地 registry，使 pure agent 也能正常工作
+            // Register current agent into local registry so pure agents work correctly
             local_a_store.register(agent_meta_definition.clone(), absolute_target_path.clone());
 
             let mut active_workflow_ptr = None;
@@ -701,7 +633,7 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
                 let mut workflow_parsed_data = GraphParser::parse(&wf_source_data_str)?;
                 let wf_context_base_dir = wf_physical_path.parent().unwrap_or(Path::new("."));
 
-                // 解析 lib imports（提取函数定义到命名空间）
+                // Resolve lib imports (extract function definitions into namespace)
                 let wf_canonical = fs::canonicalize(&wf_physical_path)
                     .unwrap_or_else(|_| wf_physical_path.clone());
                 let mut import_stack = vec![wf_canonical.clone()];
@@ -712,7 +644,7 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
                     at_base.as_deref(),
                 )?;
 
-                // 解析 flow imports 并合并子图（编译时图合并）
+                // Resolve flow imports and merge subgraphs (compile-time graph merging)
                 import_stack = vec![wf_canonical];
                 resolver::resolve_flow_imports(
                     &mut workflow_parsed_data,
@@ -914,16 +846,6 @@ async fn handle_install() -> Result<()> {
         }
     }
 
-    // 2. Fetch MCP tool schemas (existing behavior)
-    let runtime_config = JuglansConfig::load()?;
-    if !runtime_config.mcp_servers.is_empty() {
-        let schema_client = McpClient::new();
-        for server_item in runtime_config.mcp_servers {
-            info!("Fetching schemas for [{}]...", server_item.name);
-            let _ = schema_client.fetch_tools(&server_item).await;
-        }
-    }
-
     Ok(())
 }
 
@@ -1102,23 +1024,6 @@ async fn handle_whoami(verbose: bool, check_connection: bool) -> Result<()> {
         println!();
     }
 
-    // MCP servers
-    if !config.mcp_servers.is_empty() {
-        println!("MCP Servers:   {} configured", config.mcp_servers.len());
-        if verbose {
-            for server in &config.mcp_servers {
-                let alias_str = server.alias.as_deref().unwrap_or("");
-                let alias_display = if !alias_str.is_empty() {
-                    format!(" (alias: {})", alias_str)
-                } else {
-                    String::new()
-                };
-                println!("  - {}{}: {}", server.name, alias_display, server.base_url);
-            }
-        }
-        println!();
-    }
-
     // Config file location
     println!("Config:        {}", config_path);
     println!();
@@ -1263,48 +1168,59 @@ fn handle_check(path: Option<&Path>, show_all: bool, output_format: &str) -> Res
             Ok(content) => match ext {
                 "jg" | "jgflow" => {
                     workflow_count += 1;
-                    let parse_result = if ext == "jgflow" {
-                        GraphParser::parse_manifest(&content)
-                    } else {
-                        GraphParser::parse(&content)
-                    };
-                    match parse_result {
-                        Ok(graph) => {
-                            // .jgflow 清单校验：不允许节点定义，必须有 source
-                            if ext == "jgflow" {
-                                if graph.graph.node_count() > 0 {
-                                    error_count += 1;
-                                    println!("    \x1b[1;31merror\x1b[0m[manifest]: {} — .jgflow must not contain node definitions", relative_path);
-                                    continue;
-                                }
-                                if graph.source.is_empty() {
+                    // .jgflow manifest validation (separate path)
+                    if ext == "jgflow" {
+                        match GraphParser::parse_manifest(&content) {
+                            Ok(manifest) => {
+                                if manifest.source.is_empty() {
                                     error_count += 1;
                                     println!("    \x1b[1;31merror\x1b[0m[manifest]: {} — missing 'source' field", relative_path);
                                     continue;
                                 }
-                                let source_path =
-                                    entry.parent().unwrap_or(Path::new(".")).join(&graph.source);
+                                let source_path = entry
+                                    .parent()
+                                    .unwrap_or(Path::new("."))
+                                    .join(&manifest.source);
                                 if !source_path.exists() {
                                     error_count += 1;
-                                    println!("    \x1b[1;31merror\x1b[0m[manifest]: {} — source file not found: {}", relative_path, graph.source);
+                                    println!("    \x1b[1;31merror\x1b[0m[manifest]: {} — source file not found: {}", relative_path, manifest.source);
                                     continue;
                                 }
-                                // 清单校验通过 — 跳过 workflow 逻辑校验（source .jg 会单独校验）
                                 valid_count += 1;
                                 if show_all {
                                     println!(
                                         "    \x1b[32mok\x1b[0m[manifest]: {} → {}",
-                                        relative_path, graph.source
+                                        relative_path, manifest.source
                                     );
                                 }
-                                continue;
                             }
+                            Err(e) => {
+                                error_count += 1;
+                                println!(
+                                    "    \x1b[1;31merror\x1b[0m[parse]: {} — {}",
+                                    relative_path, e
+                                );
+                            }
+                        }
+                        continue;
+                    }
 
+                    let parse_result = GraphParser::parse(&content);
+                    match parse_result {
+                        Ok(graph) => {
                             project_ctx.file_dir =
                                 entry.parent().unwrap_or(Path::new(".")).to_path_buf();
 
-                            // Resolve flow imports before validation (merge subgraph nodes/edges)
+                            // Resolve imports before validation (merge subgraph nodes/edges + lib functions)
                             let mut graph = graph;
+                            if let Err(e) = resolver::resolve_lib_imports(
+                                &mut graph,
+                                &project_ctx.file_dir.clone(),
+                                &mut vec![],
+                                None,
+                            ) {
+                                debug!("Lib import resolution warning: {}", e);
+                            }
                             let _ = resolver::resolve_flow_imports(
                                 &mut graph,
                                 &project_ctx.file_dir.clone(),
@@ -1314,46 +1230,86 @@ fn handle_check(path: Option<&Path>, show_all: bool, output_format: &str) -> Res
 
                             let validation =
                                 WorkflowValidator::validate_with_project(&graph, &project_ctx);
+
+                            // Phase A: Type checking (class field type annotations + assignment compatibility)
+                            let type_result = TypeChecker::new().check(&graph);
+
                             let slug = if graph.slug.is_empty() {
                                 file_name.to_string()
                             } else {
                                 graph.slug.clone()
                             };
 
+                            let type_warn_count = type_result.warnings.len();
+                            let type_err_count = type_result.errors.len();
+
                             if output_format == "json" {
+                                let mut all_warnings: Vec<serde_json::Value> = validation.warnings.iter().map(|w| {
+                                    serde_json::json!({"code": w.code, "message": w.message})
+                                }).collect();
+                                for tw in &type_result.warnings {
+                                    all_warnings.push(serde_json::json!({
+                                        "code": "TYPE_WARN",
+                                        "message": format!("class '{}' field '{}': {}", tw.class_name, tw.field_or_method, tw.message)
+                                    }));
+                                }
+                                let mut all_errors: Vec<serde_json::Value> = validation.errors.iter().map(|e| {
+                                    serde_json::json!({"code": e.code, "message": e.message})
+                                }).collect();
+                                for te in &type_result.errors {
+                                    all_errors.push(serde_json::json!({
+                                        "code": "TYPE_ERR",
+                                        "message": format!("class '{}' {}: {}", te.class_name, te.field_or_method, te.message)
+                                    }));
+                                }
                                 results.push(serde_json::json!({
                                     "file": relative_path,
                                     "type": "workflow",
                                     "slug": slug,
-                                    "valid": validation.is_valid,
-                                    "errors": validation.errors,
-                                    "warnings": validation.warnings,
+                                    "valid": validation.is_valid && type_err_count == 0,
+                                    "errors": all_errors,
+                                    "warnings": all_warnings,
                                 }));
                             }
 
-                            if validation.is_valid {
+                            if validation.is_valid && type_err_count == 0 {
                                 valid_count += 1;
-                                if validation.warning_count() > 0 {
-                                    warning_count += validation.warning_count();
+                                let total_warns = validation.warning_count() + type_warn_count;
+                                if total_warns > 0 {
+                                    warning_count += total_warns;
                                     if show_all {
-                                        println!("    \x1b[33mwarning\x1b[0m[workflow]: {} ({} warning(s))", relative_path, validation.warning_count());
+                                        println!("    \x1b[33mwarning\x1b[0m[workflow]: {} ({} warning(s))", relative_path, total_warns);
                                         for warn in &validation.warnings {
                                             println!(
                                                 "      \x1b[33m-->\x1b[0m [{}] {}",
                                                 warn.code, warn.message
                                             );
                                         }
+                                        for tw in &type_result.warnings {
+                                            println!(
+                                                "      \x1b[33m-->\x1b[0m [TYPE] class '{}' field '{}': {}",
+                                                tw.class_name, tw.field_or_method, tw.message
+                                            );
+                                        }
                                     }
                                 }
                             } else {
                                 error_count += 1;
-                                warning_count += validation.warning_count();
+                                let total_warns = validation.warning_count() + type_warn_count;
+                                let total_errs = validation.error_count() + type_err_count;
+                                warning_count += total_warns;
                                 println!("    \x1b[1;31merror\x1b[0m[workflow]: {} ({} error(s), {} warning(s))",
-                                        relative_path, validation.error_count(), validation.warning_count());
+                                        relative_path, total_errs, total_warns);
                                 for err in &validation.errors {
                                     println!(
                                         "      \x1b[31m-->\x1b[0m [{}] {}",
                                         err.code, err.message
+                                    );
+                                }
+                                for te in &type_result.errors {
+                                    println!(
+                                        "      \x1b[31m-->\x1b[0m [TYPE] class '{}' {}: {}",
+                                        te.class_name, te.field_or_method, te.message
                                     );
                                 }
                                 if show_all {
@@ -1363,11 +1319,17 @@ fn handle_check(path: Option<&Path>, show_all: bool, output_format: &str) -> Res
                                             warn.code, warn.message
                                         );
                                     }
+                                    for tw in &type_result.warnings {
+                                        println!(
+                                            "      \x1b[33m-->\x1b[0m [TYPE] class '{}' field '{}': {}",
+                                            tw.class_name, tw.field_or_method, tw.message
+                                        );
+                                    }
                                 }
                             }
                         }
                         Err(e) => {
-                            // parse() 失败 → 尝试作为纯库文件解析
+                            // parse() failed -> try parsing as a library-only file
                             if let Ok(lib_graph) = GraphParser::parse_lib(&content) {
                                 valid_count += 1;
                                 let slug = if lib_graph.slug.is_empty() {
@@ -1394,7 +1356,7 @@ fn handle_check(path: Option<&Path>, show_all: bool, output_format: &str) -> Res
                                 continue;
                             }
 
-                            // 两种解析都失败，报原始错误
+                            // Both parse attempts failed, report original error
                             error_count += 1;
                             let full_err = e.to_string();
                             println!(
@@ -1587,11 +1549,11 @@ async fn handle_push(
 ) -> Result<()> {
     let local_config = JuglansConfig::load()?;
 
-    // 收集要处理的文件
+    // Collect files to process
     let mut files_to_push = Vec::new();
 
     if paths.is_empty() {
-        // 无参数：使用 workspace 配置
+        // No arguments: use workspace configuration
         println!("📦 Using workspace configuration from juglans.toml");
 
         if let Some(ref workspace) = local_config.workspace {
@@ -1627,14 +1589,14 @@ async fn handle_push(
             return Err(anyhow!("No workspace configuration found in juglans.toml"));
         }
     } else {
-        // 有参数：扫描指定路径
+        // Arguments provided: scan specified paths
         for path in paths {
             if path.is_file() {
                 files_to_push.push(path);
             } else if path.is_dir() {
                 scan_directory(&path, &mut files_to_push, recursive, &resource_type)?;
             } else {
-                // Glob 模式
+                // Glob pattern
                 for entry in glob::glob(path.to_str().unwrap_or(""))? {
                     files_to_push.push(entry?);
                 }
@@ -1660,7 +1622,7 @@ async fn handle_push(
         }
     });
 
-    // 统计
+    // Statistics
     let mut stats = PushStats::default();
     for file in &files_to_push {
         if let Some(ext) = file.extension().and_then(|s| s.to_str()) {
@@ -1738,7 +1700,7 @@ async fn handle_push(
         }
     }
 
-    // 实际执行
+    // Execute push
     println!("\n📤 Pushing resources...\n");
 
     let jug0_api_ptr = Jug0Client::new(&local_config);
@@ -1890,29 +1852,27 @@ async fn push_single_file(
             )))
         }
         "jgflow" => {
-            let mut workflow = GraphParser::parse_manifest(&raw_file_data)?;
+            let mut manifest = GraphParser::parse_manifest(&raw_file_data)?;
 
-            // .jgflow 是纯清单，不允许节点定义
-            if workflow.graph.node_count() > 0 {
-                anyhow::bail!("{}: .jgflow is a manifest file — node definitions are not allowed", filename);
+            if manifest.source.is_empty() {
+                anyhow::bail!("{}: .jgflow manifest requires a 'source' field", filename);
             }
 
-            // 读取 source 指向的 .jg 文件内容
-            let definition = if !workflow.source.is_empty() {
-                let source_path = file.parent().unwrap_or(Path::new(".")).join(&workflow.source);
-                fs::read_to_string(&source_path)
-                    .with_context(|| format!("Failed to read source: {}", workflow.source))?
-            } else {
-                raw_file_data.clone()
-            };
+            // Read the .jg file content referenced by source
+            let source_path = file.parent().unwrap_or(Path::new(".")).join(&manifest.source);
+            let definition = fs::read_to_string(&source_path)
+                .with_context(|| format!("Failed to read source: {}", manifest.source))?;
 
-            if workflow.slug.is_empty() {
-                workflow.slug = file
+            // Parse source .jg and apply manifest metadata
+            let mut wf = GraphParser::parse(&definition)?;
+            if manifest.slug.is_empty() {
+                manifest.slug = file
                     .file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or("unnamed")
                     .to_string();
             }
+            manifest.apply_to(&mut wf);
 
             // Priority: CLI --endpoint > config endpoint_url > default host:port
             let endpoint_url = endpoint
@@ -1934,17 +1894,22 @@ async fn push_single_file(
                 });
 
             let msg = jug0_client
-                .apply_workflow(&workflow, &definition, &endpoint_url, force)
+                .apply_workflow(
+                    &wf,
+                    &definition,
+                    &endpoint_url,
+                    manifest.is_public,
+                    manifest.schedule.as_deref(),
+                    force,
+                )
                 .await?;
 
             // Record slug mapping so agents can resolve workflow refs
-            if !workflow.source.is_empty() {
-                if let Some(stem) = Path::new(&workflow.source)
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                {
-                    workflow_slug_map.insert(stem.to_string(), workflow.slug.clone());
-                }
+            if let Some(stem) = Path::new(&manifest.source)
+                .file_stem()
+                .and_then(|s| s.to_str())
+            {
+                workflow_slug_map.insert(stem.to_string(), wf.slug.clone());
             }
 
             Ok(PushResult::Success(format!(
@@ -2335,15 +2300,15 @@ async fn handle_cron(file: &PathBuf, schedule_override: Option<&str>) -> Result<
         .unwrap_or("");
 
     // Parse file to extract schedule metadata
-    let workflow = if ext == "jgflow" {
-        GraphParser::parse_manifest(&source_raw)?
+    let manifest_schedule = if ext == "jgflow" {
+        GraphParser::parse_manifest(&source_raw)?.schedule.clone()
     } else {
-        GraphParser::parse(&source_raw)?
+        None
     };
 
     let cron_expr = schedule_override
         .map(|s| s.to_string())
-        .or(workflow.schedule.clone())
+        .or(manifest_schedule)
         .ok_or_else(|| {
             anyhow!(
                 "No schedule found. Add `schedule: \"0 * * * *\"` to your .jgflow \
@@ -2471,7 +2436,7 @@ async fn handle_test(path: Option<&Path>, filter: Option<&str>, format: &str) ->
 async fn main() -> Result<()> {
     let application_cli = Cli::parse();
 
-    // TUI 模式完全关闭日志，避免破坏 ratatui 渲染
+    // Disable logging completely in TUI mode to avoid corrupting ratatui rendering
     let is_tui = matches!(application_cli.command, Some(Commands::Chat { .. }));
     let default_filter = if is_tui {
         "off"
@@ -2511,16 +2476,16 @@ async fn main() -> Result<()> {
                 let current_dir = env::current_dir()?;
                 let root = find_project_root(&current_dir)?;
 
-                // 1. 尝试加载配置
+                // 1. Try to load configuration
                 let config = JuglansConfig::load().ok();
 
-                // 2. 决定 host (CLI > Config > Default)
+                // 2. Determine host (CLI > Config > Default)
                 let final_host = host
                     .clone()
                     .or_else(|| config.as_ref().map(|c| c.server.host.clone()))
                     .unwrap_or_else(|| "127.0.0.1".to_string());
 
-                // 3. 决定 port (CLI > Config > Default: 8080)
+                // 3. Determine port (CLI > Config > Default: 8080)
                 let final_port = port
                     .or_else(|| config.as_ref().map(|c| c.server.port))
                     .unwrap_or(8080);

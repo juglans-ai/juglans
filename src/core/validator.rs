@@ -11,19 +11,19 @@ use std::path::PathBuf;
 use crate::core::graph::{self, NodeType, WorkflowGraph};
 use petgraph::graph::NodeIndex;
 
-/// 项目级资源上下文（跨文件校验用）
-/// 由 handle_check 两遍扫描后构建，传入 validate_with_project
+/// Project-level resource context (for cross-file validation)
+/// Built after handle_check two-pass scan, passed to validate_with_project
 #[derive(Debug, Default)]
 pub struct ProjectContext {
-    /// 所有 .jgagent 中解析出的 slug
+    /// All slugs parsed from .jgagent files
     pub agent_slugs: HashSet<String>,
-    /// 所有 .jgprompt 中解析出的 slug
+    /// All slugs parsed from .jgprompt files
     pub prompt_slugs: HashSet<String>,
-    /// 所有 .jg/.jgflow 的绝对路径
+    /// Absolute paths of all .jg/.jgflow files
     pub flow_paths: HashSet<PathBuf>,
-    /// check 目录基准路径
+    /// Base directory path for check
     pub base_dir: PathBuf,
-    /// 当前文件所在目录（用于解析相对路径，如 flows: ./trading.jg）
+    /// Current file's directory (for resolving relative paths, e.g. flows: ./trading.jg)
     pub file_dir: PathBuf,
 }
 
@@ -169,8 +169,8 @@ impl WorkflowValidator {
         // Check 3: Unreachable nodes
         Self::check_unreachable_nodes(graph, &mut result);
 
-        // Check 4: Exit nodes reachability
-        Self::check_exit_nodes(graph, &mut result);
+        // Check 4: Terminal nodes warning
+        Self::check_terminal_nodes(graph, &mut result);
 
         // Check 5: Empty workflow
         Self::check_empty_workflow(graph, &mut result);
@@ -214,6 +214,7 @@ impl WorkflowValidator {
             Self::check_resource_patterns(graph, project, &mut result);
 
             // Check 18: Lib import paths
+            #[cfg(not(target_arch = "wasm32"))]
             Self::check_lib_imports(graph, project, &mut result);
         }
 
@@ -346,34 +347,17 @@ impl WorkflowValidator {
         true
     }
 
-    /// Check if exit nodes exist and are reachable
-    fn check_exit_nodes(graph: &WorkflowGraph, result: &mut ValidationResult) {
-        for exit_id in &graph.exit_nodes {
-            if !graph.node_map.contains_key(exit_id) {
-                result.add_error(
-                    "E003",
-                    &format!("Exit node '{}' does not exist in the graph", exit_id),
-                    Some(exit_id),
-                );
-            }
-        }
-
-        // If no exit nodes defined, check for terminal nodes (no outgoing edges)
-        if graph.exit_nodes.is_empty() && graph.graph.node_count() > 0 {
-            let terminal_nodes: Vec<_> = graph
-                .graph
-                .node_indices()
-                .filter(|&idx| {
-                    graph
-                        .graph
-                        .neighbors_directed(idx, Direction::Outgoing)
-                        .count()
-                        == 0
-                })
-                .map(|idx| graph.graph[idx].id.clone())
-                .collect();
-
-            if terminal_nodes.is_empty() && graph.graph.node_count() > 1 {
+    /// Check for terminal nodes (no outgoing edges)
+    fn check_terminal_nodes(graph: &WorkflowGraph, result: &mut ValidationResult) {
+        if graph.graph.node_count() > 1 {
+            let has_terminal = graph.graph.node_indices().any(|idx| {
+                graph
+                    .graph
+                    .neighbors_directed(idx, Direction::Outgoing)
+                    .count()
+                    == 0
+            });
+            if !has_terminal {
                 result.add_warning(
                     "W003",
                     "No terminal nodes found (nodes with no outgoing edges). All paths may loop.",
@@ -990,6 +974,7 @@ impl WorkflowValidator {
     }
 
     /// Check 18: Validate lib import paths exist
+    #[cfg(not(target_arch = "wasm32"))]
     fn check_lib_imports(
         graph: &WorkflowGraph,
         project: &ProjectContext,
@@ -1094,9 +1079,6 @@ mod tests {
     #[test]
     fn test_valid_workflow() {
         let content = r#"
-name: "Test Workflow"
-entry: [start]
-
 [start]: chat(agent="default", message="hello")
 [end]: notify(message="done")
 
@@ -1108,24 +1090,8 @@ entry: [start]
     }
 
     #[test]
-    fn test_missing_entry() {
-        let content = r#"
-name: "Test Workflow"
-entry: [missing]
-
-[start]: chat(agent="default", message="hello")
-"#;
-        let graph = GraphParser::parse(content).unwrap();
-        let result = WorkflowValidator::validate(&graph);
-        assert!(!result.is_valid);
-        assert!(result.errors.iter().any(|e| e.code == "E001"));
-    }
-
-    #[test]
     fn test_missing_required_param_chat() {
         let content = r#"
-name: "Test"
-entry: [start]
 [start]: chat(agent="test")
 "#;
         let graph = GraphParser::parse(content).unwrap();
@@ -1137,8 +1103,6 @@ entry: [start]
     #[test]
     fn test_missing_required_param_fetch() {
         let content = r#"
-name: "Test"
-entry: [start]
 [start]: fetch(method="GET")
 "#;
         let graph = GraphParser::parse(content).unwrap();
@@ -1150,8 +1114,6 @@ entry: [start]
     #[test]
     fn test_unknown_variable_prefix() {
         let content = r#"
-name: "Test"
-entry: [start]
 [start]: notify(message=$unknown.var)
 "#;
         let graph = GraphParser::parse(content).unwrap();
@@ -1162,8 +1124,6 @@ entry: [start]
     #[test]
     fn test_valid_variable_prefix() {
         let content = r#"
-name: "Test"
-entry: [start]
 [start]: notify(message=$input.query)
 "#;
         let graph = GraphParser::parse(content).unwrap();
@@ -1174,9 +1134,6 @@ entry: [start]
     #[test]
     fn test_switch_missing_default() {
         let content = r#"
-name: "Test"
-entry: [start]
-
 [start]: notify(message="test")
 [a]: notify(message="a")
 [b]: notify(message="b")
@@ -1194,9 +1151,6 @@ entry: [start]
     #[test]
     fn test_switch_with_default_no_warning() {
         let content = r#"
-name: "Test"
-entry: [start]
-
 [start]: notify(message="test")
 [a]: notify(message="a")
 [fallback]: notify(message="fb")
@@ -1218,8 +1172,6 @@ entry: [start]
     #[test]
     fn test_function_call_correct_params() {
         let content = r#"
-name: "Test"
-entry: [step1]
 [greet(name)]: bash(command="echo " + $name)
 [step1]: greet(name="world")
 "#;
@@ -1239,8 +1191,6 @@ entry: [step1]
     #[test]
     fn test_function_call_wrong_param_count() {
         let content = r#"
-name: "Test"
-entry: [step1]
 [greet(name, greeting)]: bash(command="echo " + $greeting + " " + $name)
 [step1]: greet(name="world")
 "#;
@@ -1256,8 +1206,6 @@ entry: [step1]
     #[test]
     fn test_function_call_unknown_param_name() {
         let content = r#"
-name: "Test"
-entry: [step1]
 [greet(name)]: bash(command="echo " + $name)
 [step1]: greet(unknown="world")
 "#;
@@ -1274,8 +1222,6 @@ entry: [step1]
     fn test_function_not_w004_unknown() {
         // Function calls should NOT trigger W004 (unknown tool)
         let content = r#"
-name: "Test"
-entry: [step1]
 [greet(name)]: bash(command="echo " + $name)
 [step1]: greet(name="world")
 "#;
@@ -1295,8 +1241,6 @@ entry: [step1]
     fn test_function_body_validation() {
         // Function body with unknown variable should produce nested warning
         let content = r#"
-name: "Test"
-entry: [step1]
 [bad_func(x)]: bash(command=$unknown_var)
 [step1]: bad_func(x="test")
 "#;
@@ -1316,8 +1260,6 @@ entry: [step1]
     fn test_function_body_valid_param_usage() {
         // Function parameters should be valid variable prefixes in body
         let content = r#"
-name: "Test"
-entry: [step1]
 [greet(name)]: bash(command=$name)
 [step1]: greet(name="world")
 "#;
@@ -1341,8 +1283,6 @@ entry: [step1]
     #[test]
     fn test_on_tool_valid_reference() {
         let content = r#"
-name: "Test"
-entry: [handler]
 [handler]: bash(command="echo tool")
 [chat_node]: chat(agent="test", message="hi", on_tool=[handler])
 [handler] -> [chat_node]
@@ -1359,8 +1299,6 @@ entry: [handler]
     #[test]
     fn test_on_tool_invalid_reference() {
         let content = r#"
-name: "Test"
-entry: [chat_node]
 [chat_node]: chat(agent="test", message="hi", on_tool=[nonexistent])
 "#;
         let graph = GraphParser::parse(content).unwrap();
@@ -1375,8 +1313,6 @@ entry: [chat_node]
     #[test]
     fn test_on_tool_function_reference() {
         let content = r#"
-name: "Test"
-entry: [chat_node]
 [handle(name, args)]: bash(command="echo " + $name)
 [chat_node]: chat(agent="test", message="hi", on_tool=[handle])
 "#;
@@ -1396,8 +1332,6 @@ entry: [chat_node]
     #[test]
     fn test_variable_dag_predecessor_valid() {
         let content = r#"
-name: "Test"
-entry: [step1]
 [step1]: notify(message="hello")
 [step2]: notify(message=$step1.output)
 [step1] -> [step2]
@@ -1415,8 +1349,6 @@ entry: [step1]
     fn test_variable_dag_predecessor_invalid() {
         // step2 references step3 which comes AFTER it in the DAG
         let content = r#"
-name: "Test"
-entry: [step1]
 [step1]: notify(message="hello")
 [step2]: notify(message=$step3.output)
 [step3]: notify(message="world")
@@ -1438,8 +1370,6 @@ entry: [step1]
     #[test]
     fn test_agent_reference_found() {
         let content = r#"
-name: "Test"
-entry: [start]
 [start]: chat(agent="my-agent", message="hello")
 "#;
         let graph = GraphParser::parse(content).unwrap();
@@ -1456,8 +1386,6 @@ entry: [start]
     #[test]
     fn test_agent_reference_not_found() {
         let content = r#"
-name: "Test"
-entry: [start]
 [start]: chat(agent="missing-agent", message="hello")
 "#;
         let graph = GraphParser::parse(content).unwrap();
@@ -1473,8 +1401,6 @@ entry: [start]
     #[test]
     fn test_prompt_reference_not_found() {
         let content = r#"
-name: "Test"
-entry: [start]
 [start]: p(slug="missing-prompt", file="x")
 "#;
         let graph = GraphParser::parse(content).unwrap();
@@ -1490,9 +1416,7 @@ entry: [start]
     #[test]
     fn test_flow_import_missing_path() {
         let content = r#"
-name: "Test"
 flows: { auth: "./nonexistent.jg" }
-entry: [start]
 [start]: notify(message="hello")
 "#;
         let graph = GraphParser::parse(content).unwrap();
@@ -1512,8 +1436,6 @@ entry: [start]
     fn test_known_tools_no_false_positive() {
         // execute_workflow, serve, response, db.find should be known
         let content = r#"
-name: "Test"
-entry: [start]
 [start]: execute_workflow(path="x")
 [srv]: serve(port="8080")
 [resp]: response(body="ok")
@@ -1537,8 +1459,6 @@ entry: [start]
     #[test]
     fn test_multi_step_function_validation() {
         let content = r#"
-name: "Test"
-entry: [step1]
 [build(dir)]: {
   bash(command="cd " + $dir + " && make");
   bash(command="cd " + $dir + " && test")
@@ -1573,9 +1493,7 @@ entry: [step1]
     #[test]
     fn test_lib_import_missing_path() {
         let content = r#"
-name: "Test"
 libs: { mylib: "./nonexistent_lib.jg" }
-entry: [start]
 [start]: notify(message="hello")
 "#;
         let graph = GraphParser::parse(content).unwrap();
@@ -1598,9 +1516,7 @@ entry: [start]
     #[test]
     fn test_parse_libs_map_form() {
         let content = r#"
-name: "Test"
 libs: { db: "./libs/sqlite.jg", http: "./libs/http.jg" }
-entry: [start]
 [start]: notify(message="hello")
 "#;
         let graph = GraphParser::parse(content).unwrap();
@@ -1615,9 +1531,7 @@ entry: [start]
     #[test]
     fn test_parse_libs_list_form() {
         let content = r#"
-name: "Test"
 libs: ["./libs/sqlite.jg", "./libs/http_client.jg"]
-entry: [start]
 [start]: notify(message="hello")
 "#;
         let graph = GraphParser::parse(content).unwrap();

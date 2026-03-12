@@ -116,10 +116,6 @@ Try changing the score to `50` and run again — you'll see `Failed.` instead.
 Let's combine everything into a workflow that processes a task:
 
 ```juglans
-name: "Task Processor"
-entry: [start]
-exit: [done]
-
 [start]: set_context(status="received")
 [validate]: set_context(status="validated")
 [process]: print(message="Processing task: " + $input.task)
@@ -147,6 +143,24 @@ Task completed successfully
 Final status: validated
 ```
 
+## Step 6: Project Structure
+
+A real Juglans project uses the `src/` layout:
+
+```
+src/
+├── main.jg                    # Main workflow
+├── agents/
+│   └── assistant.jgagent      # Workflow-bound agent (source: "../main.jg")
+├── pure-agents/
+│   └── helper.jgagent         # Pure agent (used inside workflows)
+├── prompts/
+│   └── system.jgprompt        # Prompt templates
+└── tools/                     # Tool definitions
+```
+
+Fork the [starter template](https://github.com/juglans-ai/juglans-template) to get this structure ready to go.
+
 ## What's Next?
 
 You've learned the core building blocks:
@@ -158,7 +172,8 @@ You've learned the core building blocks:
 | **Input** | `$input.field` | Step 2 |
 | **Context** | `set_context()` / `$ctx.key` | Step 3 |
 | **Conditionals** | `[a] if expr -> [b]` | Step 4 |
-| **Metadata** | `name:`, `entry:`, `exit:` | Step 5 |
+| **Composition** | Combine nodes into real workflows | Step 5 |
+| **Structure** | `src/` layout with agents, prompts, tools | Step 6 |
 
 Continue with the tutorials to learn the language in depth:
 

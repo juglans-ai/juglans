@@ -1,13 +1,5 @@
-name: "Batch Processor"
-version: "0.1.0"
-author: "Juglans Team"
-description: "Process multiple items in batch with results aggregation"
-
 prompts: ["../prompts/*.jgprompt"]
 agents: ["../agents/*.jgagent"]
-
-entry: [init]
-exit: [summary]
 
 # 初始化上下文
 [init]: set_context(

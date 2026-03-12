@@ -1,9 +1,3 @@
-name: "Rust-style Error Handling Test"
-version: "0.1.0"
-
-entry: [start]
-exit: [done]
-
 # Nodes
 [start]: return err { kind: "validation", message: "price is negative" }
 [on_success]: notify(message="Success!")

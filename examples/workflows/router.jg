@@ -1,13 +1,5 @@
-name: "Smart Router"
-version: "0.1.0"
-author: "Juglans Team"
-description: "Route queries to specialized agents based on intent"
-
 prompts: ["../prompts/*.jgprompt"]
 agents: ["../agents/*.jgagent"]
-
-entry: [classify]
-exit: [done]
 
 # 分类查询意图
 [classify]: chat(

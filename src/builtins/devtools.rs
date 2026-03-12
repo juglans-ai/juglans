@@ -1,8 +1,8 @@
 // src/builtins/devtools.rs
 //
-// Claude Code 风格的开发者工具集
-// 提供文件操作、搜索、命令执行等 builtin tools
-// 同时作为 workflow 节点和 LLM function calling 工具使用
+// Claude Code-style developer toolset
+// Provides file operations, search, and command execution as builtin tools
+// Serves as both workflow nodes and LLM function calling tools
 
 use super::Tool;
 use crate::core::context::WorkflowContext;
@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use tracing::{debug, info};
 
 // ============================================================
-// ReadFile - 读取文件内容
+// ReadFile - Read file contents
 // ============================================================
 
 pub struct ReadFile;
@@ -114,7 +114,7 @@ impl Tool for ReadFile {
 }
 
 // ============================================================
-// WriteFile - 写入文件
+// WriteFile - Write file
 // ============================================================
 
 pub struct WriteFile;
@@ -162,7 +162,7 @@ impl Tool for WriteFile {
             .get("content")
             .ok_or_else(|| anyhow!("write_file() requires 'content' parameter"))?;
 
-        // 创建父目录
+        // Create parent directories
         let file_path = std::path::Path::new(path);
         if let Some(parent) = file_path.parent() {
             if !parent.exists() {
@@ -189,7 +189,7 @@ impl Tool for WriteFile {
 }
 
 // ============================================================
-// EditFile - 精确字符串替换
+// EditFile - Exact string replacement
 // ============================================================
 
 pub struct EditFile;
@@ -254,12 +254,12 @@ impl Tool for EditFile {
             .map(|v| v == "true" || v == "1")
             .unwrap_or(false);
 
-        // 读取文件
+        // Read file
         let content = tokio::fs::read_to_string(path)
             .await
             .with_context(|| format!("Failed to read file: {}", path))?;
 
-        // 检查匹配次数
+        // Check match count
         let match_count = content.matches(old_string).count();
 
         if match_count == 0 {
@@ -276,7 +276,7 @@ impl Tool for EditFile {
             ));
         }
 
-        // 执行替换
+        // Perform replacement
         let new_content = if replace_all {
             content.replace(old_string, new_string)
         } else {
@@ -298,7 +298,7 @@ impl Tool for EditFile {
 }
 
 // ============================================================
-// GlobSearch - 文件模式匹配
+// GlobSearch - File pattern matching
 // ============================================================
 
 pub struct GlobSearch;
@@ -376,7 +376,7 @@ impl Tool for GlobSearch {
 }
 
 // ============================================================
-// GrepSearch - 正则搜索文件内容
+// GrepSearch - Regex search file contents
 // ============================================================
 
 pub struct GrepSearch;
@@ -446,7 +446,7 @@ impl Tool for GrepSearch {
         let regex = regex::Regex::new(pattern_str)
             .with_context(|| format!("Invalid regex pattern: {}", pattern_str))?;
 
-        // 收集要搜索的文件
+        // Collect files to search
         let files = collect_files(search_path, include)?;
 
         let mut results: Vec<Value> = Vec::new();
@@ -455,7 +455,7 @@ impl Tool for GrepSearch {
         'outer: for file_path in &files {
             let content = match std::fs::read_to_string(file_path) {
                 Ok(c) => c,
-                Err(_) => continue, // 跳过无法读取的文件（二进制等）
+                Err(_) => continue, // Skip unreadable files (binary, etc.)
             };
 
             let lines: Vec<&str> = content.lines().collect();
@@ -502,16 +502,16 @@ impl Tool for GrepSearch {
     }
 }
 
-/// 收集指定目录下的文件列表
+/// Collect file list under the specified directory
 fn collect_files(path: &str, include: Option<&str>) -> Result<Vec<String>> {
     let p = std::path::Path::new(path);
 
-    // 如果是单个文件，直接返回
+    // If it's a single file, return directly
     if p.is_file() {
         return Ok(vec![path.to_string()]);
     }
 
-    // 目录：使用 glob 递归
+    // Directory: use glob recursion
     let pattern = match include {
         Some(inc) => format!("{}/{}", path, inc),
         None => format!("{}/**/*", path),
@@ -529,7 +529,7 @@ fn collect_files(path: &str, include: Option<&str>) -> Result<Vec<String>> {
 }
 
 // ============================================================
-// Bash - Shell 命令执行（替代旧 Shell 工具）
+// Bash - Shell command execution (replaces old Shell tool)
 // ============================================================
 
 pub struct Bash;
@@ -573,7 +573,7 @@ impl Tool for Bash {
         params: &HashMap<String, String>,
         _context: &WorkflowContext,
     ) -> Result<Option<Value>> {
-        // 兼容旧 sh(cmd=...) 语法
+        // Backward compatible with old sh(cmd=...) syntax
         let cmd = params
             .get("command")
             .or_else(|| params.get("cmd"))
@@ -611,7 +611,7 @@ impl Tool for Bash {
                 let mut stderr = String::from_utf8_lossy(&output.stderr).to_string();
                 let exit_code = output.status.code().unwrap_or(-1);
 
-                // 输出截断
+                // Truncate output
                 const MAX_OUTPUT: usize = 30000;
                 let stdout_truncated = stdout.len() > MAX_OUTPUT;
                 let stderr_truncated = stderr.len() > MAX_OUTPUT;

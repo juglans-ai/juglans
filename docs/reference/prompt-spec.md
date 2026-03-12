@@ -512,9 +512,6 @@ Import prompt files with the `prompts:` metadata, then call with `p()`.
 ```juglans
 prompts: ["./prompts/*.jgprompt"]
 
-entry: [render]
-exit: [render]
-
 [render]: p(slug="greeting", name="Alice")
 ```
 
@@ -522,9 +519,6 @@ exit: [render]
 
 ```juglans
 prompts: ["./prompts/*.jgprompt"]
-
-entry: [render]
-exit: [render]
 
 [render]: p(
   slug="data-analysis",
@@ -539,9 +533,6 @@ exit: [render]
 prompts: ["./prompts/*.jgprompt"]
 agents: ["./agents/*.jgagent"]
 
-entry: [render]
-exit: [respond]
-
 [render]: p(slug="data-analysis", data=$input.data, focus=$input.focus)
 [respond]: chat(agent="analyst", message=$output)
 
@@ -555,9 +546,6 @@ The `p()` call can be used directly as a parameter value:
 ```juglans
 prompts: ["./prompts/*.jgprompt"]
 agents: ["./agents/*.jgagent"]
-
-entry: [ask]
-exit: [ask]
 
 [ask]: chat(
   agent="assistant",

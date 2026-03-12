@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 use tracing::{info, warn};
 
-/// 提示词注册表
+/// Prompt registry
 #[derive(Debug, Clone)]
 pub struct PromptRegistry {
     // slug -> template content
@@ -26,7 +26,7 @@ impl PromptRegistry {
         }
     }
 
-    /// 加载配置文件中定义的路径列表
+    /// Load path patterns defined in config
     pub fn load_from_paths(&mut self, patterns: &[String]) -> Result<()> {
         for pattern in patterns {
             let paths =
@@ -46,13 +46,13 @@ impl PromptRegistry {
         Ok(())
     }
 
-    /// 读取单个文件并注册
+    /// Read a single file and register it
     fn load_file(&mut self, path: &Path) -> Result<()> {
         if path.extension().and_then(|s| s.to_str()) != Some("jgprompt") {
             return Ok(());
         }
 
-        // 使用文件名作为 Slug
+        // Use filename as slug
         let slug = path
             .file_stem()
             .and_then(|s| s.to_str())
@@ -67,12 +67,12 @@ impl PromptRegistry {
         Ok(())
     }
 
-    /// 获取提示词内容
+    /// Get prompt content
     pub fn get(&self, slug: &str) -> Option<&String> {
         self.templates.get(slug)
     }
 
-    /// 【新增】获取所有已加载的 Prompt Slug
+    /// Get all loaded prompt slugs
     pub fn keys(&self) -> Vec<String> {
         self.templates.keys().cloned().collect()
     }

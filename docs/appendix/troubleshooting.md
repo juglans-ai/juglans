@@ -4,18 +4,15 @@ Common errors, their causes, and solutions.
 
 ---
 
-### 1. Entry node not defined
+### 1. No entry node found
 
-**Error:** `Entry node 'start' not defined`
+**Error:** `No entry node found (no node with in-degree 0)`
 
-**Cause:** The `entry:` declaration references a node that doesn't exist in the workflow.
+**Cause:** Every node in the workflow has at least one incoming edge, so topological sort cannot determine a starting point.
 
-**Solution:** Ensure the entry node ID matches a defined node:
+**Solution:** Ensure at least one node has no incoming edges — that node will be the entry point:
 
 ```juglans
-entry: [start]
-exit: [start]
-
 [start]: chat(agent="assistant", message="Hello")
 ```
 
@@ -25,7 +22,7 @@ exit: [start]
 
 **Error:** `Node 'process' is unreachable from entry`
 
-**Cause:** A node exists in the workflow but has no incoming edge from any reachable node.
+**Cause:** A node exists in the workflow but has no incoming edge from any reachable node (determined by topological sort from nodes with in-degree 0).
 
 **Solution:** Add an edge connecting it to the graph, or remove the unused node.
 
@@ -95,9 +92,6 @@ curl http://localhost:3001/mcp/filesystem
 **Solution:** Ensure the node that sets the variable runs before the one that reads it:
 
 ```juglans
-entry: [init]
-exit: [use]
-
 [init]: set_context(result="data")
 [use]: chat(agent="assistant", message=$ctx.result)
 

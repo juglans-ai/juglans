@@ -1,15 +1,12 @@
-name: "Pydantic-style Class Fields"
-entry: [req]
-
-class CreateUserRequest {
+[CreateUserRequest]: {
   name: str
   age: int = 0
   role: str = "user"
-
-  [validate]: ok = $self.name != ""
 }
 
-class UserResponse {
+[CreateUserRequest.validate(self)]: valid = $self.name != ""
+
+[UserResponse]: {
   id: str
   name: str
   age: int = 0

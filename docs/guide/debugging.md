@@ -1,39 +1,39 @@
 # How to Debug Workflows
 
-本指南介绍 Juglans workflow 的调试与排错方法。
+This guide covers debugging and troubleshooting methods for Juglans workflows.
 
 ## juglans check -- Syntax Validation
 
-`juglans check` 在不执行的情况下验证文件语法，类似 `cargo check`：
+`juglans check` validates file syntax without executing anything, similar to `cargo check`:
 
 ```bash
-# 检查当前目录所有文件
+# Check all files in the current directory
 juglans check
 
-# 检查指定目录
+# Check a specific directory
 juglans check ./src/
 
-# 检查单个文件
+# Check a single file
 juglans check src/main.jg
 
-# 显示所有警告
+# Show all warnings
 juglans check --all
 
-# JSON 格式输出（适合 CI）
+# JSON output (suitable for CI)
 juglans check --format json
 ```
 
-exit code 0 表示验证通过，1 表示有语法错误。
+An exit code of 0 means validation passed; 1 means there are syntax errors.
 
 ## --verbose Mode
 
-添加 `--verbose`（或 `-v`）查看详细执行日志：
+Add `--verbose` (or `-v`) to see detailed execution logs:
 
 ```bash
 juglans src/main.jg --verbose
 ```
 
-输出包含：
+Output includes:
 
 ```
 [DEBUG] Loading workflow: main.jg
@@ -45,7 +45,7 @@ juglans src/main.jg --verbose
 [INFO]  [chat] Response received (234 tokens)
 ```
 
-也可以通过环境变量设置日志级别：
+You can also set the log level via an environment variable:
 
 ```bash
 JUGLANS_LOG_LEVEL=debug juglans src/main.jg
@@ -53,20 +53,20 @@ JUGLANS_LOG_LEVEL=debug juglans src/main.jg
 
 ## juglans doctest -- Validate Doc Code Blocks
 
-`juglans doctest` 从 Markdown 文件中提取所有 ` ```juglans ` 代码块，通过 `GraphParser::parse()` 验证语法。
+`juglans doctest` extracts all ` ```juglans ` code blocks from Markdown files and validates their syntax through `GraphParser::parse()`.
 
 ```bash
-# 验证单个文件
+# Validate a single file
 juglans doctest docs/guide/concepts.md
 
-# 验证整个目录
+# Validate an entire directory
 juglans doctest docs/
 
-# JSON 格式输出
+# JSON output
 juglans doctest docs/ --format json
 ```
 
-不需要 doctest 验证的代码块用 `ignore` 标记：
+Code blocks that should not be validated can be marked with `ignore`:
 
 ````text
 ```juglans,ignore
@@ -78,22 +78,22 @@ juglans doctest docs/ --format json
 
 | # | Error | Cause | Solution |
 |---|-------|-------|----------|
-| 1 | `Duplicate node ID: X` | 同一 workflow 中两个节点同名 | 重命名其中一个节点 |
-| 2 | `Edge references undefined node: X` | 边引用了未定义的节点 | 检查节点名拼写，确保先定义节点再写边 |
-| 3 | `Entry node 'X' not defined` | `entry:` 指定的节点不存在 | 修正 entry 节点名或添加节点定义 |
-| 4 | `Connection refused` | Jug0 后端未启动 | 启动 Jug0 或检查 `base_url` 配置 |
-| 5 | `Agent not found: X` | Agent slug 不存在 | 检查拼写，确保 `agents:` 导入了对应文件 |
-| 6 | `Tool not found: X` | 调用了未注册的工具 | 检查工具名是否为内置工具，或 MCP 服务器是否已配置 |
-| 7 | `Cycle detected` | 图中存在环 | 检查边定义，DAG 不允许环（用 while/foreach 代替） |
-| 8 | `Parse error at line N` | DSL 语法错误 | 检查该行附近的语法：括号匹配、引号闭合、参数格式 |
-| 9 | `Variable not found: $ctx.X` | 上下文变量未设置 | 确保在使用前通过 `set_context()` 设置了该变量 |
-| 10 | `Timeout` | 工具执行超时 | 检查网络连接，增大超时配置 |
+| 1 | `Duplicate node ID: X` | Two nodes in the same workflow share a name | Rename one of the nodes |
+| 2 | `Edge references undefined node: X` | An edge references a node that has not been defined | Check the node name spelling; make sure nodes are defined before edges |
+| 3 | `Unreachable node: X` | A node has no incoming edges and is not an entry node | Connect the node to the graph or remove it |
+| 4 | `Connection refused` | The Jug0 backend is not running | Start Jug0 or check the `base_url` configuration |
+| 5 | `Agent not found: X` | The agent slug does not exist | Check the spelling and ensure the corresponding file is imported via `agents:` |
+| 6 | `Tool not found: X` | An unregistered tool was called | Verify the tool name is a builtin or that the MCP server is configured |
+| 7 | `Cycle detected` | The graph contains a cycle | Review the edge definitions; DAGs do not allow cycles (use `while`/`foreach` instead) |
+| 8 | `Parse error at line N` | DSL syntax error | Check the syntax near that line: bracket matching, quote closure, parameter format |
+| 9 | `Variable not found: $ctx.X` | A context variable was not set | Ensure the variable is set via `set_context()` before it is used |
+| 10 | `Timeout` | Tool execution timed out | Check the network connection or increase the timeout configuration |
 
 ## Debugging Tips
 
 ### Insert Checkpoints with print()
 
-在关键位置插入 `print()` 节点查看中间状态：
+Insert `print()` nodes at key positions to inspect intermediate state:
 
 ```juglans
 [step1]: set_context(data=$input.items)
@@ -107,7 +107,7 @@ juglans doctest docs/ --format json
 
 ### Save Intermediate State with set_context()
 
-用 `set_context()` 保存中间结果，方便后续节点或错误路径引用：
+Use `set_context()` to save intermediate results so they can be referenced by later nodes or error paths:
 
 ```juglans
 [fetch]: fetch_url(url=$input.url)
@@ -123,7 +123,7 @@ juglans doctest docs/ --format json
 
 ### Dry-run Mode
 
-用 `--dry-run` 只解析不执行，快速检查结构：
+Use `--dry-run` to parse without executing, quickly verifying the structure:
 
 ```bash
 juglans src/main.jg --dry-run
@@ -131,30 +131,30 @@ juglans src/main.jg --dry-run
 
 ### Isolate Problem Nodes
 
-当 workflow 较长时，创建一个最小的测试文件单独测试问题节点：
+When a workflow is long, create a minimal test file to test the problematic node in isolation:
 
 ```bash
-# 单独测试一个 Agent
+# Test a single Agent
 juglans src/agents/my-agent.jgagent --message "test input"
 
-# 单独渲染一个 Prompt
+# Render a single Prompt
 juglans src/prompts/my-prompt.jgprompt --input '{"name": "Alice"}'
 ```
 
 ### Check Configuration
 
-确认当前配置是否正确：
+Verify that the current configuration is correct:
 
 ```bash
-# 查看账户和配置信息
+# View account and configuration info
 juglans whoami --verbose
 
-# 测试 Jug0 连接
+# Test the Jug0 connection
 juglans whoami --check-connection
 ```
 
 ## Next Steps
 
-- [Testing Workflows](./testing.md) -- 系统化测试方法
-- [Error Handling](./error-handling.md) -- 在 workflow 中处理错误
-- [CLI Reference](../reference/cli.md) -- 完整命令参考
+- [Testing Workflows](./testing.md) -- Systematic testing methods
+- [Error Handling](./error-handling.md) -- Handling errors in workflows
+- [CLI Reference](../reference/cli.md) -- Complete command reference

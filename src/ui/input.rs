@@ -1,5 +1,5 @@
 // src/ui/input.rs
-//! 简单的文本输入组件
+//! Simple text input component
 
 use anyhow::Result;
 use std::io::{self, Write};
@@ -18,18 +18,18 @@ impl MultilineInput {
     }
 
     pub fn prompt(&mut self, agent_name: &str, chat_id: Option<&str>) -> Result<Option<String>> {
-        // 构建提示符
+        // Build prompt
         let mut prompt = format!("USER@{}", agent_name);
         if let Some(id) = chat_id {
             prompt.push_str(&format!("[{}]", &id[..8.min(id.len())]));
         }
         prompt.push_str("> ");
 
-        // 显示提示符
+        // Display prompt
         print!("{}", prompt);
         io::stdout().flush()?;
 
-        // 读取一行输入
+        // Read a line of input
         let mut input = String::new();
         match io::stdin().read_line(&mut input) {
             Ok(0) => {

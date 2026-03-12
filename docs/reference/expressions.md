@@ -695,11 +695,6 @@ Everything else is **truthy**.
 ### Data Processing Pipeline
 
 ```juglans
-name: "Data Pipeline"
-
-entry: [init]
-exit: [report]
-
 [init]: set_context(
   results=[],
   total=0,
@@ -736,11 +731,6 @@ exit: [report]
 ### Dynamic Routing with Expressions
 
 ```juglans
-name: "Score Router"
-
-entry: [evaluate]
-exit: [done]
-
 [evaluate]: set_context(
   score=$input.score,
   tier=default($input.tier, "standard")
@@ -763,11 +753,6 @@ exit: [done]
 ### Collection Transformation
 
 ```juglans
-name: "Collection Ops"
-
-entry: [setup]
-exit: [result]
-
 [setup]: set_context(
   numbers=[5, 3, 8, 1, 9, 2, 7],
   words=["hello", "world", "juglans"]

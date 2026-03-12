@@ -88,7 +88,8 @@ get_latest_version() {
 
 # Download and install
 download_and_install() {
-    DOWNLOAD_URL="https://github.com/${REPO}/releases/download/v${VERSION}/${BINARY_NAME}-${PLATFORM}.tar.gz"
+    ARCHIVE_NAME="${BINARY_NAME}-${PLATFORM}.tar.gz"
+    DOWNLOAD_URL="https://github.com/${REPO}/releases/download/v${VERSION}/${ARCHIVE_NAME}"
     CHECKSUM_URL="${DOWNLOAD_URL}.sha256"
 
     info "Downloading from: $DOWNLOAD_URL"
@@ -97,29 +98,35 @@ download_and_install() {
     TMP_DIR=$(mktemp -d)
     trap "rm -rf $TMP_DIR" EXIT
 
-    # Download binary
+    # Determine download command
     if command -v curl > /dev/null 2>&1; then
-        curl -fsSL "$DOWNLOAD_URL" -o "$TMP_DIR/juglans.tar.gz"
-        curl -fsSL "$CHECKSUM_URL" -o "$TMP_DIR/juglans.tar.gz.sha256"
+        DL_CMD="curl -fsSL"
+        DL_OUT="-o"
+    elif command -v wget > /dev/null 2>&1; then
+        DL_CMD="wget -q"
+        DL_OUT="-O"
     else
-        wget -q "$DOWNLOAD_URL" -O "$TMP_DIR/juglans.tar.gz"
-        wget -q "$CHECKSUM_URL" -O "$TMP_DIR/juglans.tar.gz.sha256"
+        error "Neither curl nor wget found. Please install one of them."
     fi
+
+    # Download binary and checksum (outside if-block so set -e works)
+    $DL_CMD "$DOWNLOAD_URL" $DL_OUT "$TMP_DIR/$ARCHIVE_NAME"
+    $DL_CMD "$CHECKSUM_URL" $DL_OUT "$TMP_DIR/${ARCHIVE_NAME}.sha256"
 
     # Verify checksum
     info "Verifying checksum..."
     cd "$TMP_DIR"
     if command -v shasum > /dev/null 2>&1; then
-        shasum -a 256 -c juglans.tar.gz.sha256
+        shasum -a 256 -c "${ARCHIVE_NAME}.sha256"
     elif command -v sha256sum > /dev/null 2>&1; then
-        sha256sum -c juglans.tar.gz.sha256
+        sha256sum -c "${ARCHIVE_NAME}.sha256"
     else
         warn "Cannot verify checksum (no shasum or sha256sum found)"
     fi
 
     # Extract
     info "Extracting..."
-    tar -xzf juglans.tar.gz
+    tar -xzf "$ARCHIVE_NAME"
 
     # Install
     info "Installing to $INSTALL_DIR..."

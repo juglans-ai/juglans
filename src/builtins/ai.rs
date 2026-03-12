@@ -134,7 +134,7 @@ impl Chat {
         None
     }
 
-    /// 尝试在 BuiltinRegistry 中执行 tool，返回 None 表示未找到
+    /// Try executing a tool in BuiltinRegistry, returns None if not found
     async fn _try_execute_builtin(
         &self,
         tool_name: &str,
@@ -173,22 +173,7 @@ impl Chat {
         Some(result)
     }
 
-    /// 尝试通过 Executor → MCP 执行 tool，返回 None 表示未找到
-    async fn _try_execute_mcp(&self, tool_name: &str, args_str: &str) -> Option<String> {
-        let weak_registry = self.builtin_registry.as_ref()?;
-        let registry_strong = weak_registry.upgrade()?;
-        let executor = registry_strong.get_executor()?;
-
-        info!("  🔧 [MCP Tool] Attempting: {} ...", tool_name);
-        let result = executor.execute_mcp_tool(tool_name, args_str).await?;
-        info!(
-            "  ✅ [MCP Tool] Result: {:.80}...",
-            result.replace("\n", " ")
-        );
-        Some(result)
-    }
-
-    /// 兼容旧调用：依次尝试 builtin → MCP，都失败则返回错误信息
+    /// Legacy compatibility: try builtin tools in order, return error message on failure
     async fn _execute_local_tool(
         &self,
         tool_name: &str,
@@ -198,18 +183,12 @@ impl Chat {
         if let Some(result) = self._try_execute_builtin(tool_name, args_str, ctx).await {
             return result;
         }
-        if let Some(result) = self._try_execute_mcp(tool_name, args_str).await {
-            return result;
-        }
-        format!(
-            "Error: Tool '{}' is not registered (checked builtin and MCP).",
-            tool_name
-        )
+        format!("Error: Tool '{}' is not registered.", tool_name)
     }
 }
 
-/// 工具执行回调 — 封装 builtin / MCP / client bridge 的分派逻辑，
-/// 供 runtime.chat() 在 SSE 流内处理 tool_call 事件。
+/// Tool execution callback — encapsulates builtin / client bridge dispatch logic,
+/// used by runtime.chat() to handle tool_call events within the SSE stream.
 struct WorkflowToolHandler {
     builtin_registry: Option<Weak<super::BuiltinRegistry>>,
     context: WorkflowContext,
@@ -219,7 +198,7 @@ struct WorkflowToolHandler {
 #[async_trait]
 impl ChatToolHandler for WorkflowToolHandler {
     async fn handle_tool_call(&self, tool_name: &str, arguments_json: &str) -> Result<String> {
-        // 【新增】emit tool_start
+        // Emit tool_start event
         if self.stream_tool_events {
             let params: HashMap<String, String> =
                 serde_json::from_str(arguments_json).unwrap_or_default();
@@ -228,7 +207,7 @@ impl ChatToolHandler for WorkflowToolHandler {
 
         let result = self.dispatch_tool_call(tool_name, arguments_json).await;
 
-        // 【新增】emit tool_complete
+        // Emit tool_complete event
         if self.stream_tool_events {
             match &result {
                 Ok(s) => self
@@ -247,7 +226,7 @@ impl ChatToolHandler for WorkflowToolHandler {
 
 impl WorkflowToolHandler {
     async fn dispatch_tool_call(&self, tool_name: &str, arguments_json: &str) -> Result<String> {
-        // 1. 尝试 builtin tool
+        // 1. Try builtin tool
         if let Some(weak) = &self.builtin_registry {
             if let Some(registry) = weak.upgrade() {
                 if let Some(tool) = registry.get(tool_name) {
@@ -279,24 +258,7 @@ impl WorkflowToolHandler {
             }
         }
 
-        // 2. 尝试 MCP tool
-        if let Some(weak) = &self.builtin_registry {
-            if let Some(registry) = weak.upgrade() {
-                if let Some(executor) = registry.get_executor() {
-                    if let Some(result) = executor.execute_mcp_tool(tool_name, arguments_json).await
-                    {
-                        info!(
-                            "  ✅ [MCP Tool] {} → {:.80}...",
-                            tool_name,
-                            result.replace('\n', " ")
-                        );
-                        return Ok(result);
-                    }
-                }
-            }
-        }
-
-        // 3. Client bridge — 通过 SSE 发给前端执行
+        // 2. Client bridge — forward to frontend via SSE
         info!(
             "  🌉 [Client Tool Bridge] Forwarding: {} to frontend",
             tool_name
@@ -330,7 +292,7 @@ struct OnToolCallHandler {
 #[async_trait]
 impl ChatToolHandler for OnToolCallHandler {
     async fn handle_tool_call(&self, tool_name: &str, arguments_json: &str) -> Result<String> {
-        // 【新增】emit tool_start
+        // Emit tool_start event
         if self.stream_tool_events {
             let params: HashMap<String, String> =
                 serde_json::from_str(arguments_json).unwrap_or_default();
@@ -339,7 +301,7 @@ impl ChatToolHandler for OnToolCallHandler {
 
         let result = self.dispatch_tool_call(tool_name, arguments_json).await;
 
-        // 【新增】emit tool_complete
+        // Emit tool_complete event
         if self.stream_tool_events {
             match &result {
                 Ok(s) => self
@@ -358,7 +320,7 @@ impl ChatToolHandler for OnToolCallHandler {
 
 impl OnToolCallHandler {
     async fn dispatch_tool_call(&self, tool_name: &str, arguments_json: &str) -> Result<String> {
-        // 1. 尝试 builtin tool
+        // 1. Try builtin tool
         if let Some(weak) = &self.builtin_registry {
             if let Some(registry) = weak.upgrade() {
                 if let Some(tool) = registry.get(tool_name) {
@@ -380,19 +342,7 @@ impl OnToolCallHandler {
             }
         }
 
-        // 2. 尝试 MCP tool
-        if let Some(weak) = &self.builtin_registry {
-            if let Some(registry) = weak.upgrade() {
-                if let Some(executor) = registry.get_executor() {
-                    if let Some(result) = executor.execute_mcp_tool(tool_name, arguments_json).await
-                    {
-                        return Ok(result);
-                    }
-                }
-            }
-        }
-
-        // 3. 路由到 workflow（替代 client bridge）
+        // 2. Route to workflow (replaces client bridge)
         info!(
             "  🌉 [On Tool Call] Routing {} to workflow: {}",
             tool_name, self.workflow_path
@@ -443,7 +393,7 @@ struct OnToolNodeHandler {
 #[async_trait]
 impl ChatToolHandler for OnToolNodeHandler {
     async fn handle_tool_call(&self, tool_name: &str, arguments_json: &str) -> Result<String> {
-        // 【新增】emit tool_start
+        // Emit tool_start event
         if self.stream_tool_events {
             let params: HashMap<String, String> =
                 serde_json::from_str(arguments_json).unwrap_or_default();
@@ -452,7 +402,7 @@ impl ChatToolHandler for OnToolNodeHandler {
 
         let result = self.dispatch_tool_call(tool_name, arguments_json).await;
 
-        // 【新增】emit tool_complete
+        // Emit tool_complete event
         if self.stream_tool_events {
             match &result {
                 Ok(s) => self
@@ -471,7 +421,7 @@ impl ChatToolHandler for OnToolNodeHandler {
 
 impl OnToolNodeHandler {
     async fn dispatch_tool_call(&self, tool_name: &str, arguments_json: &str) -> Result<String> {
-        // 1. 尝试 builtin tool
+        // 1. Try builtin tool
         if let Some(weak) = &self.builtin_registry {
             if let Some(registry) = weak.upgrade() {
                 if let Some(tool) = registry.get(tool_name) {
@@ -493,19 +443,7 @@ impl OnToolNodeHandler {
             }
         }
 
-        // 2. 尝试 MCP tool
-        if let Some(weak) = &self.builtin_registry {
-            if let Some(registry) = weak.upgrade() {
-                if let Some(executor) = registry.get_executor() {
-                    if let Some(result) = executor.execute_mcp_tool(tool_name, arguments_json).await
-                    {
-                        return Ok(result);
-                    }
-                }
-            }
-        }
-
-        // 3. 路由到节点（on_tool=[node]）
+        // 2. Route to node (on_tool=[node])
         info!(
             "  🌉 [On Tool Node] Routing {} to node [{}]",
             tool_name, self.node_name
@@ -520,7 +458,7 @@ impl OnToolNodeHandler {
             }),
         )?;
 
-        // 获取 executor
+        // Get executor
         let executor = self
             .builtin_registry
             .as_ref()
@@ -528,7 +466,7 @@ impl OnToolNodeHandler {
             .and_then(|r| r.get_executor())
             .ok_or_else(|| anyhow!("Executor not available for on_tool handler"))?;
 
-        // 检查目标是否是函数节点
+        // Check if target is a function node
         if self.workflow.functions.contains_key(&self.node_name) {
             let mut args = HashMap::new();
             args.insert("name".to_string(), json!(tool_name));
@@ -548,7 +486,7 @@ impl OnToolNodeHandler {
             });
         }
 
-        // 目标是普通节点
+        // Target is a regular node
         let result = executor
             .clone()
             .run_single_node_by_name(&self.node_name, &self.workflow, &self.context)
@@ -609,7 +547,7 @@ impl Tool for ExecuteWorkflow {
         let base_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let identifier = format!("execute_workflow:{}", path);
 
-        // 可选：传入 input 覆盖子 workflow 的 input
+        // Optional: pass input to override child workflow's input
         if let Some(input_json) = params.get("input") {
             if let Ok(input_val) = serde_json::from_str::<Value>(input_json) {
                 context.set("input".to_string(), input_val)?;
@@ -640,9 +578,9 @@ impl Tool for Chat {
             .get("message")
             .ok_or_else(|| anyhow!("Chat Tool Error: Mandatory parameter 'message' is missing."))?;
 
-        // 消息状态：支持组合语法 input:output
-        // 单值: state="silent" → input=silent, output=silent
-        // 组合: state="context_hidden:context_visible" → input=hidden, output=visible
+        // Message state: supports compound syntax input:output
+        // Single value: state="silent" -> input=silent, output=silent
+        // Compound: state="context_hidden:context_visible" -> input=hidden, output=visible
         let state_raw = params
             .get("state")
             .cloned()
@@ -651,9 +589,9 @@ impl Tool for Chat {
             Some((i, o)) => (i.to_string(), o.to_string()),
             None => (state_raw.clone(), state_raw.clone()),
         };
-        // should_stream 基于 output_state（AI 回复是否对用户可见）
+        // should_stream based on output_state (whether AI response is visible to user)
         let should_stream = output_state == "context_visible" || output_state == "display_only";
-        // should_persist: input 或 output 任一需要持久化，就继承 chat_id
+        // should_persist: if either input or output needs persistence, inherit chat_id
         let should_persist = input_state == "context_visible"
             || input_state == "context_hidden"
             || output_state == "context_visible"
@@ -664,11 +602,11 @@ impl Tool for Chat {
             .map(|s| s.to_lowercase())
             .unwrap_or_else(|| "text".to_string());
 
-        // Tools 解析优先级：
-        // 1. 节点参数 tools=...（显式指定）
-        // 2. Agent 配置的默认 tools（.jgagent 的 tools: 字段）
-        // 注意：不再隐式注入 $input.tools，避免前端 tools 泄漏到所有 chat 节点
-        // 如果需要前端 tools，在 workflow 中显式传递：chat(tools=$input.tools)
+        // Tools resolution priority:
+        // 1. Node parameter tools=... (explicitly specified)
+        // 2. Agent's default tools (.jgagent tools: field)
+        // Note: $input.tools is no longer implicitly injected to prevent frontend tools from leaking to all chat nodes
+        // To use frontend tools, pass explicitly in workflow: chat(tools=$input.tools)
         let tools_json_str = params.get("tools").or_else(|| {
             self.agent_registry
                 .get(agent_slug_str)
@@ -676,12 +614,12 @@ impl Tool for Chat {
         });
 
         let custom_tools_json_schema = if let Some(schema_raw) = tools_json_str {
-            // 解析 tools：支持内联 JSON、单个引用(@slug)、多个引用([slugs])
+            // Parse tools: supports inline JSON, single reference (@slug), multiple references ([slugs])
             let parsed: Vec<Value> = if let Some(slug) = schema_raw.strip_prefix('@') {
-                // 单个引用：@web-tools
+                // Single reference: @web-tools
                 debug!("Resolving tool reference: {}", slug);
 
-                // 从 BuiltinRegistry 获取 ToolRegistry
+                // Get ToolRegistry from BuiltinRegistry
                 if let Some(builtin_reg_weak) = &self.builtin_registry {
                     if let Some(builtin_reg) = builtin_reg_weak.upgrade() {
                         if let Some(executor) = builtin_reg.get_executor() {
@@ -701,12 +639,12 @@ impl Tool for Chat {
                     return Err(anyhow!("BuiltinRegistry not set for Chat builtin"));
                 }
             } else if let Ok(slugs) = serde_json::from_str::<Vec<String>>(schema_raw) {
-                // 多个引用：["devtools", "web-tools", "data-tools"]
+                // Multiple references: ["devtools", "web-tools", "data-tools"]
                 debug!("Resolving tool references: {:?}", slugs);
 
                 if let Some(builtin_reg_weak) = &self.builtin_registry {
                     if let Some(builtin_reg) = builtin_reg_weak.upgrade() {
-                        // 尝试通过 ToolRegistry 解析
+                        // Try resolving via ToolRegistry
                         let resolve_result = if let Some(executor) = builtin_reg.get_executor() {
                             let tool_registry = executor.get_tool_registry();
                             tool_registry.resolve_tools(&slugs).ok()
@@ -717,14 +655,14 @@ impl Tool for Chat {
                         if let Some(tools) = resolve_result {
                             tools
                         } else {
-                            // Fallback: 逐个解析 slug，支持 "devtools" 从 builtin schemas 获取
+                            // Fallback: resolve slugs one by one, supports "devtools" from builtin schemas
                             let mut all_tools = Vec::new();
                             let tool_registry_opt = builtin_reg
                                 .get_executor()
                                 .map(|e| e.get_tool_registry().clone());
 
                             for slug in &slugs {
-                                // 先尝试 ToolRegistry
+                                // Try ToolRegistry first
                                 if let Some(ref registry) = tool_registry_opt {
                                     if let Some(resource) = registry.get(slug) {
                                         all_tools.extend(resource.tools.clone());
@@ -747,7 +685,7 @@ impl Tool for Chat {
                     return Err(anyhow!("BuiltinRegistry not set for Chat builtin"));
                 }
             } else {
-                // 内联 JSON：[{...}, {...}]
+                // Inline JSON: [{...}, {...}]
                 serde_json::from_str(schema_raw).with_context(|| {
                     format!(
                         "Failed to parse 'tools' parameter as JSON array. Input was: {}",
@@ -822,11 +760,11 @@ impl Tool for Chat {
                 local_res.source.is_some()
             );
 
-            // 【新增】检查 agent 是否有 workflow，如果有则执行嵌套 workflow
+            // Check if agent has a workflow; if so, execute nested workflow
             if let Some(ref workflow_path) = local_res.source {
                 if let Some(registry_weak) = &self.builtin_registry {
                     if let Some(registry) = registry_weak.upgrade() {
-                        // 获取 agent 文件的基准目录
+                        // Get the base directory of the agent file
                         let agent_base_dir = if let Some((_, path)) =
                             self.agent_registry.get_with_path(agent_slug_str)
                         {
@@ -835,10 +773,10 @@ impl Tool for Chat {
                             std::path::Path::new(".")
                         };
 
-                        // 构建 identifier 用于递归检查
+                        // Build identifier for recursion detection
                         let identifier = format!("{}:{}", agent_slug_str, workflow_path);
 
-                        // 获取超时配置（可选参数，默认无限制）
+                        // Get timeout config (optional parameter, defaults to no limit)
                         let timeout = params
                             .get("workflow_timeout")
                             .and_then(|t| t.parse::<u64>().ok())
@@ -853,17 +791,17 @@ impl Tool for Chat {
                             info!("│   ⚡ Executing workflow: {} (no timeout)", workflow_path);
                         }
 
-                        // 【修复】保存原始 input.message，执行后恢复
+                        // Save original input.message, restore after execution
                         let original_input_message =
                             context.resolve_path("input.message").ok().flatten();
 
-                        // 设置 input.message 到 context（workflow 需要）
+                        // Set input.message in context (required by workflow)
                         context.set(
                             "input.message".to_string(),
                             serde_json::json!(user_message_body),
                         )?;
 
-                        // 执行嵌套 workflow（带超时控制）
+                        // Execute nested workflow (with timeout control)
                         let workflow_future = registry.execute_nested_workflow(
                             workflow_path,
                             agent_base_dir,
@@ -872,7 +810,7 @@ impl Tool for Chat {
                         );
 
                         let execution_result = if let Some(timeout_duration) = timeout {
-                            // 带超时执行
+                            // Execute with timeout
                             match tokio::time::timeout(timeout_duration, workflow_future).await {
                                 Ok(result) => result,
                                 Err(_) => {
@@ -883,13 +821,13 @@ impl Tool for Chat {
                                 }
                             }
                         } else {
-                            // 无超时限制
+                            // No timeout limit
                             workflow_future.await
                         };
 
                         let result = match execution_result {
                             Ok(_) => {
-                                // 从 context 获取 workflow 的输出
+                                // Get workflow output from context
                                 let output = context
                                     .resolve_path("reply.output")?
                                     .and_then(|v| v.as_str().map(|s| s.to_string()))
@@ -909,7 +847,7 @@ impl Tool for Chat {
                             }
                         };
 
-                        // 【修复】恢复原始 input.message
+                        // Restore original input.message
                         if let Some(original) = original_input_message {
                             context.set("input.message".to_string(), original)?;
                         }
@@ -970,7 +908,7 @@ impl Tool for Chat {
             base_config
         };
 
-        // 从 context 获取 Token 和 Meta 适配器（根据 state 决定是否 SSE 输出）
+        // Get Token and Meta adapters from context (SSE output depends on state)
         let effective_token_sender = if should_stream {
             context.get_token_sender_adapter()
         } else if context.has_event_sender() {
@@ -984,17 +922,17 @@ impl Tool for Chat {
         let meta_sender = context.get_meta_sender_adapter();
         let effective_meta_sender = if should_stream { meta_sender } else { None };
 
-        // 读取 stream_tool_events 参数
+        // Read stream_tool_events parameter
         let stream_tool_events = params
             .get("stream_tool_events")
             .map(|v| v == "true" || v == "1")
             .unwrap_or(false);
 
-        // 创建工具执行回调 — tool_call 在 SSE 流内处理，无需 tool loop
-        // on_tool=[node]    → 路由到当前 workflow 中的节点
-        // on_tool_call=path → 路由到外部 workflow 文件
+        // Create tool execution callback — tool_call handled within SSE stream, no tool loop needed
+        // on_tool=[node]    -> route to node in current workflow
+        // on_tool_call=path -> route to external workflow file
         let handler: Arc<dyn ChatToolHandler> = if let Some(on_tool_ref) = params.get("on_tool") {
-            // on_tool=[node_name] — 提取节点名（去掉方括号）
+            // on_tool=[node_name] — extract node name (strip brackets)
             let node_name = on_tool_ref
                 .trim()
                 .trim_start_matches('[')
@@ -1084,7 +1022,7 @@ impl Tool for Chat {
                 Ok(Some(json!(text)))
             }
             ChatOutput::ToolCalls { .. } => {
-                // tool_handler 已提供时不应到达此分支
+                // Should not reach this branch when tool_handler is provided
                 Err(anyhow!(
                     "Unexpected ToolCalls response — tool_handler should have handled inline"
                 ))
@@ -1533,7 +1471,7 @@ mod tests {
 
     #[test]
     fn extract_json_from_prose_prefix() {
-        let input = "根据用户输入分析，这是一个交易意图。\n\n{\"is_trade\": true, \"symbol\": \"BTC\", \"direction\": \"long\", \"leverage\": 10}";
+        let input = "Based on user input analysis, this is a trading intent.\n\n{\"is_trade\": true, \"symbol\": \"BTC\", \"direction\": \"long\", \"leverage\": 10}";
         let result = Chat::extract_last_json_block(input).unwrap();
         let parsed: Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["is_trade"], json!(true));
@@ -1566,13 +1504,13 @@ mod tests {
 
     #[test]
     fn extract_returns_none_for_plain_text() {
-        let input = "这是纯文本，没有任何 JSON 内容";
+        let input = "This is plain text without any JSON content";
         assert!(Chat::extract_last_json_block(input).is_none());
     }
 
     #[test]
     fn extract_handles_nested_objects() {
-        let input = r#"前缀文字 {"outer": {"inner": [1, 2, 3]}} 后缀"#;
+        let input = r#"prefix text {"outer": {"inner": [1, 2, 3]}} suffix"#;
         let result = Chat::extract_last_json_block(input).unwrap();
         let parsed: Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["outer"]["inner"], json!([1, 2, 3]));

@@ -2,6 +2,7 @@
 use petgraph::graph::{DiGraph, NodeIndex};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct Action {
@@ -97,64 +98,137 @@ pub struct WorkflowGraph {
     pub slug: String,
     pub name: String,
     pub version: String,
-    pub source: String,
-    pub author: String,
     pub description: String,
     pub graph: DiGraph<Node, Edge>,
     pub node_map: HashMap<String, NodeIndex>,
     pub entry_node: String,
-    pub exit_nodes: Vec<String>,
     pub libs: Vec<String>,
     pub prompt_patterns: Vec<String>,
-    // 【新增】Agent 导入路径模式，用于自动加载
     pub agent_patterns: Vec<String>,
-    // 【新增】Tool 导入路径模式，用于自动加载
     pub tool_patterns: Vec<String>,
-    // 【新增】Python 模块导入列表 (支持系统模块、.py 文件、glob 模式)
     pub python_imports: Vec<String>,
-    // 【新增】Switch 路由表 (source_node_id -> SwitchRoute)
     pub switch_routes: HashMap<String, SwitchRoute>,
-    // 【新增】Flow 导入映射 (alias -> relative_path)，用于跨工作流图合并
     pub flow_imports: HashMap<String, String>,
-    // 【新增】待解析的边（引用了命名空间节点，需要在 flow 合并后才能 commit）
     pub pending_edges: Vec<(String, String, Edge)>,
-    // 【新增】函数节点定义（带参数的可复用节点）
+    /// Wildcard edges (from_pattern, to_pattern, edge), expanded during resolver phase
+    pub pending_wildcard_edges: Vec<(String, String, Edge)>,
     pub functions: HashMap<String, FunctionDef>,
-    // 【新增】库导入映射 (namespace → path)
     pub lib_imports: HashMap<String, String>,
-    // 【新增】列表形式导入的自动命名空间集合（resolver 中允许被 slug 覆盖）
     pub lib_auto_namespaces: HashSet<String>,
-    // 资源可见性
-    pub is_public: Option<bool>,
-    // Cron 调度表达式 (e.g. "0 9 * * *")
-    pub schedule: Option<String>,
-    // Class 定义 (class_name -> ClassDef)
-    pub classes: HashMap<String, ClassDef>,
+    // Class definitions (class_name -> Arc<ClassDef>)
+    pub classes: HashMap<String, Arc<ClassDef>>,
+    // External method definitions, merged into ClassDef.methods after parsing (type_name, method_name, FunctionDef)
+    pub pending_methods: Vec<(String, String, FunctionDef)>,
 }
 
-/// 函数节点定义：带参数的可复用节点
+/// .jgflow Manifest — pure configuration struct, no DAG
+#[derive(Debug, Clone, Default)]
+pub struct Manifest {
+    pub slug: String,
+    pub name: String,
+    pub version: String,
+    pub source: String,
+    pub author: String,
+    pub description: String,
+    pub is_public: Option<bool>,
+    pub schedule: Option<String>,
+    pub entry_node: String,
+    pub exit_nodes: Vec<String>,
+    // Import-related fields
+    pub libs: Vec<String>,
+    pub lib_imports: HashMap<String, String>,
+    pub lib_auto_namespaces: HashSet<String>,
+    pub prompt_patterns: Vec<String>,
+    pub agent_patterns: Vec<String>,
+    pub tool_patterns: Vec<String>,
+    pub python_imports: Vec<String>,
+    pub flow_imports: HashMap<String, String>,
+}
+
+impl Manifest {
+    /// Apply manifest metadata onto a WorkflowGraph (non-empty fields override)
+    pub fn apply_to(&self, wf: &mut WorkflowGraph) {
+        if !self.slug.is_empty() {
+            wf.slug = self.slug.clone();
+        }
+        if !self.name.is_empty() {
+            wf.name = self.name.clone();
+        }
+        if !self.version.is_empty() {
+            wf.version = self.version.clone();
+        }
+        if !self.description.is_empty() {
+            wf.description = self.description.clone();
+        }
+        if !self.libs.is_empty() {
+            wf.libs = self.libs.clone();
+            wf.lib_imports = self.lib_imports.clone();
+            wf.lib_auto_namespaces = self.lib_auto_namespaces.clone();
+        }
+        if !self.entry_node.is_empty() {
+            wf.entry_node = self.entry_node.clone();
+        }
+        if !self.prompt_patterns.is_empty() {
+            wf.prompt_patterns = self.prompt_patterns.clone();
+        }
+        if !self.agent_patterns.is_empty() {
+            wf.agent_patterns = self.agent_patterns.clone();
+        }
+        if !self.tool_patterns.is_empty() {
+            wf.tool_patterns = self.tool_patterns.clone();
+        }
+    }
+}
+
+/// Function node definition: reusable node with parameters
 #[derive(Debug, Clone)]
 pub struct FunctionDef {
     pub params: Vec<String>,
-    pub body: Box<WorkflowGraph>,
+    pub body: Arc<WorkflowGraph>,
 }
 
-/// Class 字段定义：名称 + 可选类型注解 + 可选默认值表达式
+/// Class field definition: name + optional type annotation + optional default value expression
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct ClassField {
     pub name: String,
-    /// 类型注解（Pydantic 风格 body 字段声明时设置，如 "str", "int", "float"）
+    /// Type annotation (set in Pydantic-style body field declarations, e.g. "str", "int", "float")
     pub type_hint: Option<String>,
-    /// 默认值原始表达式（运行时求值）
+    /// Default value raw expression (evaluated at runtime)
     pub default: Option<String>,
 }
 
-/// Class 定义：字段列表 + 方法集合
+/// Class definition: field list + method collection
 #[derive(Debug, Clone)]
 pub struct ClassDef {
     pub fields: Vec<ClassField>,
     pub methods: HashMap<String, FunctionDef>,
+    /// Field name → Vec index mapping, instances stored as `__fields__: [val0, val1, ...]`
+    pub field_index: HashMap<String, usize>,
+}
+
+impl ClassDef {
+    /// Build ClassDef and auto-generate field_index
+    pub fn new(fields: Vec<ClassField>, methods: HashMap<String, FunctionDef>) -> Self {
+        let field_index = fields
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (f.name.clone(), i))
+            .collect();
+        Self {
+            fields,
+            methods,
+            field_index,
+        }
+    }
+}
+
+impl WorkflowGraph {
+    /// Create an empty graph (for testing)
+    #[allow(dead_code)]
+    pub fn empty() -> Self {
+        Self::default()
+    }
 }
 
 /// Check if a node ID belongs to the test framework (`test_*` prefix)
@@ -168,28 +242,24 @@ impl Default for WorkflowGraph {
             slug: String::new(),
             name: String::new(),
             version: String::new(),
-            source: String::new(),
-            author: String::new(),
             description: String::new(),
             graph: DiGraph::new(),
             node_map: HashMap::new(),
             entry_node: String::new(),
-            exit_nodes: Vec::new(),
             libs: Vec::new(),
             prompt_patterns: Vec::new(),
-            // 【新增】
             agent_patterns: Vec::new(),
             tool_patterns: Vec::new(),
             python_imports: Vec::new(),
             switch_routes: HashMap::new(),
             flow_imports: HashMap::new(),
             pending_edges: Vec::new(),
+            pending_wildcard_edges: Vec::new(),
             functions: HashMap::new(),
             lib_imports: HashMap::new(),
             lib_auto_namespaces: HashSet::new(),
-            is_public: None,
-            schedule: None,
             classes: HashMap::new(),
+            pending_methods: Vec::new(),
         }
     }
 }

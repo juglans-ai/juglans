@@ -391,7 +391,6 @@ impl<'a> Lexer<'a> {
             "err" => TokenKind::Err,
             "return" => TokenKind::Return,
             "new" => TokenKind::New,
-            "class" => TokenKind::Class,
             _ => TokenKind::Ident(word.to_string()),
         };
         Ok(kind)
@@ -529,7 +528,7 @@ mod tests {
 
     #[test]
     fn test_keywords() {
-        let tokens = lex("if on error switch default foreach parallel in while assert new class");
+        let tokens = lex("if on error switch default foreach parallel in while assert new");
         assert_eq!(tokens[0], TokenKind::If);
         assert_eq!(tokens[1], TokenKind::On);
         assert_eq!(tokens[2], TokenKind::Error);
@@ -541,7 +540,6 @@ mod tests {
         assert_eq!(tokens[8], TokenKind::While);
         assert_eq!(tokens[9], TokenKind::Assert);
         assert_eq!(tokens[10], TokenKind::New);
-        assert_eq!(tokens[11], TokenKind::Class);
     }
 
     #[test]

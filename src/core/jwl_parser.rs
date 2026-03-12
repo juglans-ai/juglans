@@ -10,6 +10,7 @@ use crate::core::graph::{
 use crate::core::jwl_token::{is_meta_key, Span, Token, TokenKind};
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 pub struct JwlParser<'a> {
     tokens: &'a [Token],
@@ -109,8 +110,7 @@ impl<'a> JwlParser<'a> {
             | TokenKind::In
             | TokenKind::While
             | TokenKind::Assert
-            | TokenKind::New
-            | TokenKind::Class => {
+            | TokenKind::New => {
                 let s = format!("{:?}", tok.kind).to_lowercase();
                 // Keywords describe themselves in lowercase
                 let name = match &tok.kind {
@@ -128,7 +128,6 @@ impl<'a> JwlParser<'a> {
                     TokenKind::While => "while",
                     TokenKind::Assert => "assert",
                     TokenKind::New => "new",
-                    TokenKind::Class => "class",
                     _ => &s,
                 };
                 let name = name.to_string();
@@ -311,9 +310,6 @@ impl<'a> JwlParser<'a> {
                         self.parse_node_def(&mut wf)?;
                     }
                 }
-                TokenKind::Class => {
-                    self.parse_class_def(&mut wf)?;
-                }
                 TokenKind::Ident(s) if is_meta_key(s) => {
                     self.parse_metadata(&mut wf)?;
                 }
@@ -331,19 +327,15 @@ impl<'a> JwlParser<'a> {
             }
         }
 
-        Ok(wf)
-    }
-
-    pub fn parse_manifest(&mut self) -> Result<WorkflowGraph> {
-        let mut wf = WorkflowGraph::default();
-        self.skip_newlines();
-        while !self.at_eof() {
-            self.skip_newlines();
-            if self.at_eof() {
-                break;
+        // Merge external method definitions into their ClassDefs
+        for (type_name, method_name, func_def) in wf.pending_methods.drain(..) {
+            if let Some(class_def) = wf.classes.get_mut(&type_name) {
+                Arc::make_mut(class_def)
+                    .methods
+                    .insert(method_name, func_def);
             }
-            self.parse_metadata(&mut wf)?;
         }
+
         Ok(wf)
     }
 
@@ -396,18 +388,6 @@ impl<'a> JwlParser<'a> {
         self.skip_newlines();
 
         match key.as_str() {
-            "slug" => wf.slug = self.parse_meta_string_value()?,
-            "name" => wf.name = self.parse_meta_string_value()?,
-            "version" => wf.version = self.parse_meta_string_value()?,
-            "source" => wf.source = self.parse_meta_string_value()?,
-            "author" => wf.author = self.parse_meta_string_value()?,
-            "description" => wf.description = self.parse_meta_string_value()?,
-            "is_public" => {
-                wf.is_public = Some(self.parse_meta_bool_value()?);
-            }
-            "schedule" => {
-                wf.schedule = Some(self.parse_meta_string_value()?);
-            }
             "flows" => {
                 self.parse_meta_map_into(&mut wf.flow_imports)?;
             }
@@ -430,20 +410,19 @@ impl<'a> JwlParser<'a> {
                     wf.libs.extend(list);
                 }
             }
-            "entry" => {
-                let list = self.parse_meta_string_list()?;
-                wf.entry_node = list.into_iter().next().unwrap_or_default();
-            }
-            "exit" => {
-                wf.exit_nodes = self.parse_meta_string_list()?;
-            }
             "prompts" => wf.prompt_patterns = self.parse_meta_string_list()?,
             "agents" => wf.agent_patterns = self.parse_meta_string_list()?,
             "tools" => wf.tool_patterns = self.parse_meta_string_list()?,
             "python" => wf.python_imports = self.parse_meta_string_list()?,
             _ => {
-                // Unknown meta key — skip value
-                self.capture_expression(false, true, false)?;
+                return Err(self.error_at(
+                    self.tokens[self.pos.saturating_sub(2)].span,
+                    format!(
+                        "Unknown metadata key '{}'. Valid keys: libs, flows, prompts, agents, tools, python. \
+                         Note: name/version/entry/exit/description belong in .jgflow manifest, not .jg files.",
+                        key
+                    ),
+                ));
             }
         }
         Ok(())
@@ -463,28 +442,6 @@ impl<'a> JwlParser<'a> {
                 Ok(s)
             }
             _ => Err(self.error_at(tok.span, "Expected string or identifier value".into())),
-        }
-    }
-
-    fn parse_meta_bool_value(&mut self) -> Result<bool> {
-        match self.peek_kind() {
-            TokenKind::True => {
-                self.advance();
-                Ok(true)
-            }
-            TokenKind::False => {
-                self.advance();
-                Ok(false)
-            }
-            TokenKind::String(s) => {
-                let val = strip_string_quotes(s) == "true";
-                self.advance();
-                Ok(val)
-            }
-            _ => {
-                let tok = self.peek().clone();
-                Err(self.error_at(tok.span, "Expected boolean value".into()))
-            }
         }
     }
 
@@ -535,6 +492,12 @@ impl<'a> JwlParser<'a> {
     fn parse_node_def(&mut self, wf: &mut WorkflowGraph) -> Result<()> {
         self.expect(&TokenKind::LBracket)?;
         let node_id = self.expect_ident_or_keyword()?;
+
+        // Dot after ident: check if it's an external method definition [Type.method(self)]
+        if matches!(self.peek_kind(), TokenKind::Dot) && wf.classes.contains_key(&node_id) {
+            return self.parse_ext_method_def(&node_id, wf);
+        }
+
         // Check for optional func_params before ]
         let func_params = if matches!(self.peek_kind(), TokenKind::LParen) {
             Some(self.parse_func_params()?)
@@ -798,9 +761,16 @@ impl<'a> JwlParser<'a> {
     }
 
     fn is_struct_init(&self, _first_ident: &str) -> bool {
-        // Check if pattern is Ident { ... } (uppercase first letter convention)
-        // Look ahead: current is Ident, next non-newline is {
+        // Check if pattern is Ident[.Ident]* { ... } (struct init)
+        // Skip dotted name parts, then check for {
         let mut i = self.pos + 1;
+        // Skip .Ident chains (e.g., ai_tools.AI_TOOL)
+        while i + 1 < self.tokens.len()
+            && matches!(self.tokens[i].kind, TokenKind::Dot)
+            && matches!(self.tokens[i + 1].kind, TokenKind::Ident(_))
+        {
+            i += 2;
+        }
         while i < self.tokens.len() && matches!(self.tokens[i].kind, TokenKind::Newline) {
             i += 1;
         }
@@ -1083,7 +1053,7 @@ impl<'a> JwlParser<'a> {
 
         Ok(FunctionDef {
             params,
-            body: Box::new(body),
+            body: Arc::new(body),
         })
     }
 
@@ -1284,7 +1254,12 @@ impl<'a> JwlParser<'a> {
 
     fn parse_new_expr(&mut self) -> Result<NodeType> {
         self.expect(&TokenKind::New)?;
-        let class_name = self.expect_ident()?;
+        let mut class_name = self.expect_ident()?;
+        while matches!(self.peek_kind(), TokenKind::Dot) {
+            self.advance();
+            let part = self.expect_ident()?;
+            class_name = format!("{}.{}", class_name, part);
+        }
         let args = self.parse_param_pairs(&class_name)?;
         Ok(NodeType::NewInstance { class_name, args })
     }
@@ -1320,7 +1295,12 @@ impl<'a> JwlParser<'a> {
     }
 
     fn parse_struct_init(&mut self) -> Result<NodeType> {
-        let class_name = self.expect_ident()?;
+        let mut class_name = self.expect_ident()?;
+        while matches!(self.peek_kind(), TokenKind::Dot) {
+            self.advance();
+            let part = self.expect_ident()?;
+            class_name = format!("{}.{}", class_name, part);
+        }
         self.expect(&TokenKind::LBrace)?;
         self.skip_newlines();
         let mut args = HashMap::new();
@@ -1369,117 +1349,38 @@ impl<'a> JwlParser<'a> {
 
         wf.classes.insert(
             id.to_string(),
-            ClassDef {
-                fields,
-                methods: HashMap::new(),
-            },
+            Arc::new(ClassDef::new(fields, HashMap::new())),
         );
         Ok(())
     }
 
-    // ==================== Class definition ====================
+    // ==================== External method definition ====================
+    // [Type.method(self, params)]: body → pending_methods → merge into ClassDef
 
-    fn parse_class_def(&mut self, wf: &mut WorkflowGraph) -> Result<()> {
-        self.expect(&TokenKind::Class)?;
-        let class_name = self.expect_ident()?;
+    fn parse_ext_method_def(&mut self, type_name: &str, wf: &mut WorkflowGraph) -> Result<()> {
+        self.expect(&TokenKind::Dot)?;
+        let method_name = self.expect_ident_or_keyword()?;
 
-        // Optional constructor params: Counter(count=0)
-        let fields = if matches!(self.peek_kind(), TokenKind::LParen) {
-            self.parse_class_field_params()?
+        let mut params = if matches!(self.peek_kind(), TokenKind::LParen) {
+            self.parse_func_params()?
         } else {
             Vec::new()
         };
 
+        self.expect(&TokenKind::RBracket)?;
+        self.expect(&TokenKind::Colon)?;
         self.skip_newlines();
-        self.expect(&TokenKind::LBrace)?;
-        self.skip_newlines();
 
-        let mut body_fields = Vec::new();
-        let mut methods = HashMap::new();
-
-        while !matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
-            self.skip_newlines();
-            if matches!(self.peek_kind(), TokenKind::RBrace) {
-                break;
-            }
-            if matches!(self.peek_kind(), TokenKind::LBracket) {
-                // Method: [method_name(params)]: body
-                self.expect(&TokenKind::LBracket)?;
-                let method_name = self.expect_ident_or_keyword()?;
-                let params = if matches!(self.peek_kind(), TokenKind::LParen) {
-                    self.parse_func_params()?
-                } else {
-                    Vec::new()
-                };
-                self.expect(&TokenKind::RBracket)?;
-                self.expect(&TokenKind::Colon)?;
-                self.skip_newlines();
-
-                let full_name = format!("{}.{}", class_name, method_name);
-                let func_def = self.parse_function_body_into_def(&full_name, params)?;
-                methods.insert(method_name, func_def);
-            } else {
-                // Field declaration: name: type = default
-                let name = self.expect_ident_or_keyword()?;
-                self.expect(&TokenKind::Colon)?;
-                self.skip_newlines();
-                let type_hint = self.expect_ident()?;
-                let default = if matches!(self.peek_kind(), TokenKind::Eq) {
-                    self.advance();
-                    self.skip_newlines();
-                    Some(self.capture_assign_value()?)
-                } else {
-                    None
-                };
-                body_fields.push(ClassField {
-                    name,
-                    type_hint: Some(type_hint),
-                    default,
-                });
-            }
-            self.skip_newlines();
+        // Filter out `self` from params
+        if params.first().map(|s| s.as_str()) == Some("self") {
+            params.remove(0);
         }
-        self.expect(&TokenKind::RBrace)?;
 
-        let mut all_fields = fields;
-        all_fields.extend(body_fields);
-
-        wf.classes.insert(
-            class_name,
-            ClassDef {
-                fields: all_fields,
-                methods,
-            },
-        );
+        let full_name = format!("{}.{}", type_name, method_name);
+        let func_def = self.parse_function_body_into_def(&full_name, params)?;
+        wf.pending_methods
+            .push((type_name.to_string(), method_name, func_def));
         Ok(())
-    }
-
-    fn parse_class_field_params(&mut self) -> Result<Vec<ClassField>> {
-        self.expect(&TokenKind::LParen)?;
-        let mut fields = Vec::new();
-        self.skip_newlines();
-        while !matches!(self.peek_kind(), TokenKind::RParen | TokenKind::Eof) {
-            let name = self.expect_ident_or_keyword()?;
-            let default = if matches!(self.peek_kind(), TokenKind::Eq) {
-                self.advance();
-                self.skip_newlines();
-                Some(self.capture_param_value()?)
-            } else {
-                None
-            };
-            fields.push(ClassField {
-                name,
-                type_hint: None,
-                default,
-            });
-            self.skip_newlines();
-            if matches!(self.peek_kind(), TokenKind::Comma) {
-                self.advance();
-            }
-            self.skip_newlines();
-        }
-        self.expect(&TokenKind::RParen)?;
-        Ok(fields)
     }
 
     // ==================== Edge definitions ====================
@@ -1497,17 +1398,16 @@ impl<'a> JwlParser<'a> {
                     self.parse_switch_edge_body(&from_id, wf)?;
                 } else {
                     // Chain or simple edge: [a] -> [b] -> [c]
-                    let to_id = self.parse_node_ref()?;
-                    commit_edge_to_graph(wf, &from_id, &to_id, Edge::default())?;
+                    let mut last_id = self.parse_node_ref()?;
+                    commit_edge_to_graph(wf, &from_id, &last_id, Edge::default())?;
 
                     // Continue chain
                     while matches!(self.peek_kind(), TokenKind::Arrow) {
                         self.advance();
                         self.skip_newlines();
                         let next_id = self.parse_node_ref()?;
-                        commit_edge_to_graph(wf, &to_id, &next_id, Edge::default())?;
-                        // Note: for chains longer than 2, we need to track the last id properly
-                        // For now the pest parser also has this limitation in how it tracks last_id
+                        commit_edge_to_graph(wf, &last_id, &next_id, Edge::default())?;
+                        last_id = next_id;
                     }
                 }
             }
@@ -1556,11 +1456,68 @@ impl<'a> JwlParser<'a> {
 
     fn parse_node_ref(&mut self) -> Result<String> {
         self.expect(&TokenKind::LBracket)?;
-        let mut name = self.expect_ident_or_keyword()?;
-        while matches!(self.peek_kind(), TokenKind::Dot) {
-            self.advance();
-            let part = self.expect_ident_or_keyword()?;
-            name = format!("{}.{}", name, part);
+        let mut name = String::new();
+        loop {
+            match self.peek_kind().clone() {
+                TokenKind::RBracket => break,
+                TokenKind::Ident(s) => {
+                    name.push_str(&s);
+                    self.advance();
+                }
+                TokenKind::Dot => {
+                    name.push('.');
+                    self.advance();
+                }
+                // Allow keywords as part of node names (e.g. [ok], [error])
+                TokenKind::If
+                | TokenKind::On
+                | TokenKind::Error
+                | TokenKind::Switch
+                | TokenKind::Default
+                | TokenKind::Ok
+                | TokenKind::Err
+                | TokenKind::Return
+                | TokenKind::Foreach
+                | TokenKind::Parallel
+                | TokenKind::In
+                | TokenKind::While
+                | TokenKind::Assert
+                | TokenKind::New => {
+                    let kw = match self.peek_kind() {
+                        TokenKind::If => "if",
+                        TokenKind::On => "on",
+                        TokenKind::Error => "error",
+                        TokenKind::Switch => "switch",
+                        TokenKind::Default => "default",
+                        TokenKind::Ok => "ok",
+                        TokenKind::Err => "err",
+                        TokenKind::Return => "return",
+                        TokenKind::Foreach => "foreach",
+                        TokenKind::Parallel => "parallel",
+                        TokenKind::In => "in",
+                        TokenKind::While => "while",
+                        TokenKind::Assert => "assert",
+                        TokenKind::New => "new",
+                        _ => unreachable!(),
+                    };
+                    name.push_str(kw);
+                    self.advance();
+                }
+                _ => {
+                    let tok = self.peek().clone();
+                    return Err(self.error_at(
+                        tok.span,
+                        format!(
+                            "Expected identifier or '.' in node reference, found {}",
+                            tok.kind.describe()
+                        ),
+                    ));
+                }
+            }
+        }
+        if name.is_empty() {
+            let tok = self.peek().clone();
+            return Err(self.error_at(tok.span, "Empty node reference".to_string()));
         }
         self.expect(&TokenKind::RBracket)?;
         Ok(name)
@@ -1725,6 +1682,13 @@ impl<'a> JwlParser<'a> {
 // ==================== Edge commit (shared with parser.rs) ====================
 
 fn commit_edge_to_graph(wf: &mut WorkflowGraph, f_id: &str, t_id: &str, e: Edge) -> Result<()> {
+    // Wildcard edges → deferred to resolver phase for expansion
+    if f_id.contains('*') || t_id.contains('*') {
+        wf.pending_wildcard_edges
+            .push((f_id.to_string(), t_id.to_string(), e));
+        return Ok(());
+    }
+
     let f_ns = f_id.contains('.');
     let t_ns = t_id.contains('.');
 
@@ -1791,21 +1755,18 @@ mod tests {
     fn test_simple_node() {
         let wf = parse(
             r#"
-            name: "Test"
-            entry: [start]
             [start]: notify(message="hello")
         "#,
         )
         .unwrap();
         assert!(wf.node_map.contains_key("start"));
-        assert_eq!(wf.name, "Test");
+        assert_eq!(wf.entry_node, "start");
     }
 
     #[test]
     fn test_chain_edge() {
         let wf = parse(
             r#"
-            entry: [a]
             [a]: notify(message="a")
             [b]: notify(message="b")
             [a] -> [b]
@@ -1819,8 +1780,6 @@ mod tests {
     fn test_switch_edge() {
         let wf = parse(
             r#"
-            name: "Switch Test"
-            entry: [start]
             [start]: notify(message="start")
             [case_a]: notify(message="A")
             [case_b]: notify(message="B")
@@ -1843,7 +1802,6 @@ mod tests {
     fn test_compound_block() {
         let wf = parse(
             r#"
-            entry: [run]
             [run]: {
                 notify(message="step1")
                 notify(message="step2")
@@ -1860,8 +1818,6 @@ mod tests {
     fn test_function_def() {
         let wf = parse(
             r#"
-            name: "Test"
-            entry: [step1]
             [greet(name)]: bash(command="echo " + $name)
             [step1]: greet(name="world")
         "#,
@@ -1876,8 +1832,6 @@ mod tests {
     fn test_multi_step_function() {
         let wf = parse(
             r#"
-            name: "Test"
-            entry: [step1]
             [build(dir)]: {
                 bash(command="cd " + $dir + " && make")
                 bash(command="cd " + $dir + " && make test")
@@ -1896,8 +1850,6 @@ mod tests {
     fn test_missing_comma() {
         let result = parse(
             r#"
-            name: "Test"
-            entry: [start]
             [start]: notify(message="hello" status="ok")
         "#,
         );
@@ -1908,8 +1860,6 @@ mod tests {
     fn test_duplicate_param() {
         let result = parse(
             r#"
-            name: "Test"
-            entry: [start]
             [start]: notify(message="first", message="second")
         "#,
         );
@@ -1920,8 +1870,6 @@ mod tests {
     fn test_assignment_block() {
         let wf = parse(
             r#"
-            name: "Assignment Test"
-            entry: [init]
             [init]: count = 0, name = "Alice"
             [next]: notify(message="done")
             [init] -> [next]
@@ -1939,32 +1887,8 @@ mod tests {
     }
 
     #[test]
-    fn test_class_definition() {
-        let wf = parse(
-            r#"
-            name: "Class Test"
-            entry: [c]
-            class Counter(count=0) {
-                [increment(n)]: count = $self.count + $n
-                [reset]: count = 0
-            }
-            [c]: new Counter(count=10)
-            [r]: $c.increment(n=5)
-            [c] -> [r]
-        "#,
-        )
-        .unwrap();
-        assert!(wf.classes.contains_key("Counter"));
-        let class = wf.classes.get("Counter").unwrap();
-        assert_eq!(class.fields.len(), 1);
-        assert!(class.methods.contains_key("increment"));
-        assert!(class.methods.contains_key("reset"));
-    }
-
-    #[test]
     fn test_nested_function_calls() {
         let wf = parse(r#"
-            entry: [start]
             [start]: chat(message=p(slug="test", user_message=$input.message, articles=map($data, x => {"title": x.title})))
         "#).unwrap();
         let node = &wf.graph[*wf.node_map.get("start").unwrap()];
@@ -1981,7 +1905,6 @@ mod tests {
     fn test_multiline_params() {
         let wf = parse(
             r#"
-            entry: [start]
             [start]: chat(
                 agent="helper",
                 message=$input.query
@@ -2013,8 +1936,6 @@ mod tests {
     fn test_foreach() {
         let wf = parse(
             r#"
-            name: "Foreach"
-            entry: [loop]
             [loop]: foreach(item in input.items) {
                 [step]: notify(message="ok")
             }
@@ -2034,7 +1955,6 @@ mod tests {
     fn test_condition_edge() {
         let wf = parse(
             r#"
-            entry: [start]
             [start]: notify(message="test")
             [a]: notify(message="a")
             [b]: notify(message="b")
@@ -2050,7 +1970,6 @@ mod tests {
     fn test_on_error_edge() {
         let wf = parse(
             r#"
-            entry: [start]
             [start]: notify(message="test")
             [fallback]: notify(message="error")
             [start] on error -> [fallback]
@@ -2064,7 +1983,6 @@ mod tests {
     fn test_namespaced_edge() {
         let wf = parse(
             r#"
-            entry: [start]
             [start]: notify(message="start")
             [start] -> [trading.extract]
         "#,
@@ -2078,9 +1996,7 @@ mod tests {
     fn test_python_imports() {
         let wf = parse(
             r#"
-            name: "Python Workflow"
             python: ["pandas", "sklearn.ensemble", "./utils.py"]
-            entry: [load]
             [load]: pandas.read_csv(path="data.csv")
         "#,
         )
@@ -2094,7 +2010,6 @@ mod tests {
         let wf = parse(
             r#"
             flows: { trading: "./trading.jg", events: "./events.jg" }
-            entry: [start]
             [start]: notify(message="start")
         "#,
         )
@@ -2106,9 +2021,7 @@ mod tests {
     fn test_scoped_task_call() {
         let wf = parse(
             r#"
-            name: "Scoped Call Test"
             python: ["pandas"]
-            entry: [load]
             [load]: pandas.read_csv(path="data.csv", encoding="utf-8")
         "#,
         )
@@ -2126,7 +2039,6 @@ mod tests {
     fn test_assign_call_in_block() {
         let wf = parse(
             r#"
-            entry: [test]
             [test]: {
                 data = vector_search(space="articles", query="test", limit=3, model="qwen")
                 print(message="done")
@@ -2143,5 +2055,60 @@ mod tests {
         } else {
             panic!("Expected AssignCall, got {:?}", node.node_type);
         }
+    }
+
+    // ==================== External method definition ====================
+
+    #[test]
+    fn test_ext_method_basic() {
+        let wf = parse(
+            r#"
+            [User]: {
+                name: str
+                age: int
+            }
+            [User.greet(self, prefix)]: {
+                notify(message=$prefix + " " + $self.name)
+            }
+        "#,
+        )
+        .unwrap();
+        let class = wf.classes.get("User").unwrap();
+        assert!(class.methods.contains_key("greet"));
+        // self should be filtered out
+        assert_eq!(class.methods["greet"].params, vec!["prefix"]);
+    }
+
+    #[test]
+    fn test_ext_method_no_params() {
+        let wf = parse(
+            r#"
+            [Point]: {
+                x: int
+                y: int
+            }
+            [Point.describe(self)]: notify(message="point")
+        "#,
+        )
+        .unwrap();
+        let class = wf.classes.get("Point").unwrap();
+        assert!(class.methods.contains_key("describe"));
+        assert!(class.methods["describe"].params.is_empty());
+    }
+
+    #[test]
+    fn test_ext_method_multiple() {
+        let wf = parse(
+            r#"
+            [Item]: { name: str }
+            [Item.save(self)]: notify(message="saving")
+            [Item.delete(self)]: notify(message="deleting")
+        "#,
+        )
+        .unwrap();
+        let class = wf.classes.get("Item").unwrap();
+        assert_eq!(class.methods.len(), 2);
+        assert!(class.methods.contains_key("save"));
+        assert!(class.methods.contains_key("delete"));
     }
 }

@@ -1,10 +1,10 @@
 # Tutorial 6: AI Chat
 
-本章学习如何在 workflow 中调用 AI 模型：使用 `chat()` 工具发送消息、创建 `.jgagent` 配置文件、构造动态消息、串联多轮对话，以及获取结构化 JSON 输出。
+This chapter covers how to call AI models in workflows: using the `chat()` tool to send messages, creating `.jgagent` configuration files, constructing dynamic messages, chaining multi-turn conversations, and obtaining structured JSON output.
 
-## 6.1 chat() 基础
+## 6.1 chat() Basics
 
-最简单的 AI 调用——一个节点、一句话、一个回复：
+The simplest AI call — one node, one message, one reply:
 
 ```juglans
 agents: ["./agents/*.jgagent"]
@@ -15,25 +15,25 @@ agents: ["./agents/*.jgagent"]
 [ask] -> [show]
 ```
 
-逐行解释：
+Line-by-line explanation:
 
-1. `agents: ["./agents/*.jgagent"]` — 元数据声明，告诉引擎从 `./agents/` 目录加载所有 `.jgagent` 配置文件。只有加载了 agent，`chat()` 才能找到它。
-2. `[ask]: chat(agent="assistant", message="What is 2+2?")` — 调用 `chat()` 工具，向 slug 为 `"assistant"` 的 agent 发送消息 `"What is 2+2?"`。引擎将消息发送给对应模型，等待回复。
-3. `[show]: print(message=$output)` — AI 的回复存入 `$output`，`print` 将其打印到控制台。
-4. `[ask] -> [show]` — 先调用 AI，再打印结果。
+1. `agents: ["./agents/*.jgagent"]` — A metadata declaration that tells the engine to load all `.jgagent` configuration files from the `./agents/` directory. Only after loading an agent can `chat()` find it.
+2. `[ask]: chat(agent="assistant", message="What is 2+2?")` — Calls the `chat()` tool, sending the message `"What is 2+2?"` to the agent with slug `"assistant"`. The engine sends the message to the corresponding model and waits for a reply.
+3. `[show]: print(message=$output)` — The AI's reply is stored in `$output`, and `print` outputs it to the console.
+4. `[ask] -> [show]` — First call the AI, then print the result.
 
-`chat()` 是 juglans 最重要的内置工具。它的最小用法只需要两个参数：
+`chat()` is the most important built-in tool in Juglans. Its minimal usage requires only two parameters:
 
-| 参数 | 作用 |
+| Parameter | Purpose |
 |------|------|
-| `agent` | agent 的 slug，对应 `.jgagent` 文件中的 `slug` 字段 |
-| `message` | 发送给 AI 的消息内容 |
+| `agent` | The agent's slug, corresponding to the `slug` field in the `.jgagent` file |
+| `message` | The message content to send to the AI |
 
-## 6.2 创建 Agent — .jgagent 文件
+## 6.2 Creating an Agent — .jgagent Files
 
-上一节的 `chat(agent="assistant", ...)` 引用了一个名为 `assistant` 的 agent。这个 agent 定义在 `.jgagent` 文件中。
+The `chat(agent="assistant", ...)` from the previous section references an agent named `assistant`. This agent is defined in a `.jgagent` file.
 
-创建 `agents/assistant.jgagent`：
+Create `agents/assistant.jgagent`:
 
 ```jgagent
 slug: "assistant"
@@ -43,26 +43,26 @@ temperature: 0.7
 system_prompt: "You are a helpful assistant."
 ```
 
-逐字段解释：
+Field-by-field explanation:
 
-| 字段 | 作用 | 示例值 |
+| Field | Purpose | Example Value |
 |------|------|--------|
-| `slug` | 唯一标识符，`chat()` 中通过它引用 agent | `"assistant"` |
-| `name` | 显示名称，用于 UI 和日志 | `"General Assistant"` |
-| `model` | 使用的 AI 模型 | `"deepseek-chat"`, `"gpt-4o"`, `"claude-3-sonnet"` |
-| `temperature` | 随机性控制（0 = 确定性，2 = 高随机） | `0.7`（推荐默认值） |
-| `system_prompt` | 系统提示词，定义 agent 的角色和行为 | `"You are a helpful assistant."` |
+| `slug` | Unique identifier; referenced by `chat()` | `"assistant"` |
+| `name` | Display name, used in UI and logs | `"General Assistant"` |
+| `model` | The AI model to use | `"deepseek-chat"`, `"gpt-4o"`, `"claude-3-sonnet"` |
+| `temperature` | Randomness control (0 = deterministic, 2 = high randomness) | `0.7` (recommended default) |
+| `system_prompt` | System prompt that defines the agent's role and behavior | `"You are a helpful assistant."` |
 
-### Temperature 选择指南
+### Temperature Selection Guide
 
-| 值 | 适用场景 |
+| Value | Use Case |
 |----|----------|
-| `0.0` | 分类、提取、JSON 输出——需要一致性 |
-| `0.3` | 代码生成、技术问答——准确优先 |
-| `0.7` | 通用对话——平衡创造力与准确性 |
-| `1.0+` | 创意写作、头脑风暴——鼓励多样性 |
+| `0.0` | Classification, extraction, JSON output — consistency required |
+| `0.3` | Code generation, technical Q&A — accuracy first |
+| `0.7` | General conversation — balance creativity and accuracy |
+| `1.0+` | Creative writing, brainstorming — encourage diversity |
 
-### 目录结构
+### Directory Structure
 
 ```text
 my-project/
@@ -71,11 +71,11 @@ my-project/
     └── assistant.jgagent
 ```
 
-`agents:` 元数据中的路径相对于 `.jg` 文件所在目录。`["./agents/*.jgagent"]` 会匹配 `agents/` 下所有 `.jgagent` 文件。
+The paths in `agents:` metadata are relative to the directory where the `.jg` file is located. `["./agents/*.jgagent"]` matches all `.jgagent` files under `agents/`.
 
-## 6.3 动态消息 — 用 $input 构造
+## 6.3 Dynamic Messages — Constructing with $input
 
-硬编码消息只适合测试。实际场景中，消息来自外部输入：
+Hardcoded messages are only suitable for testing. In real scenarios, messages come from external input:
 
 ```juglans
 agents: ["./agents/*.jgagent"]
@@ -86,17 +86,17 @@ agents: ["./agents/*.jgagent"]
 [ask] -> [result]
 ```
 
-运行：
+Run:
 
 ```bash
 juglans chat.jg --input '{"question": "Explain recursion in one sentence."}'
 ```
 
-`$input.question` 在执行时被替换为 `"Explain recursion in one sentence."`，AI 收到这条消息并回复。
+`$input.question` is replaced at execution time with `"Explain recursion in one sentence."`, which the AI receives and responds to.
 
-### 拼接上下文
+### Concatenating Context
 
-用 `+` 拼接字符串，为 AI 提供更多上下文：
+Use `+` to concatenate strings, providing the AI with more context:
 
 ```juglans
 agents: ["./agents/*.jgagent"]
@@ -112,11 +112,11 @@ agents: ["./agents/*.jgagent"]
 juglans chat.jg --input '{"question": "What is Rust?", "lang": "Chinese"}'
 ```
 
-AI 收到的消息是 `"Answer in Chinese: What is Rust?"`，因此会用中文回答。
+The AI receives the message `"Answer in Chinese: What is Rust?"` and therefore responds in Chinese.
 
-## 6.4 多轮对话 — 链式 chat()
+## 6.4 Multi-Turn Conversations — Chaining chat() Calls
 
-将多个 `chat()` 节点串联，前一个的输出作为后一个的输入。这是 AI 工作流最常见的模式：
+Chain multiple `chat()` nodes together, with the previous node's output feeding into the next. This is the most common pattern in AI workflows:
 
 ```juglans
 agents: ["./agents/*.jgagent"]
@@ -128,15 +128,15 @@ agents: ["./agents/*.jgagent"]
 [draft] -> [review] -> [final]
 ```
 
-执行流程：
+Execution flow:
 
-1. `[draft]` — AI 写一首关于大海的短诗，结果存入 `$output`。
-2. `[review]` — 读取 `$output`（上一步的诗），请 AI 审阅并改进。AI 的改进建议覆盖 `$output`。
-3. `[final]` — 打印最终的审阅结果。
+1. `[draft]` — The AI writes a short poem about the sea; the result is stored in `$output`.
+2. `[review]` — Reads `$output` (the poem from the previous step) and asks the AI to review and improve it. The AI's improvement suggestions overwrite `$output`.
+3. `[final]` — Prints the final review result.
 
-### 保存中间结果
+### Saving Intermediate Results
 
-如果后续还需要原始诗歌，用 `$ctx` 保存：
+If you still need the original poem later, save it with `$ctx`:
 
 ```juglans
 agents: ["./agents/*.jgagent"]
@@ -149,11 +149,11 @@ agents: ["./agents/*.jgagent"]
 [draft] -> [save] -> [review] -> [show]
 ```
 
-`$ctx.poem` 在整个 workflow 中持久存在，不会被后续 `$output` 覆盖。
+`$ctx.poem` persists throughout the entire workflow and will not be overwritten by subsequent `$output` values.
 
-### 使用不同 Agent
+### Using Different Agents
 
-链中的每个节点可以使用不同的 agent，发挥各自专长：
+Each node in the chain can use a different agent, leveraging their respective strengths:
 
 ```juglans
 agents: ["./agents/*.jgagent"]
@@ -165,11 +165,11 @@ agents: ["./agents/*.jgagent"]
 [translate] -> [summarize] -> [result]
 ```
 
-先翻译，再摘要——两个 agent 各司其职。
+First translate, then summarize — two agents, each with its own responsibility.
 
-## 6.5 JSON 格式输出 — format="json"
+## 6.5 JSON Format Output — format="json"
 
-默认情况下，`chat()` 返回自由文本。添加 `format="json"` 参数可以强制 AI 返回结构化 JSON：
+By default, `chat()` returns free-form text. Adding the `format="json"` parameter forces the AI to return structured JSON:
 
 ```juglans
 agents: ["./agents/*.jgagent"]
@@ -184,20 +184,20 @@ agents: ["./agents/*.jgagent"]
 juglans analyze.jg --input '{"text": "I love this product!"}'
 ```
 
-AI 返回的 JSON（示例）：
+Example AI JSON response:
 
 ```json
 {"sentiment": "positive", "confidence": 0.95}
 ```
 
-`format="json"` 的作用：
+What `format="json"` does:
 
-- 向模型添加 JSON 输出约束（response_format）
-- 返回值是一个 JSON 对象，可以用 `$output.sentiment` 等路径访问内部字段
+- Adds a JSON output constraint (response_format) to the model
+- The return value is a JSON object, and internal fields can be accessed via paths like `$output.sentiment`
 
-### JSON 输出 + 条件路由
+### JSON Output + Conditional Routing
 
-JSON 输出最强大的用法是与条件路由结合，让 AI 做决策：
+The most powerful use of JSON output is combining it with conditional routing, letting the AI make decisions:
 
 ```juglans
 agents: ["./agents/*.jgagent"]
@@ -214,11 +214,11 @@ agents: ["./agents/*.jgagent"]
 [neg] -> [done]
 ```
 
-AI 返回 `{"sentiment": "positive"}`，workflow 根据 `$output.sentiment` 自动路由到 `[pos]` 或 `[neg]`。
+The AI returns `{"sentiment": "positive"}`, and the workflow automatically routes to `[pos]` or `[neg]` based on `$output.sentiment`.
 
-## 6.6 配置说明
+## 6.6 Configuration Notes
 
-`chat()` 通过 Jug0 后端服务与 AI 模型通信。要让 `chat()` 正常工作，需要在项目根目录创建 `juglans.toml`：
+`chat()` communicates with AI models through the Jug0 backend service. For `chat()` to work, you need to create a `juglans.toml` in the project root:
 
 ```toml
 [account]
@@ -229,32 +229,32 @@ api_key = "jug0_sk_..."
 base_url = "http://localhost:3000"
 ```
 
-| 字段 | 作用 |
+| Field | Purpose |
 |------|------|
-| `account.id` | Jug0 账户 ID |
-| `account.api_key` | API 密钥 |
-| `jug0.base_url` | Jug0 服务地址 |
+| `account.id` | Jug0 account ID |
+| `account.api_key` | API key |
+| `jug0.base_url` | Jug0 service URL |
 
-没有此配置，`chat()` 会返回连接错误。详见 [Jug0 集成指南](../integrations/jug0.md)。
+Without this configuration, `chat()` will return a connection error. See the [Jug0 Integration Guide](../integrations/jug0.md) for details.
 
-## 小结
+## Summary
 
-| 概念 | 语法 | 作用 |
+| Concept | Syntax | Purpose |
 |------|------|------|
-| AI 调用 | `chat(agent="slug", message=...)` | 向 agent 发送消息，获取回复 |
-| Agent 配置 | `.jgagent` 文件 | 定义模型、温度、系统提示词 |
-| 加载 Agent | `agents: ["./agents/*.jgagent"]` | 在 workflow 中引入 agent 文件 |
-| 动态消息 | `message=$input.question` | 用变量构造消息内容 |
-| 多轮链式 | `[a] -> [b]` 多个 chat 节点串联 | 前一个输出作为后一个输入 |
-| JSON 输出 | `format="json"` | 强制结构化输出，可与条件路由结合 |
+| AI call | `chat(agent="slug", message=...)` | Send a message to an agent and get a reply |
+| Agent configuration | `.jgagent` file | Define model, temperature, and system prompt |
+| Loading agents | `agents: ["./agents/*.jgagent"]` | Import agent files into a workflow |
+| Dynamic messages | `message=$input.question` | Construct message content using variables |
+| Multi-turn chaining | `[a] -> [b]` with multiple chat nodes in sequence | Previous output serves as the next input |
+| JSON output | `format="json"` | Force structured output; can be combined with conditional routing |
 
-关键规则：
+Key rules:
 
-1. 使用 `chat()` 前必须通过 `agents:` 元数据加载 agent 文件。
-2. `chat()` 的返回值存入 `$output`，下一个节点可以直接读取。
-3. `format="json"` 让 AI 返回 JSON 对象，字段可通过 `$output.field` 访问。
-4. 多个 `chat()` 节点可以使用相同或不同的 agent。
+1. Before using `chat()`, you must load agent files via `agents:` metadata.
+2. The return value of `chat()` is stored in `$output`, which the next node can read directly.
+3. `format="json"` makes the AI return a JSON object whose fields can be accessed via `$output.field`.
+4. Multiple `chat()` nodes can use the same or different agents.
 
-## 下一章
+## Next Chapter
 
-**[Tutorial 7: Prompt Templates](./prompt-templates.md)** — 学习 `.jgprompt` 模板语法和 `p()` 工具，用 Jinja 风格的模板管理复杂提示词。
+**[Tutorial 7: Prompt Templates](./prompt-templates.md)** — Learn the `.jgprompt` template syntax and the `p()` tool to manage complex prompts with Jinja-style templates.

@@ -81,6 +81,12 @@ pub enum Expr {
         left: Box<Expr>,
         right: Box<Expr>,
     },
+
+    // Pre-resolved references (Phase C-2: inline field resolution)
+    /// Pre-resolved field access: direct index into field_cache (zero HashMap, zero lock)
+    ResolvedField(usize),
+    /// Pre-resolved method parameter: direct index into params
+    ResolvedParam(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

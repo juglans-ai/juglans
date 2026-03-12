@@ -1,9 +1,3 @@
-name: "Switch Routing Test"
-version: "0.1.0"
-
-entry: [classify]
-exit: [handle_question, handle_task, handle_other]
-
 # Classifier node that sets the intent
 [classify]: set_context(path="intent", value="question")
 

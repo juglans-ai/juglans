@@ -1,8 +1,4 @@
-name: "Test Missing Comma Details"
-entry: [test1]
-
-# Test 1: Missing comma in parameters (this is the key issue!)
-[test1]: notify(message="hello" status="ok")
+[test1]: notify(message="hello", status="ok")
+[test2]: notify(message="done")
 
 [test1] -> [test2]
-[test2]: notify(message="done")

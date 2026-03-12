@@ -1,0 +1,41 @@
+# std/ai.jg — AI Tool Definition Library
+#
+# Usage:
+#   libs: ["std/ai.jg"]
+#
+#   [search]: ai.tool {
+#     name="web_search",
+#     description="Search the web",
+#     params={"query": {"type": "string", "description": "Search query"}}
+#   }
+#
+#   [_]: $search.to_schema()
+#   [tools]: ai.toolbox(tools=[$search.schema])
+#   [ask]: chat(message="...", tools=$tools.output, on_tool=[handler])
+
+# Tool definition struct.
+[tool]: {
+  name: str
+  description: str
+  params: dict = {}
+  required: list = []
+  text: str = ""
+  schema: dict = {}
+}
+
+# Convert to OpenAI function calling schema — writes to $self.schema field.
+[tool.to_schema(self)]: schema = {
+  "type": "function",
+  "function": {
+    "name": $self.name,
+    "description": $self.description,
+    "parameters": {
+      "type": "object",
+      "properties": $self.params,
+      "required": default($self.required, keys($self.params))
+    }
+  }
+}
+
+# Group multiple tool schemas into an array for chat(tools=...).
+[toolbox(tools)]: output = $tools

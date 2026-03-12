@@ -20,9 +20,9 @@ Core terminology used throughout Juglans documentation.
 
 **Edge** -- A directed connection between two nodes, defining execution order. Can be unconditional (`[A] -> [B]`), conditional (`[A] if $ctx.x -> [B]`), or error-handling (`[A] on error -> [B]`).
 
-**Entry Node** -- The node(s) declared with `entry:` where workflow execution begins. Every workflow must have at least one.
+**Entry Node** -- Determined automatically by topological sort -- the node(s) with in-degree 0 (no incoming edges).
 
-**Exit Node** -- The node(s) declared with `exit:` where workflow execution ends. The output of exit nodes becomes the workflow's final result.
+**Exit Node** -- Terminal node(s) with no outgoing edges. The output of terminal nodes becomes the workflow's final result.
 
 **Expression** -- A Python-like expression evaluated at runtime (e.g., `$output.count > 10`, `len($ctx.items)`). Supports arithmetic, comparison, logical operators, and 30+ built-in functions.
 
@@ -36,7 +36,7 @@ Core terminology used throughout Juglans documentation.
 
 **MCP** -- Model Context Protocol. A standard for connecting external tool servers. Juglans connects to MCP servers via HTTP/JSON-RPC.
 
-**Metadata** -- The header section of a `.jg` file containing `name`, `version`, `author`, `description`, and resource import declarations.
+**Metadata** -- The header section of a `.jg` file containing resource import declarations. Valid keys: `libs`, `flows`, `prompts`, `agents`, `tools`, `python`.
 
 **Node** -- The fundamental unit of a workflow. Each node has an ID (in brackets) and executes a single tool call: `[node_id]: tool(params)`.
 

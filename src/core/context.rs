@@ -1,28 +1,37 @@
 // src/core/context.rs
 use anyhow::{anyhow, Result};
+use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Duration;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::sync::mpsc::UnboundedSender;
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::sync::oneshot;
 
-use crate::core::graph::WorkflowGraph;
+use crate::core::graph::{ClassDef, WorkflowGraph};
+use crate::core::instance_arena::{InstanceArena, InstanceId, MethodScope, TypedSlot};
 use crate::core::jvalue::JValue;
 
 /// Type alias for pending tool start info: (tool_name, params, start_time)
+#[cfg(not(target_arch = "wasm32"))]
 type PendingToolStarts = Arc<Mutex<HashMap<String, (String, HashMap<String, String>, Instant)>>>;
+#[cfg(target_arch = "wasm32")]
+type PendingToolStarts = Arc<Mutex<HashMap<String, (String, HashMap<String, String>)>>>;
 
-/// Client tool 执行结果
+/// Client tool execution result
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResultPayload {
     pub tool_call_id: String,
     pub content: String,
 }
 
-/// Tool 执行 trace 条目
+/// Tool execution trace entry
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolTraceEntry {
     pub node_id: String,
@@ -79,14 +88,15 @@ pub struct NodeCompleteEvent {
     pub error: Option<String>,
 }
 
-/// 工作流执行过程中的实时事件
+/// Real-time events during workflow execution
 pub enum WorkflowEvent {
     Token(String),
     Status(String),
     Error(String),
-    /// Meta 信息 — 转发 jug0 的 meta 事件到前端（chat_id, user_message_id 等）
+    /// Meta info — forward jug0 meta events to frontend (chat_id, user_message_id, etc.)
     Meta(Value),
-    /// Client tool call — 发给前端执行，通过 result_tx 等待结果返回
+    /// Client tool call — sent to frontend for execution, awaits result via result_tx
+    #[cfg(not(target_arch = "wasm32"))]
     ToolCall {
         call_id: String,
         tools: Vec<Value>,
@@ -106,23 +116,30 @@ pub enum WorkflowEvent {
 #[derive(Debug, Clone)]
 pub struct WorkflowContext {
     data: Arc<RwLock<Value>>,
-    /// 【新增】用于流式输出的信道
+    /// Channel for streaming output
+    #[cfg(not(target_arch = "wasm32"))]
     event_sender: Option<UnboundedSender<WorkflowEvent>>,
-    /// 【新增】执行栈追踪，用于防止无限递归
-    /// 格式：["agent_slug:workflow_name", ...]
+    /// Execution stack trace for preventing infinite recursion
+    /// Format: ["agent_slug:workflow_name", ...]
     execution_stack: Arc<Mutex<Vec<String>>>,
-    /// 【新增】最大嵌套深度
+    /// Maximum nesting depth
     max_depth: usize,
-    /// 【新增】当前执行的 workflow（供 on_tool=[node] handler 使用）
+    /// Currently executing workflow (used by on_tool=[node] handler)
     current_workflow: Arc<RwLock<Option<Arc<WorkflowGraph>>>>,
-    /// 【新增】是否向前端推送 tool 执行事件（默认 false）
+    /// Whether to push tool execution events to frontend (default false)
     stream_tool_events: Arc<AtomicBool>,
-    /// 是否向前端推送 node 执行事件（默认 false）
+    /// Whether to push node execution events to frontend (default false)
     stream_node_events: Arc<AtomicBool>,
-    /// Tool 执行 trace（记录所有 tool 调用的结果，供 assert 查询）
+    /// Tool execution trace (records all tool call results for assert queries)
     tool_trace: Arc<Mutex<Vec<ToolTraceEntry>>>,
-    /// Pending tool starts（tool_start 时记录时间，tool_complete 时计算 duration）
+    /// Pending tool starts (records time at tool_start, computes duration at tool_complete)
     pending_tool_starts: PendingToolStarts,
+    /// Class definition registry for instance field index lookup (avoids embedding __field_index__ in each instance)
+    class_registry: Arc<RwLock<HashMap<String, Arc<ClassDef>>>>,
+    /// Instance arena: class instances stored independently, outside the JSON tree
+    instance_arena: InstanceArena,
+    /// Method execution scope stack (nested method calls)
+    method_scopes: Arc<RwLock<Vec<MethodScope>>>,
 }
 
 impl Default for WorkflowContext {
@@ -136,6 +153,7 @@ impl WorkflowContext {
     pub fn new() -> Self {
         Self {
             data: Arc::new(RwLock::new(json!({}))),
+            #[cfg(not(target_arch = "wasm32"))]
             event_sender: None,
             execution_stack: Arc::new(Mutex::new(Vec::new())),
             max_depth: 10,
@@ -144,15 +162,19 @@ impl WorkflowContext {
             stream_node_events: Arc::new(AtomicBool::new(false)),
             tool_trace: Arc::new(Mutex::new(Vec::new())),
             pending_tool_starts: Arc::new(Mutex::new(HashMap::new())),
+            class_registry: Arc::new(RwLock::new(HashMap::new())),
+            instance_arena: InstanceArena::new(),
+            method_scopes: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
-    /// 设置最大嵌套深度
+    /// Set maximum nesting depth
     pub fn _set_max_depth(&mut self, max_depth: usize) {
         self.max_depth = max_depth;
     }
 
-    /// 【新增】创建带信道的上下文
+    /// Create a context with an event channel
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn with_sender(sender: UnboundedSender<WorkflowEvent>) -> Self {
         Self {
             data: Arc::new(RwLock::new(json!({}))),
@@ -164,18 +186,38 @@ impl WorkflowContext {
             stream_node_events: Arc::new(AtomicBool::new(false)),
             tool_trace: Arc::new(Mutex::new(Vec::new())),
             pending_tool_starts: Arc::new(Mutex::new(HashMap::new())),
+            class_registry: Arc::new(RwLock::new(HashMap::new())),
+            instance_arena: InstanceArena::new(),
+            method_scopes: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
-    /// 【新增】进入嵌套执行（push 到栈）
-    /// 返回 Err 如果检测到递归或超过最大深度
-    pub fn enter_execution(&self, identifier: String) -> Result<()> {
-        let mut stack = self
-            .execution_stack
-            .lock()
-            .map_err(|_| anyhow!("Failed to acquire execution stack lock"))?;
+    /// Fork: deep-clone data for isolated parallel execution (e.g. foreach parallel).
+    /// Shares arena, class_registry, event_sender, etc. via Arc.
+    pub fn fork(&self) -> Self {
+        Self {
+            data: Arc::new(RwLock::new(self.data.read().clone())),
+            #[cfg(not(target_arch = "wasm32"))]
+            event_sender: self.event_sender.clone(),
+            execution_stack: self.execution_stack.clone(),
+            max_depth: self.max_depth,
+            current_workflow: self.current_workflow.clone(),
+            stream_tool_events: self.stream_tool_events.clone(),
+            stream_node_events: self.stream_node_events.clone(),
+            tool_trace: self.tool_trace.clone(),
+            pending_tool_starts: self.pending_tool_starts.clone(),
+            class_registry: self.class_registry.clone(),
+            instance_arena: self.instance_arena.clone(),
+            method_scopes: Arc::new(RwLock::new(Vec::new())),
+        }
+    }
 
-        // 检查深度限制
+    /// Enter nested execution (push onto stack).
+    /// Returns Err if recursion is detected or max depth is exceeded.
+    pub fn enter_execution(&self, identifier: String) -> Result<()> {
+        let mut stack = self.execution_stack.lock();
+
+        // Check depth limit
         if stack.len() >= self.max_depth {
             return Err(anyhow!(
                 "Maximum execution depth ({}) exceeded. Current stack: {:?}",
@@ -184,7 +226,7 @@ impl WorkflowContext {
             ));
         }
 
-        // 检查循环引用
+        // Check for circular references
         if stack.contains(&identifier) {
             return Err(anyhow!(
                 "Circular execution detected: '{}' is already in the call stack: {:?}",
@@ -197,12 +239,9 @@ impl WorkflowContext {
         Ok(())
     }
 
-    /// 【新增】退出嵌套执行（pop 栈）
+    /// Exit nested execution (pop from stack)
     pub fn exit_execution(&self) -> Result<()> {
-        let mut stack = self
-            .execution_stack
-            .lock()
-            .map_err(|_| anyhow!("Failed to acquire execution stack lock"))?;
+        let mut stack = self.execution_stack.lock();
 
         if stack.is_empty() {
             return Err(anyhow!("Execution stack is already empty"));
@@ -212,37 +251,43 @@ impl WorkflowContext {
         Ok(())
     }
 
-    /// 【新增】获取当前执行栈（用于调试）
+    /// Get current execution stack (for debugging)
     pub fn _get_execution_stack(&self) -> Result<Vec<String>> {
-        let stack = self
-            .execution_stack
-            .lock()
-            .map_err(|_| anyhow!("Failed to acquire execution stack lock"))?;
+        let stack = self.execution_stack.lock();
         Ok(stack.clone())
     }
 
-    /// 【新增】获取当前嵌套深度
+    /// Get current nesting depth
     pub fn _get_execution_depth(&self) -> Result<usize> {
-        let stack = self
-            .execution_stack
-            .lock()
-            .map_err(|_| anyhow!("Failed to acquire execution stack lock"))?;
+        let stack = self.execution_stack.lock();
         Ok(stack.len())
     }
 
-    /// 【新增】发送事件
+    /// Emit an event
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn emit(&self, event: WorkflowEvent) {
         if let Some(sender) = &self.event_sender {
             let _ = sender.send(event);
         }
     }
 
-    /// 是否有事件发送器（TUI 模式下为 true，CLI 模式下为 false）
+    /// WASM: no-op event emission
+    #[cfg(target_arch = "wasm32")]
+    pub fn emit(&self, _event: WorkflowEvent) {}
+
+    /// Whether an event sender exists (true in TUI mode, false in CLI mode)
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn has_event_sender(&self) -> bool {
         self.event_sender.is_some()
     }
 
-    /// 发送 client tool call 并等待前端返回结果
+    #[cfg(target_arch = "wasm32")]
+    pub fn has_event_sender(&self) -> bool {
+        false
+    }
+
+    /// Send a client tool call and wait for the frontend to return results
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn emit_tool_call_and_wait(
         &self,
         call_id: String,
@@ -268,8 +313,9 @@ impl WorkflowContext {
             .map_err(|_| anyhow!("Client tool result channel dropped (call_id: {})", call_id))
     }
 
-    /// 【新增】获取 Token 专用 Sender 的适配器
-    /// 这个方法会将 Runtime 需要的 String 类型转化为 Context 需要的 WorkflowEvent 类型
+    /// Get a token sender adapter.
+    /// Converts the String type needed by Runtime into the WorkflowEvent type needed by Context.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn get_token_sender_adapter(&self) -> Option<UnboundedSender<String>> {
         let event_sender = self.event_sender.clone()?;
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
@@ -283,8 +329,9 @@ impl WorkflowContext {
         Some(tx)
     }
 
-    /// 获取 Meta 专用 Sender 的适配器
-    /// 将 Value 类型转化为 WorkflowEvent::Meta 类型
+    /// Get a meta sender adapter.
+    /// Converts Value type into WorkflowEvent::Meta type.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn get_meta_sender_adapter(&self) -> Option<UnboundedSender<Value>> {
         let event_sender = self.event_sender.clone()?;
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
@@ -298,37 +345,140 @@ impl WorkflowContext {
         Some(tx)
     }
 
-    /// 设置当前执行的 workflow（供 on_tool=[node] handler 读取）
-    pub fn set_current_workflow(&self, workflow: Arc<WorkflowGraph>) {
-        if let Ok(mut guard) = self.current_workflow.write() {
-            *guard = Some(workflow);
+    /// Set class definition registry (called when workflow execution starts)
+    pub fn set_class_registry(&self, classes: &HashMap<String, Arc<ClassDef>>) {
+        *self.class_registry.write() = classes.clone();
+    }
+
+    // ============================================================
+    // Instance Arena API
+    // ============================================================
+
+    /// Get arena reference (used when executor operates directly)
+    pub fn arena(&self) -> &InstanceArena {
+        &self.instance_arena
+    }
+
+    /// Allocate an instance to the arena and store a proxy reference in the JSON tree
+    pub fn alloc_instance(
+        &self,
+        path: String,
+        class_name: String,
+        class_def: Arc<ClassDef>,
+        fields: Vec<Value>,
+    ) -> Result<InstanceId> {
+        let id = self
+            .instance_arena
+            .alloc(path.clone(), class_name, class_def, fields);
+        // Store a lightweight proxy in the JSON tree for resolve_path detection
+        self.set(path, json!({"__arena_ref__": id.0}))?;
+        Ok(id)
+    }
+
+    /// Look up an arena instance by variable name
+    pub fn lookup_instance(&self, name: &str) -> Result<InstanceId> {
+        // Direct arena lookup by instance name
+        if let Some(id) = self.instance_arena.lookup_by_name(name) {
+            return Ok(id);
         }
+        // Indirect: context variable holding an arena ref (e.g. foreach loop var)
+        // Read raw data to avoid materialization (resolve_path materializes arena refs)
+        let data = self.data.read();
+        if let Some(val) = data.get(name) {
+            if let Some(id) = Self::resolve_arena_ref(val) {
+                return Ok(id);
+            }
+        }
+        Err(anyhow!("Instance '{}' not found in arena", name))
     }
 
-    /// 获取当前执行的 workflow
+    /// Push a method execution scope
+    pub fn push_method_scope(&self, scope: MethodScope) -> Result<()> {
+        self.method_scopes.write().push(scope);
+        Ok(())
+    }
+
+    /// Pop a method execution scope
+    pub fn pop_method_scope(&self) -> Result<Option<MethodScope>> {
+        Ok(self.method_scopes.write().pop())
+    }
+
+    /// Phase C-2: Set method parameter TypedSlot values (called after method parameter binding)
+    pub fn set_method_param_values(&self, values: Vec<TypedSlot>) -> Result<()> {
+        let mut scopes = self.method_scopes.write();
+        if let Some(scope) = scopes.last_mut() {
+            scope.param_values = values;
+        }
+        Ok(())
+    }
+
+    /// Phase C-2: Execute a closure on the method scope (zero-copy access to field_cache/param_values).
+    /// Returns None if not within a method scope.
+    pub fn with_method_scope<T>(&self, f: impl FnOnce(&MethodScope) -> T) -> Option<T> {
+        let scopes = self.method_scopes.read();
+        scopes.last().map(f)
+    }
+
+    /// Flush dirty fields into the arena
+    pub fn flush_dirty_to_arena(&self, scope: &MethodScope) {
+        if scope.dirty.is_empty() {
+            return;
+        }
+        let updates: Vec<(usize, Value)> = scope
+            .dirty
+            .iter()
+            .filter_map(|(name, val)| {
+                scope
+                    .class_def
+                    .field_index
+                    .get(name.as_str())
+                    .map(|&idx| (idx, val.clone()))
+            })
+            .collect();
+        self.instance_arena
+            .set_fields_batch(scope.instance_id, &updates);
+    }
+
+    /// Check whether a Value is an arena proxy reference
+    fn resolve_arena_ref(val: &Value) -> Option<InstanceId> {
+        val.as_object()
+            .and_then(|m| m.get("__arena_ref__"))
+            .and_then(|v| v.as_u64())
+            .map(InstanceId)
+    }
+
+    /// Set the currently executing workflow (read by on_tool=[node] handler)
+    pub fn set_current_workflow(&self, workflow: Arc<WorkflowGraph>) {
+        *self.current_workflow.write() = Some(workflow);
+    }
+
+    /// Get the currently executing workflow
     pub fn get_current_workflow(&self) -> Option<Arc<WorkflowGraph>> {
-        self.current_workflow.read().ok()?.clone()
+        self.current_workflow.read().clone()
     }
 
-    /// 设置是否推送 tool 执行事件
+    /// Set whether to push tool execution events
     pub fn set_stream_tool_events(&self, enabled: bool) {
         self.stream_tool_events.store(enabled, Ordering::Relaxed);
     }
 
-    /// 设置是否推送 node 执行事件
+    /// Set whether to push node execution events
     pub fn set_stream_node_events(&self, enabled: bool) {
         self.stream_node_events.store(enabled, Ordering::Relaxed);
     }
 
-    /// 发送 tool_start 事件（同时记录到 trace）
+    /// Emit tool_start event (also records to trace)
     pub fn emit_tool_start(&self, node_id: &str, tool: &str, params: &HashMap<String, String>) {
-        // 记录开始时间到 pending（用 node_id 作为 key）
-        if let Ok(mut pending) = self.pending_tool_starts.lock() {
-            pending.insert(
-                node_id.to_string(),
-                (tool.to_string(), params.clone(), Instant::now()),
-            );
-        }
+        // Record start time in pending (keyed by node_id)
+        #[cfg(not(target_arch = "wasm32"))]
+        self.pending_tool_starts.lock().insert(
+            node_id.to_string(),
+            (tool.to_string(), params.clone(), Instant::now()),
+        );
+        #[cfg(target_arch = "wasm32")]
+        self.pending_tool_starts
+            .lock()
+            .insert(node_id.to_string(), (tool.to_string(), params.clone()));
 
         if !self.stream_tool_events.load(Ordering::Relaxed) {
             return;
@@ -340,17 +490,19 @@ impl WorkflowContext {
         }));
     }
 
-    /// 发送 tool_complete 事件（同时写入 trace）
+    /// Emit tool_complete event (also writes to trace)
     pub fn emit_tool_complete(&self, node_id: &str, tool: &str, result: &Result<Option<Value>>) {
-        // 从 pending 中取出开始时间，计算 duration，写入 trace
-        let start_info = self
-            .pending_tool_starts
-            .lock()
-            .ok()
-            .and_then(|mut p| p.remove(node_id));
+        // Retrieve start time from pending, compute duration, write to trace
+        let start_info = self.pending_tool_starts.lock().remove(node_id);
 
+        #[cfg(not(target_arch = "wasm32"))]
         let (params, duration) = match start_info {
             Some((_, params, started)) => (params, started.elapsed()),
+            None => (HashMap::new(), Duration::ZERO),
+        };
+        #[cfg(target_arch = "wasm32")]
+        let (params, duration) = match start_info {
+            Some((_, params)) => (params, Duration::ZERO),
             None => (HashMap::new(), Duration::ZERO),
         };
 
@@ -368,9 +520,7 @@ impl WorkflowContext {
             status: trace_status,
         };
 
-        if let Ok(mut trace) = self.tool_trace.lock() {
-            trace.push(entry);
-        }
+        self.tool_trace.lock().push(entry);
 
         // Stream event to frontend if enabled
         if !self.stream_tool_events.load(Ordering::Relaxed) {
@@ -394,15 +544,18 @@ impl WorkflowContext {
         }
     }
 
-    /// 发送 node_start 事件（workflow 节点开始执行，同时记录到 trace）
+    /// Emit node_start event (workflow node starts execution, also records to trace)
     pub fn emit_node_start(&self, node_id: &str, tool: &str, params: &HashMap<String, String>) {
-        // 记录开始时间到 pending（用 node_id 作为 key）
-        if let Ok(mut pending) = self.pending_tool_starts.lock() {
-            pending.insert(
-                node_id.to_string(),
-                (tool.to_string(), params.clone(), Instant::now()),
-            );
-        }
+        // Record start time in pending (keyed by node_id)
+        #[cfg(not(target_arch = "wasm32"))]
+        self.pending_tool_starts.lock().insert(
+            node_id.to_string(),
+            (tool.to_string(), params.clone(), Instant::now()),
+        );
+        #[cfg(target_arch = "wasm32")]
+        self.pending_tool_starts
+            .lock()
+            .insert(node_id.to_string(), (tool.to_string(), params.clone()));
 
         if !self.stream_node_events.load(Ordering::Relaxed) {
             return;
@@ -414,17 +567,19 @@ impl WorkflowContext {
         }));
     }
 
-    /// 发送 node_complete 事件（workflow 节点执行完成，同时写入 trace）
+    /// Emit node_complete event (workflow node finished execution, also writes to trace)
     pub fn emit_node_complete(&self, node_id: &str, tool: &str, result: &Result<Option<Value>>) {
-        // 从 pending 中取出开始时间，计算 duration，写入 trace
-        let start_info = self
-            .pending_tool_starts
-            .lock()
-            .ok()
-            .and_then(|mut p| p.remove(node_id));
+        // Retrieve start time from pending, compute duration, write to trace
+        let start_info = self.pending_tool_starts.lock().remove(node_id);
 
+        #[cfg(not(target_arch = "wasm32"))]
         let (params, duration) = match start_info {
             Some((_, params, started)) => (params, started.elapsed()),
+            None => (HashMap::new(), Duration::ZERO),
+        };
+        #[cfg(target_arch = "wasm32")]
+        let (params, duration) = match start_info {
+            Some((_, params)) => (params, Duration::ZERO),
             None => (HashMap::new(), Duration::ZERO),
         };
 
@@ -442,9 +597,7 @@ impl WorkflowContext {
             status: trace_status,
         };
 
-        if let Ok(mut trace) = self.tool_trace.lock() {
-            trace.push(entry);
-        }
+        self.tool_trace.lock().push(entry);
 
         if !self.stream_node_events.load(Ordering::Relaxed) {
             return;
@@ -467,15 +620,12 @@ impl WorkflowContext {
         }
     }
 
-    /// 获取所有 trace 条目
+    /// Get all trace entries
     pub fn trace_entries(&self) -> Vec<ToolTraceEntry> {
-        self.tool_trace
-            .lock()
-            .map(|t| t.clone())
-            .unwrap_or_default()
+        self.tool_trace.lock().clone()
     }
 
-    /// 查询指定 tool 的调用记录
+    /// Query call records for a specific tool
     #[allow(dead_code)]
     pub fn trace_tool_called(&self, tool_name: &str) -> Vec<ToolTraceEntry> {
         self.trace_entries()
@@ -484,35 +634,43 @@ impl WorkflowContext {
             .collect()
     }
 
-    /// 计算 trace 总耗时
+    /// Compute total trace duration
     #[allow(dead_code)]
     pub fn trace_total_duration(&self) -> Duration {
         self.trace_entries().iter().map(|e| e.duration).sum()
     }
 
-    /// 清空 trace（测试隔离用）
+    /// Clear trace (for test isolation)
     pub fn _clear_trace(&self) {
-        if let Ok(mut trace) = self.tool_trace.lock() {
-            trace.clear();
-        }
-        if let Ok(mut pending) = self.pending_tool_starts.lock() {
-            pending.clear();
-        }
+        self.tool_trace.lock().clear();
+        self.pending_tool_starts.lock().clear();
     }
 
     /// Sets a value in the context using a dot-notation path.
     pub fn set(&self, path: String, value: Value) -> Result<()> {
-        // 如果更新了 reply.status，自动同步 emit 状态事件
+        // If reply.status was updated, automatically emit a status event
         if path == "reply.status" {
             if let Some(s) = value.as_str() {
                 self.emit(WorkflowEvent::Status(s.to_string()));
             }
         }
 
-        let mut data = self
-            .data
-            .write()
-            .map_err(|_| anyhow!("Failed to acquire context write lock"))?;
+        // Method scope: write field names to dirty map instead of JSON tree.
+        // Phase C-2: also update field_cache so ResolvedField direct indexing stays correct.
+        if !path.contains('.') {
+            let mut scopes = self.method_scopes.write();
+            if let Some(scope) = scopes.last_mut() {
+                if let Some(&idx) = scope.class_def.field_index.get(&path) {
+                    if idx < scope.field_cache.len() {
+                        scope.field_cache[idx] = TypedSlot::from_value(value.clone());
+                    }
+                    scope.dirty.insert(path, value);
+                    return Ok(());
+                }
+            }
+        }
+
+        let mut data = self.data.write();
 
         let parts: Vec<&str> = path.split('.').collect();
         let (last_key, parent_parts) = parts
@@ -539,56 +697,261 @@ impl WorkflowContext {
 
     /// Resolves a dot-notation path to a value in the context.
     pub fn resolve_path(&self, path: &str) -> Result<Option<Value>> {
-        let parts: Vec<&str> = path.split('.').collect();
-        if parts.is_empty() {
-            return Ok(None);
+        // Phase 1: method scope check (zero JSON tree access)
+        {
+            let scopes = self.method_scopes.read();
+            if let Some(scope) = scopes.last() {
+                if let Some(result) = self.resolve_in_method_scope(scope, path) {
+                    return Ok(Some(result));
+                }
+            }
         }
 
-        let data = self
-            .data
-            .read()
-            .map_err(|_| anyhow!("Failed to acquire context read lock"))?;
+        // Phase 2: JSON tree + arena proxy
+        let data = self.data.read();
 
-        // 快速路径：直接 JSON pointer
-        let pointer = format!("/{}", parts.join("/"));
-        if let Some(v) = data.pointer(&pointer) {
-            return Ok(Some(v.clone()));
+        // Single-segment path (no '.'): direct get, zero allocation
+        if !path.contains('.') {
+            let val = data.get(path);
+            // Detect arena proxy -> materialize
+            if let Some(v) = val {
+                if let Some(id) = Self::resolve_arena_ref(v) {
+                    drop(data);
+                    return Ok(self.instance_arena.materialize(id));
+                }
+            }
+            return Ok(val.cloned());
         }
 
-        // 慢速路径：逐段导航，遇到 JSON 字符串自动解析
-        let mut current: Value = match data.get(parts[0]) {
-            Some(v) => v.clone(),
+        // Get class registry reference (for instance field lookup)
+        let registry_guard = self.class_registry.read();
+        let registry = Some(&*registry_guard);
+
+        // Multi-segment path: manual split traversal (avoids Vec allocation)
+        let mut segments = path.splitn(2, '.');
+        let first = segments.next().unwrap();
+        let rest = segments.next().unwrap_or("");
+
+        let root = match data.get(first) {
+            Some(v) => v,
             None => return Ok(None),
         };
-        for part in parts.iter().skip(1) {
-            current = match current {
-                Value::Object(map) => match map.get(*part) {
-                    Some(v) => v.clone(),
-                    None => return Ok(None),
-                },
-                Value::String(ref s) => {
-                    let parsed: Value = match serde_json::from_str(s) {
-                        Ok(v) => v,
-                        Err(_) => return Ok(None),
-                    };
-                    match parsed.get(*part) {
-                        Some(v) => v.clone(),
-                        None => return Ok(None),
-                    }
-                }
-                _ => return Ok(None),
-            };
+
+        // Detect arena proxy -> resolve field from arena
+        if let Some(id) = Self::resolve_arena_ref(root) {
+            drop(data);
+            return Ok(self.resolve_arena_field(id, rest));
+        }
+
+        // Common case with single rest segment: $instance.field (two-segment path)
+        if !rest.contains('.') {
+            return Ok(Some(resolve_field(root, rest, registry)));
+        }
+
+        // Multiple segments: navigate step by step
+        let mut current = root.clone();
+        for part in rest.split('.') {
+            current = resolve_field(&current, part, registry);
+            if current.is_null() {
+                return Ok(None);
+            }
         }
         Ok(Some(current))
     }
 
+    /// TypedSlot fast path: fields within method scope return TypedSlot directly.
+    /// Only handles simple paths (single-segment field names, $self.field); others fall back to None.
+    pub fn resolve_path_typed(&self, path: &str) -> Option<TypedSlot> {
+        let scopes = self.method_scopes.read();
+        let scope = scopes.last()?;
+
+        if !path.contains('.') {
+            // Convert dirty values to TypedSlot
+            if let Some(val) = scope.dirty.get(path) {
+                return Some(TypedSlot::from_value(val.clone()));
+            }
+            // field_cache returns TypedSlot directly (zero allocation for Int/Float/Bool)
+            if let Some(&idx) = scope.class_def.field_index.get(path) {
+                return scope.field_cache.get(idx).cloned();
+            }
+            return None;
+        }
+
+        // $self.field -> return TypedSlot directly
+        let mut segments = path.splitn(2, '.');
+        let first = segments.next().unwrap();
+        let rest = segments.next().unwrap_or("");
+
+        if first == "self" && !rest.contains('.') && !rest.is_empty() {
+            if let Some(val) = scope.dirty.get(rest) {
+                return Some(TypedSlot::from_value(val.clone()));
+            }
+            if let Some(&idx) = scope.class_def.field_index.get(rest) {
+                return scope.field_cache.get(idx).cloned();
+            }
+        }
+
+        // Multi-segment path or non-method field -> fall back
+        None
+    }
+
+    /// Resolve path within method scope (lock-free field_cache read + dirty-first priority)
+    fn resolve_in_method_scope(&self, scope: &MethodScope, path: &str) -> Option<Value> {
+        if !path.contains('.') {
+            // $self -> materialize current instance (including dirty fields)
+            if path == "self" {
+                return self
+                    .instance_arena
+                    .materialize_with_dirty(scope.instance_id, &scope.dirty);
+            }
+            // Check dirty first (values modified within method body)
+            if let Some(val) = scope.dirty.get(path) {
+                return Some(val.clone());
+            }
+            // Then check if it's a field name -> lock-free read from field_cache
+            if let Some(&idx) = scope.class_def.field_index.get(path) {
+                return scope.field_cache.get(idx).map(|s| s.to_value());
+            }
+            // Not a field -> return None, fall through to JSON tree
+            return None;
+        }
+
+        // Multi-segment path
+        let mut segments = path.splitn(2, '.');
+        let first = segments.next().unwrap();
+        let rest = segments.next().unwrap_or("");
+
+        // $self.field or $self.field.nested
+        if first == "self" {
+            return self.resolve_self_field(scope, rest);
+        }
+
+        // $field.nested (deep path starting with a field name)
+        if scope.class_def.field_index.contains_key(first) {
+            let field_val = if let Some(val) = scope.dirty.get(first) {
+                val.clone()
+            } else if let Some(&idx) = scope.class_def.field_index.get(first) {
+                // Lock-free: read from field_cache
+                scope
+                    .field_cache
+                    .get(idx)
+                    .map(|s| s.to_value())
+                    .unwrap_or(Value::Null)
+            } else {
+                return None;
+            };
+            // Continue navigating rest
+            let registry_guard = self.class_registry.read();
+            let registry = Some(&*registry_guard);
+            if !rest.contains('.') {
+                return Some(resolve_field(&field_val, rest, registry));
+            }
+            let mut current = field_val;
+            for part in rest.split('.') {
+                current = resolve_field(&current, part, registry);
+                if current.is_null() {
+                    return None;
+                }
+            }
+            return Some(current);
+        }
+
+        None // Not a method scope path -> fall through
+    }
+
+    /// Resolve $self.field[.nested] path (lock-free field_cache read)
+    fn resolve_self_field(&self, scope: &MethodScope, rest: &str) -> Option<Value> {
+        if rest.is_empty() {
+            // $self -> materialize
+            return self
+                .instance_arena
+                .materialize_with_dirty(scope.instance_id, &scope.dirty);
+        }
+
+        let mut segments = rest.splitn(2, '.');
+        let field_name = segments.next().unwrap();
+        let further = segments.next();
+
+        // Get field value (dirty-first, otherwise lock-free read from field_cache)
+        let field_val = if let Some(val) = scope.dirty.get(field_name) {
+            val.clone()
+        } else if let Some(&idx) = scope.class_def.field_index.get(field_name) {
+            scope
+                .field_cache
+                .get(idx)
+                .map(|s| s.to_value())
+                .unwrap_or(Value::Null)
+        } else {
+            return None;
+        };
+
+        // No further navigation -> return directly
+        if further.is_none() {
+            return Some(field_val);
+        }
+
+        // Continue navigating nested path
+        let further = further.unwrap();
+        let registry_guard = self.class_registry.read();
+        let registry = Some(&*registry_guard);
+        if !further.contains('.') {
+            return Some(resolve_field(&field_val, further, registry));
+        }
+        let mut current = field_val;
+        for part in further.split('.') {
+            current = resolve_field(&current, part, registry);
+            if current.is_null() {
+                return None;
+            }
+        }
+        Some(current)
+    }
+
+    /// Resolve instance field path from arena
+    fn resolve_arena_field(&self, id: InstanceId, rest: &str) -> Option<Value> {
+        if rest.is_empty() {
+            return self.instance_arena.materialize(id);
+        }
+
+        let class_def = self.instance_arena.class_def(id)?;
+
+        let mut segments = rest.splitn(2, '.');
+        let field_name = segments.next().unwrap();
+        let further = segments.next();
+
+        // Look up field
+        let field_val = if let Some(&idx) = class_def.field_index.get(field_name) {
+            self.instance_arena.get_field(id, idx)?
+        } else if field_name == "__class__" {
+            Value::String(self.instance_arena.class_name(id)?)
+        } else {
+            return None;
+        };
+
+        if further.is_none() {
+            return Some(field_val);
+        }
+
+        // Continue navigating
+        let further = further.unwrap();
+        let registry_guard = self.class_registry.read();
+        let registry = Some(&*registry_guard);
+        if !further.contains('.') {
+            return Some(resolve_field(&field_val, further, registry));
+        }
+        let mut current = field_val;
+        for part in further.split('.') {
+            current = resolve_field(&current, part, registry);
+            if current.is_null() {
+                return None;
+            }
+        }
+        Some(current)
+    }
+
     /// Returns a snapshot of the context as a serde_json::Value.
     pub fn get_as_value(&self) -> Result<Value> {
-        let data = self
-            .data
-            .read()
-            .map_err(|_| anyhow!("Failed to acquire context read lock"))?;
-        Ok(data.clone())
+        Ok(self.data.read().clone())
     }
 
     /// Chainable value access via dot-notation path.
@@ -611,5 +974,63 @@ impl WorkflowContext {
     #[allow(dead_code)]
     pub fn get_f64(&self, path: &str) -> Option<f64> {
         self.get_jvalue(path).f64()
+    }
+}
+
+/// Resolve a single field on a Value, with class instance `__fields__` awareness.
+/// Uses class_registry to look up field index by class name (no __field_index__ in instance).
+fn resolve_field(
+    val: &Value,
+    field: &str,
+    class_registry: Option<&HashMap<String, Arc<ClassDef>>>,
+) -> Value {
+    match val {
+        Value::Object(map) => {
+            // Safety net: raw arena proxy (no __class__) — should be resolved by resolve_path
+            if map.contains_key("__arena_ref__") && !map.contains_key("__class__") {
+                return Value::Null;
+            }
+            // Fast path: class instance with __class__ + __fields__
+            if let (Some(Value::String(class_name)), Some(fields_arr)) =
+                (map.get("__class__"), map.get("__fields__"))
+            {
+                if let Some(arr) = fields_arr.as_array() {
+                    // Look up field index from class registry
+                    if let Some(registry) = class_registry {
+                        if let Some(class_def) = registry.get(class_name.as_str()) {
+                            if let Some(&idx) = class_def.field_index.get(field) {
+                                return arr.get(idx).cloned().unwrap_or(Value::Null);
+                            }
+                        }
+                    }
+                    // Fallback: check __field_index__ in instance (backward compat)
+                    if let Some(index_map) = map.get("__field_index__") {
+                        if let Some(idx_obj) = index_map.as_object() {
+                            if let Some(idx_val) = idx_obj.get(field) {
+                                if let Some(idx) = idx_val.as_u64() {
+                                    return arr.get(idx as usize).cloned().unwrap_or(Value::Null);
+                                }
+                            }
+                        }
+                    }
+                    // Allow direct access to __class__ etc.
+                    if field.starts_with("__") {
+                        return map.get(field).cloned().unwrap_or(Value::Null);
+                    }
+                    return Value::Null;
+                }
+            }
+            // Normal object
+            map.get(field).cloned().unwrap_or(Value::Null)
+        }
+        Value::String(s) => {
+            // JSON-encoded string: try parsing and navigating
+            if let Ok(parsed) = serde_json::from_str::<Value>(s) {
+                resolve_field(&parsed, field, class_registry)
+            } else {
+                Value::Null
+            }
+        }
+        _ => Value::Null,
     }
 }

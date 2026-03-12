@@ -13,6 +13,4 @@ pub mod github;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod jug0;
 #[cfg(not(target_arch = "wasm32"))]
-pub mod mcp;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod web_server; // 【新增】
+pub mod web_server;

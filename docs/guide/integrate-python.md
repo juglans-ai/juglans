@@ -7,9 +7,6 @@ Juglans can call Python modules directly -- pandas, sklearn, your own `.py` file
 Use the `python:` header to import modules:
 
 ```juglans
-entry: [start]
-exit: [start]
-
 python: [
     "pandas",                # System package
     "sklearn.ensemble",      # Submodule
@@ -29,9 +26,6 @@ python: [
 Use `module.function(key=value)` format, just like calling a builtin:
 
 ```juglans
-entry: [load]
-exit: [result]
-
 python: ["pandas", "./utils.py"]
 
 # Call pandas.read_csv
@@ -52,9 +46,6 @@ Python objects like DataFrames cannot be serialized to JSON. Juglans solves this
 3. Method calls on the reference are routed back to Python
 
 ```juglans
-entry: [df]
-exit: [result]
-
 python: ["pandas"]
 
 # Returns a reference, not the full DataFrame
@@ -76,9 +67,6 @@ References are valid for the lifetime of the workflow. When the workflow ends, a
 Use `$node_id.method()` to call methods on Python object references:
 
 ```juglans
-entry: [load]
-exit: [clean]
-
 python: ["pandas"]
 
 [load]: pandas.read_csv(path="sales.csv")
@@ -95,9 +83,6 @@ Each step produces a new reference. The chain runs in Python, so only reference 
 Python exceptions are caught and converted to workflow errors. Use `on error` to handle them:
 
 ```juglans
-entry: [risky]
-exit: [done]
-
 python: ["risky_module"]
 
 [risky]: risky_module.might_fail(data=$input)
@@ -121,9 +106,6 @@ The `$error` object contains:
 **Batch over loops** -- Minimize cross-process calls. Instead of processing items one by one in a `foreach`, pass the whole batch:
 
 ```juglans
-entry: [batch]
-exit: [batch]
-
 python: ["./utils.py"]
 
 # Good: single call, Python handles the loop
@@ -142,9 +124,6 @@ def preprocess(df):
 ```
 
 ```juglans
-entry: [clean]
-exit: [clean]
-
 python: ["./processors/data.py"]
 
 [clean]: data.preprocess(df=$input)

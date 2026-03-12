@@ -1,8 +1,3 @@
-slug: "serve-test"
-name: "HTTP Backend Test"
-description: "Simple HTTP backend using serve() builtin"
-entry: [request]
-
 # Entry point
 [request]: serve()
 

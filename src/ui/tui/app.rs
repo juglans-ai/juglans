@@ -855,7 +855,7 @@ impl App {
                 }
             }
             WorkflowEvent::Status(_) => {
-                // 忽略非哨兵 status，TUI 通过 streaming flag 显示状态
+                // Ignore non-sentinel status; TUI shows state via streaming flag
             }
             _ => {} // Meta, NodeStart, NodeComplete — ignored for now
         }

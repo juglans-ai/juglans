@@ -18,12 +18,12 @@ use crate::services::config::JuglansConfig;
 use crate::services::interface::{ChatRequest, JuglansRuntime};
 use tracing::{error, info};
 
-/// 定义对话输出类型，区分最终文本和工具调用请求
+/// Chat output type, distinguishing final text from tool call requests
 #[derive(Debug)]
 pub enum ChatOutput {
-    /// 最终回复文本
+    /// Final reply text
     Final { text: String, chat_id: String },
-    /// AI 发起的工具调用请求
+    /// Tool call request initiated by AI
     ToolCalls {
         _calls: Vec<Value>,
         _chat_id: String,
@@ -617,7 +617,7 @@ impl Jug0Client {
         Ok(())
     }
 
-    /// 获取当前用户信息
+    /// Get current user info
     pub async fn get_current_user(&self) -> Result<UserInfo> {
         let url = format!("{}/api/auth/me", self.base_url);
         let res = self
@@ -636,12 +636,14 @@ impl Jug0Client {
         Ok(user_info)
     }
 
-    /// 注册 workflow 到 jug0
+    /// Register workflow with jug0
     pub async fn apply_workflow(
         &self,
         workflow: &WorkflowGraph,
         definition: &str,
         endpoint_url: &str,
+        is_public: Option<bool>,
+        schedule: Option<&str>,
         force: bool,
     ) -> Result<String> {
         // Parse definition as JSON for JSONB column
@@ -655,11 +657,11 @@ impl Jug0Client {
             "is_active": true,
         });
 
-        if let Some(public) = workflow.is_public {
+        if let Some(public) = is_public {
             payload["is_public"] = json!(public);
         }
 
-        if let Some(ref schedule) = workflow.schedule {
+        if let Some(schedule) = schedule {
             payload["trigger_config"] = json!({
                 "type": "cron",
                 "schedule": schedule,
@@ -969,7 +971,7 @@ impl JuglansRuntime for Jug0Client {
             tool_handler,
         } = req;
 
-        // 验证 agent_config 包含必须字段（slug 必须，model 可选 — server 端可从 agent 配置中获取）
+        // Verify agent_config has required fields (slug is required; model is optional -- server can obtain it from agent config)
         if let Some(agent_obj) = agent_config.as_object() {
             if !agent_obj.contains_key("slug") {
                 return Err(anyhow!(
@@ -1009,7 +1011,7 @@ impl JuglansRuntime for Jug0Client {
             payload["state"] = json!(s);
         }
         if let Some(ref h) = history {
-            // 尝试解析为 JSON（false 或 数组），否则忽略
+            // Try to parse as JSON (false or array), otherwise ignore
             if let Ok(parsed) = serde_json::from_str::<Value>(h) {
                 payload["history"] = parsed;
             }
@@ -1029,11 +1031,11 @@ impl JuglansRuntime for Jug0Client {
                 .await
                 .unwrap_or_else(|_| "Unknown Error".to_string());
 
-            // 422 错误通常是请求体字段缺失或格式错误
+            // 422 errors usually mean missing or malformed request body fields
             if status == 422 {
                 let mut error_msg = format!("Jug0 API Validation Error (422): {}", txt);
 
-                // 如果错误提到 missing field，提供配置建议
+                // If error mentions missing field, provide config suggestions
                 if txt.contains("missing field") {
                     error_msg.push_str("\n\n💡 Possible causes:");
                     error_msg.push_str(
@@ -1068,7 +1070,7 @@ impl JuglansRuntime for Jug0Client {
                     if let Some(id) = JValue::from(m.clone()).get("chat_id").str() {
                         final_id = id.to_string();
                     }
-                    // 转发完整 meta 事件到前端（chat_id, user_message_id 等）
+                    // Forward complete meta event to frontend (chat_id, user_message_id, etc.)
                     if let Some(sender) = &meta_sender {
                         let _ = sender.send(m);
                     }
@@ -1085,7 +1087,7 @@ impl JuglansRuntime for Jug0Client {
                         .unwrap_or_default();
 
                     if let Some(ref handler) = tool_handler {
-                        // SSE 统一流：执行工具 → POST /tool-result → 继续读流
+                        // SSE unified stream: execute tools -> POST /tool-result -> resume reading stream
                         let call_id = d
                             .get("call_id")
                             .and_then(|v| v.as_str())
@@ -1135,7 +1137,7 @@ impl JuglansRuntime for Jug0Client {
                             }
                         }
 
-                        // POST /api/chat/tool-result → jug0 channel 接收 → SSE 流恢复
+                        // POST /api/chat/tool-result -> jug0 channel receives -> SSE stream resumes
                         let post_result = self
                             .build_auth_request(
                                 reqwest::Method::POST,
@@ -1171,9 +1173,9 @@ impl JuglansRuntime for Jug0Client {
                                 return Err(anyhow!("Tool result submission failed: {}", e));
                             }
                         }
-                        continue; // SSE 流恢复，继续读
+                        continue; // SSE stream resumes, continue reading
                     } else {
-                        // 无 handler → break 返回 ToolCalls（兼容旧调用方）
+                        // No handler -> break and return ToolCalls (backward compatible with old callers)
                         tool_calls.extend(tools);
                         break;
                     }
@@ -1185,12 +1187,12 @@ impl JuglansRuntime for Jug0Client {
                 if let Some(t) = d.get("text").and_then(|s| s.as_str()) {
                     text_acc.push_str(t);
 
-                    // 1. 如果有信道，则发送 Token（用于 Web 端）
+                    // 1. If there's a channel, send token (for web frontend)
                     if let Some(sender) = &token_sender {
                         let _ = sender.send(t.to_string());
                     }
 
-                    // 2. CLI 流式输出（仅在无 token_sender 时，避免 TUI 模式下污染终端）
+                    // 2. CLI streaming output (only when no token_sender, to avoid polluting terminal in TUI mode)
                     if token_sender.is_none() {
                         print!("{}", t);
                         use std::io::Write;

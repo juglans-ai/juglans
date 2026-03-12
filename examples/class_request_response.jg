@@ -1,28 +1,25 @@
-name: "FastAPI-style Request/Response"
-entry: [http]
-
 # ── Model 定义 ──────────────────────────────
 
-class CreateUserRequest {
+[CreateUserRequest]: {
   name: str
   age: int = 0
   role: str = "user"
-
-  [validate]: {
-    ok = $self.name != ""
-    error = default($self.name == "", "name is required", "")
-  }
 }
 
-class UserResponse {
+[CreateUserRequest.validate(self)]: {
+  valid = $self.name != ""
+  err_msg = default($self.name == "", "name is required", "")
+}
+
+[UserResponse]: {
   id: str
   name: str
   age: int = 0
   role: str = "user"
   status: str = "ok"
-
-  [to_json]: result = {"id": $self.id, "name": $self.name, "age": $self.age, "role": $self.role, "status": $self.status}
 }
+
+[UserResponse.to_json(self)]: result = {"id": $self.id, "name": $self.name, "age": $self.age, "role": $self.role, "status": $self.status}
 
 # ── HTTP 路由 ────────────────────────────────
 
@@ -41,6 +38,6 @@ class UserResponse {
 [err]: response(status=400, body={"error": "validation failed"})
 
 [http] -> [create_user] -> [check]
-[check] if $ctx.ok == true -> [ok]
-[check] if $ctx.ok != true -> [err]
+[check] if $ctx.valid == true -> [ok]
+[check] if $ctx.valid != true -> [err]
 [ok] -> [send]

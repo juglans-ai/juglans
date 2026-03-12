@@ -284,7 +284,6 @@ async fn load_agent(path: &Path) -> Result<(AgentState, String)> {
     )
     .await;
 
-    executor.load_mcp_tools(&config).await;
     executor.apply_limits(&config.limits);
 
     if let Some(wf) = &workflow {

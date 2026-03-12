@@ -117,6 +117,14 @@ impl Tool for Fetch {
 
         let res = builder.send().await?;
         let status = res.status().as_u16();
+
+        // Collect response headers
+        let resp_headers: serde_json::Map<String, Value> = res
+            .headers()
+            .iter()
+            .map(|(k, v)| (k.as_str().to_string(), json!(v.to_str().unwrap_or(""))))
+            .collect();
+
         let content = res.text().await?;
 
         // Try to parse as JSON
@@ -125,7 +133,8 @@ impl Tool for Fetch {
         Ok(Some(json!({
             "status": status,
             "ok": (200..300).contains(&status),
-            "data": data
+            "data": data,
+            "headers": resp_headers
         })))
     }
 }

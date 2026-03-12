@@ -2,8 +2,8 @@
 //
 // HTTP backend builtins: serve() and response()
 //
-// serve()    — 标记入口节点，web server 扫描到即注册 catch-all 路由
-// response() — 控制 HTTP 响应 status/body/headers
+// serve()    — Marks entry node; web server registers catch-all route upon discovery
+// response() — Controls HTTP response status/body/headers
 
 use super::Tool;
 use crate::core::context::WorkflowContext;
@@ -12,13 +12,13 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
-/// serve() — HTTP 入口标记
+/// serve() — HTTP entry point marker
 ///
-/// web server 启动时扫描所有 .jg/.jgflow，发现含 serve() 的节点后，
-/// 将该 workflow 注册为 catch-all HTTP handler。
+/// At startup, the web server scans all .jg/.jgflow files; upon finding a node
+/// containing serve(), it registers that workflow as a catch-all HTTP handler.
 ///
-/// 运行时作为 pass-through，返回请求摘要供调试。
-/// 请求数据由 web server 预注入到 $input.*
+/// At runtime, acts as pass-through returning request summary for debugging.
+/// Request data is pre-injected into $input.* by the web server.
 pub struct Serve;
 
 #[async_trait]
@@ -32,7 +32,7 @@ impl Tool for Serve {
         _params: &HashMap<String, String>,
         context: &WorkflowContext,
     ) -> Result<Option<Value>> {
-        // pass-through: 返回请求数据摘要
+        // pass-through: return request data summary
         let method = context
             .resolve_path("input.method")
             .ok()
@@ -53,7 +53,7 @@ impl Tool for Serve {
             .map(|v| !v.is_null())
             .unwrap_or(false);
 
-        // 预计算 $input.route = "METHOD /path"，方便 switch 路由
+        // Pre-compute $input.route = "METHOD /path" for convenient switch routing
         let route = format!("{} {}", method, path);
         context.set("input.route".to_string(), json!(route)).ok();
 
@@ -69,10 +69,10 @@ impl Tool for Serve {
 
 /// response(status=200, body=$output, headers={"X-Custom": "value"})
 ///
-/// 设置 HTTP 响应。写入 $response.status / $response.body / $response.headers
-/// 供 web server 在 workflow 执行完毕后读取。
+/// Set HTTP response. Writes to $response.status / $response.body / $response.headers
+/// for the web server to read after workflow execution completes.
 ///
-/// 如果 workflow 未调用 response()，web server 默认用 $output 作为 body，status 200。
+/// If the workflow does not call response(), the web server defaults to $output as body with status 200.
 pub struct HttpResponse;
 
 #[async_trait]
@@ -101,7 +101,7 @@ impl Tool for HttpResponse {
 
         let file: Option<String> = params.get("file").map(|f| f.trim_matches('"').to_string());
 
-        // 写入 $response.* 供 web server 读取
+        // Write to $response.* for web server to read
         context.set("response.status".to_string(), json!(status))?;
         if let Some(ref b) = body {
             context.set("response.body".to_string(), b.clone())?;
