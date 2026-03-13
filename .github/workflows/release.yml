@@ -138,10 +138,10 @@ jobs:
         if: ${{ !matrix.cross }}
         run: cargo build --release --target ${{ matrix.target }}
 
-      # Cross 编译 (Linux ARM64)
+      # Cross 编译 (Linux ARM64) — no device feature (pipewire unavailable on focal)
       - name: Build (cross)
         if: matrix.cross
-        run: cross build --release --target ${{ matrix.target }}
+        run: cross build --release --target ${{ matrix.target }} --no-default-features --features native
 
       # 打包 (Unix)
       - name: Package (Unix)

@@ -108,18 +108,20 @@ impl BuiltinRegistry {
         reg!(testing::Config);
         // Mock is registered post-construction (needs Weak<BuiltinRegistry>)
 
-        // Device control
-        reg!(device::KeyTap);
-        reg!(device::KeyCombo);
-        reg!(device::TypeText);
-        reg!(device::MouseMove);
-        reg!(device::MouseClick);
-        reg!(device::MouseScroll);
-        reg!(device::MousePosition);
-        reg!(device::MouseDrag);
-        reg!(device::ScreenSize);
-        reg!(device::Screenshot);
-        // KeyListen / MouseListen registered post-construction (need Weak<BuiltinRegistry>)
+        // Device control (requires "device" feature — skipped on headless ARM64)
+        #[cfg(feature = "device")]
+        {
+            reg!(device::KeyTap);
+            reg!(device::KeyCombo);
+            reg!(device::TypeText);
+            reg!(device::MouseMove);
+            reg!(device::MouseClick);
+            reg!(device::MouseScroll);
+            reg!(device::MousePosition);
+            reg!(device::MouseDrag);
+            reg!(device::ScreenSize);
+            reg!(device::Screenshot);
+        }
 
         // Database ORM
         reg!(database::DbConnect);
@@ -167,11 +169,19 @@ impl BuiltinRegistry {
         let mut serve_tool = http::Serve::new();
         serve_tool.set_registry(Arc::downgrade(&registry_arc));
 
-        let mut key_listen_tool = device::KeyListen::new();
-        key_listen_tool.set_registry(Arc::downgrade(&registry_arc));
+        #[cfg(feature = "device")]
+        let key_listen_tool = {
+            let mut t = device::KeyListen::new();
+            t.set_registry(Arc::downgrade(&registry_arc));
+            t
+        };
 
-        let mut mouse_listen_tool = device::MouseListen::new();
-        mouse_listen_tool.set_registry(Arc::downgrade(&registry_arc));
+        #[cfg(feature = "device")]
+        let mouse_listen_tool = {
+            let mut t = device::MouseListen::new();
+            t.set_registry(Arc::downgrade(&registry_arc));
+            t
+        };
 
         {
             let mut guard = registry_arc.tools.write().expect("Lock poisoned");
@@ -183,14 +193,17 @@ impl BuiltinRegistry {
             guard.insert("mock".to_string(), Arc::new(Box::new(mock_tool)));
             guard.insert("call".to_string(), Arc::new(Box::new(call_tool)));
             guard.insert("serve".to_string(), Arc::new(Box::new(serve_tool)));
-            guard.insert(
-                "key_listen".to_string(),
-                Arc::new(Box::new(key_listen_tool)),
-            );
-            guard.insert(
-                "mouse_listen".to_string(),
-                Arc::new(Box::new(mouse_listen_tool)),
-            );
+            #[cfg(feature = "device")]
+            {
+                guard.insert(
+                    "key_listen".to_string(),
+                    Arc::new(Box::new(key_listen_tool)),
+                );
+                guard.insert(
+                    "mouse_listen".to_string(),
+                    Arc::new(Box::new(mouse_listen_tool)),
+                );
+            }
         }
 
         registry_arc
@@ -315,6 +328,7 @@ impl BuiltinRegistry {
 
 pub mod ai;
 pub mod database;
+#[cfg(feature = "device")]
 pub mod device;
 pub mod devtools;
 pub mod http;
