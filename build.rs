@@ -25,8 +25,7 @@ fn main() {
                     writeln!(
                         f,
                         "        \"{}\" => Some(include_str!(\"{}\")),",
-                        stem,
-                        abs_str
+                        stem, abs_str
                     )
                     .unwrap();
                 }
