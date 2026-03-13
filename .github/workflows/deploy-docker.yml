@@ -20,7 +20,7 @@ jobs:
       - name: Install system dependencies (Linux)
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwayland-dev libxkbcommon-dev libx11-dev libxtst-dev libxi-dev libxdo-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+          sudo apt-get install -y libwayland-dev libxkbcommon-dev libx11-dev libxtst-dev libxi-dev libxdo-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-shape0-dev libxcb-xfixes0-dev libpipewire-0.3-dev
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -54,7 +54,7 @@ jobs:
       - name: Install system dependencies (Linux)
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwayland-dev libxkbcommon-dev libx11-dev libxtst-dev libxi-dev libxdo-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+          sudo apt-get install -y libwayland-dev libxkbcommon-dev libx11-dev libxtst-dev libxi-dev libxdo-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-shape0-dev libxcb-xfixes0-dev libpipewire-0.3-dev
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
