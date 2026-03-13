@@ -32,7 +32,7 @@ python: ["pandas", "./utils.py"]
 [load]: pandas.read_csv(path="data.csv")
 
 # Call a local module function
-[result]: utils.process(data=$output)
+[result]: utils.process(data=output)
 
 [load] -> [result]
 ```
@@ -52,10 +52,10 @@ python: ["pandas"]
 [df]: pandas.read_csv(path="large_file.csv")
 
 # Method call on the reference -- executed in Python
-[filtered]: $df.query(expr="score > 0.5")
+[filtered]: df.query(expr="score > 0.5")
 
 # Convert to JSON when you need the actual data
-[result]: $filtered.to_dict()
+[result]: filtered.to_dict()
 
 [df] -> [filtered] -> [result]
 ```
@@ -64,14 +64,14 @@ References are valid for the lifetime of the workflow. When the workflow ends, a
 
 ## Method Chain Calls
 
-Use `$node_id.method()` to call methods on Python object references:
+Use `node_id.method()` to call methods on Python object references:
 
 ```juglans
 python: ["pandas"]
 
 [load]: pandas.read_csv(path="sales.csv")
-[dropped]: $load.dropna()
-[clean]: $dropped.reset_index()
+[dropped]: load.dropna()
+[clean]: dropped.reset_index()
 
 [load] -> [dropped] -> [clean]
 ```
@@ -85,21 +85,21 @@ Python exceptions are caught and converted to workflow errors. Use `on error` to
 ```juglans
 python: ["risky_module"]
 
-[risky]: risky_module.might_fail(data=$input)
+[risky]: risky_module.might_fail(data=input)
 [done]: notify(message="Success")
-[handle]: notify(message="Python error: " + $error.message)
+[handle]: notify(message="Python error: " + error.message)
 
 [risky] -> [done]
 [risky] on error -> [handle]
 ```
 
-The `$error` object contains:
+The `error` object contains:
 
 | Field | Description |
 |-------|-------------|
-| `$error.type` | Exception class (e.g., `PythonError`) |
-| `$error.message` | Error message (e.g., `ValueError: invalid input`) |
-| `$error.traceback` | Full Python traceback |
+| `error.type` | Exception class (e.g., `PythonError`) |
+| `error.message` | Error message (e.g., `ValueError: invalid input`) |
+| `error.traceback` | Full Python traceback |
 
 ## Best Practices
 
@@ -109,7 +109,7 @@ The `$error` object contains:
 python: ["./utils.py"]
 
 # Good: single call, Python handles the loop
-[batch]: utils.process_batch(items=$input.items)
+[batch]: utils.process_batch(items=input.items)
 ```
 
 **Encapsulate complex logic** -- Keep `.jg` nodes simple. Put multi-step data processing in a Python function:
@@ -126,7 +126,7 @@ def preprocess(df):
 ```juglans
 python: ["./processors/data.py"]
 
-[clean]: data.preprocess(df=$input)
+[clean]: data.preprocess(df=input)
 ```
 
 **Only import what you need** -- Each declared module starts a worker process import. Keep the list minimal.

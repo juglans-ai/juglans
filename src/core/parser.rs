@@ -134,9 +134,10 @@ impl GraphParser {
         if wf.entry_node.is_empty()
             && wf.graph.node_indices().next().is_none()
             && wf.functions.is_empty()
+            && wf.classes.is_empty()
         {
             return Err(anyhow!(
-                "Library Error: Library file must define at least one function node."
+                "Library Error: Library file must define at least one function or class."
             ));
         }
         Ok(wf)
@@ -201,7 +202,7 @@ python: ["pandas"]
 [case_b]: notify(message="B")
 [fallback]: notify(message="default")
 
-[start] -> switch $type {
+[start] -> switch type {
     "a": [case_a]
     "b": [case_b]
     default: [fallback]
@@ -212,7 +213,7 @@ python: ["pandas"]
         // Verify switch route was created
         assert!(graph.switch_routes.contains_key("start"));
         let switch_route = graph.switch_routes.get("start").unwrap();
-        assert_eq!(switch_route.subject.trim(), "$type");
+        assert_eq!(switch_route.subject.trim(), "type");
         assert_eq!(switch_route.cases.len(), 3);
 
         // Verify cases
@@ -256,7 +257,7 @@ python: ["pandas"]
 [start]: notify(message="test")
 [a]: notify(message="a")
 [b]: notify(message="b")
-[start] if $output.category == "technical" -> [a]
+[start] if output.category == "technical" -> [a]
 [start] -> [b]
 "#;
         let result = GraphParser::parse(content);
@@ -284,7 +285,7 @@ python: ["pandas"]
         let content = r#"
 [start]: chat(
   agent="helper",
-  message=$input.query
+  message=input.query
 )
 "#;
         let result = GraphParser::parse(content);
@@ -298,7 +299,7 @@ python: ["pandas"]
     #[test]
     fn test_single_step_function() {
         let content = r#"
-[greet(name)]: bash(command="echo Hello, " + $name)
+[greet(name)]: bash(command="echo Hello, " + name)
 [step1]: greet(name="world")
 "#;
         let graph = GraphParser::parse(content).unwrap();
@@ -312,8 +313,8 @@ python: ["pandas"]
     fn test_multi_step_function() {
         let content = r#"
 [build(dir)]: {
-  bash(command="cd " + $dir + " && make")
-  bash(command="cd " + $dir + " && make test")
+  bash(command="cd " + dir + " && make")
+  bash(command="cd " + dir + " && make test")
 }
 [step1]: build(dir="/app")
 "#;
@@ -329,7 +330,7 @@ python: ["pandas"]
     #[test]
     fn test_multi_step_function_with_semicolons() {
         let content = r#"
-[build(a, b)]: { bash(command=$a); bash(command=$b) }
+[build(a, b)]: { bash(command=a); bash(command=b) }
 [step1]: build(a="foo", b="bar")
 "#;
         let graph = GraphParser::parse(content).unwrap();
@@ -341,7 +342,7 @@ python: ["pandas"]
     #[test]
     fn test_function_not_in_main_graph() {
         let content = r#"
-[greet(name)]: bash(command="echo " + $name)
+[greet(name)]: bash(command="echo " + name)
 [step1]: greet(name="world")
 "#;
         let graph = GraphParser::parse(content).unwrap();
@@ -364,7 +365,7 @@ python: ["pandas"]
     #[test]
     fn test_string_concat_expression() {
         let content = r#"
-[start]: chat(agent="helper", message="[Expert] " + $input.query)
+[start]: chat(agent="helper", message="[Expert] " + input.query)
 "#;
         let result = GraphParser::parse(content);
         assert!(
@@ -414,14 +415,14 @@ python: ["pandas"]
     #[test]
     fn test_assignment_single() {
         let content = r#"
-[init]: result = $output.data
+[init]: result = output.data
 "#;
         let graph = GraphParser::parse(content).unwrap();
         let node = graph.node_map.get("init").unwrap();
         let node_data = &graph.graph[*node];
         if let NodeType::Task(action) = &node_data.node_type {
             assert_eq!(action.name, "set_context");
-            assert_eq!(action.params.get("result").unwrap(), "$output.data");
+            assert_eq!(action.params.get("result").unwrap(), "output.data");
         } else {
             panic!("Expected Task node");
         }

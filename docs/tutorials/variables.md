@@ -1,13 +1,13 @@
 # Tutorial 2: Variables & Data Flow
 
-Workflows are useful because data flows through them. This chapter teaches you the four ways to access and pass data in juglans: `$input`, `$output`, `$ctx`, and expression functions.
+Workflows are useful because data flows through them. This chapter teaches you the four ways to access and pass data in juglans: `input`, `output`, context variables, and expression functions.
 
-## 2.1 $input -- External Input
+## 2.1 input -- External Input
 
-`$input` is the JSON data passed when a workflow starts. Use dot notation to access fields.
+`input` is the JSON data passed when a workflow starts. Use dot notation to access fields.
 
 ```juglans
-[greet]: print(message="Hello, " + $input.name + "!")
+[greet]: print(message="Hello, " + input.name + "!")
 [done]: print(message="Done")
 [greet] -> [done]
 ```
@@ -27,16 +27,16 @@ Done
 
 Breaking it down:
 
-- `$input` is the entire JSON object `{"name": "Alice"}`
-- `$input.name` drills into the `name` field, returning `"Alice"`
-- `"Hello, " + $input.name + "!"` concatenates three strings
+- `input` is the entire JSON object `{"name": "Alice"}`
+- `input.name` drills into the `name` field, returning `"Alice"`
+- `"Hello, " + input.name + "!"` concatenates three strings
 
 ### Nested Access
 
-`$input` supports any depth of nesting:
+`input` supports any depth of nesting:
 
 ```juglans
-[show]: print(message="User: " + $input.user.name)
+[show]: print(message="User: " + input.user.name)
 [done]: print(message="Done")
 [show] -> [done]
 ```
@@ -45,19 +45,19 @@ Breaking it down:
 juglans show.jg --input '{"user": {"name": "Bob"}}'
 ```
 
-For arrays, use numeric indices: `$input.items.0` accesses the first element.
+For arrays, use numeric indices: `input.items.0` accesses the first element.
 
-### What if $input is missing?
+### What if input is missing?
 
 If you run the workflow without `--input`, or access a field that doesn't exist, the variable resolves to `null`. No crash -- but you'll get `"null"` in your string output. Always provide the expected input.
 
-## 2.2 $output -- Previous Node's Output
+## 2.2 output -- Previous Node's Output
 
-Every node produces a return value. After a node executes, its return value is stored in `$output`. The next node in the chain can read it.
+Every node produces a return value. After a node executes, its return value is stored in `output`. The next node in the chain can read it.
 
 ```juglans
 [step1]: print(message="hello from step1")
-[step2]: print(message="step1 returned: " + $output)
+[step2]: print(message="step1 returned: " + output)
 [step1] -> [step2]
 ```
 
@@ -71,17 +71,17 @@ step1 returned: hello from step1
 Here is what happened:
 
 1. `[step1]` calls `print(message="hello from step1")`. The `print` tool returns its message as its output.
-2. The engine stores `"hello from step1"` in `$output`.
-3. `[step2]` reads `$output` and uses it.
+2. The engine stores `"hello from step1"` in `output`.
+3. `[step2]` reads `output` and uses it.
 
-### $output is always the *last* node
+### output is always the *last* node
 
-A critical rule: `$output` is the return value of the most recently executed node, not a specific node. If you have a three-node chain:
+A critical rule: `output` is the return value of the most recently executed node, not a specific node. If you have a three-node chain:
 
 ```juglans
 [a]: print(message="AAA")
 [b]: print(message="BBB")
-[c]: print(message="output is: " + $output)
+[c]: print(message="output is: " + output)
 [a] -> [b] -> [c]
 ```
 
@@ -93,7 +93,7 @@ BBB
 output is: BBB
 ```
 
-When `[c]` runs, `$output` is `"BBB"` (from `[b]`), not `"AAA"` (from `[a]`). Each node overwrites `$output`.
+When `[c]` runs, `output` is `"BBB"` (from `[b]`), not `"AAA"` (from `[a]`). Each node overwrites `output`.
 
 ### Named Node Output
 
@@ -102,7 +102,7 @@ Need to access an earlier node's result? Use `$node_id.output`:
 ```juglans
 [step1]: print(message="hello")
 [step2]: print(message="world")
-[step3]: print(message=$step1.output + " " + $step2.output)
+[step3]: print(message=step1.output + " " + step2.output)
 [step1] -> [step2] -> [step3]
 ```
 
@@ -116,15 +116,15 @@ hello world
 
 Every node's output is also stored at `$node_id.output` and persists for the entire workflow. Use this when you need data from a node that isn't the immediate predecessor.
 
-## 2.3 $ctx -- Context Variables
+## 2.3 Context Variables
 
-`$input` is read-only and `$output` gets overwritten every step. When you need persistent, writable storage, use the **context** (`$ctx`).
+`input` is read-only and `output` gets overwritten every step. When you need persistent, writable storage, use **context variables**.
 
-Write with `set_context()`, read with `$ctx.key`:
+Use assignment syntax to set, read by name:
 
 ```juglans
-[init]: set_context(greeting="Good morning", count=3)
-[show]: print(message=$ctx.greeting + " — count is " + str($ctx.count))
+[init]: greeting = "Good morning", count = 3
+[show]: print(message=greeting + " — count is " + str(count))
 [init] -> [show]
 ```
 
@@ -136,18 +136,18 @@ Good morning — count is 3
 
 Line by line:
 
-- `set_context(greeting="Good morning", count=3)` stores two values: a string and a number.
-- `$ctx.greeting` reads the string `"Good morning"`.
-- `$ctx.count` reads the number `3`. Since we need to concatenate it with a string, we use `str()` to convert it first.
+- `greeting = "Good morning", count = 3` stores two values: a string and a number.
+- `greeting` reads the string `"Good morning"`.
+- `count` reads the number `3`. Since we need to concatenate it with a string, we use `str()` to convert it first.
 
 ### Context Persists Across Nodes
 
-Unlike `$output`, context variables survive the whole workflow:
+Unlike `output`, context variables survive the whole workflow:
 
 ```juglans
-[step1]: set_context(total=10)
-[step2]: set_context(total=$ctx.total + 20)
-[step3]: print(message="Total: " + str($ctx.total))
+[step1]: total = 10
+[step2]: total = total + 20
+[step3]: print(message="Total: " + str(total))
 [step1] -> [step2] -> [step3]
 ```
 
@@ -157,15 +157,15 @@ Output:
 Total: 30
 ```
 
-`[step1]` sets `total` to `10`. `[step2]` reads `$ctx.total` (which is `10`), adds `20`, and writes `30` back. `[step3]` reads the final value.
+`[step1]` sets `total` to `10`. `[step2]` reads `total` (which is `10`), adds `20`, and writes `30` back. `[step3]` reads the final value.
 
 ### From Hardcoded to Dynamic
 
-A common pattern: start with hardcoded values, then switch to `$input`:
+A common pattern: start with hardcoded values, then switch to `input`:
 
 ```juglans
-[init]: set_context(name=$input.name, role=$input.role)
-[greet]: print(message="Hello, " + $ctx.name + "! Role: " + $ctx.role)
+[init]: name = input.name, role = input.role
+[greet]: print(message="Hello, " + name + "! Role: " + role)
 [init] -> [greet]
 ```
 
@@ -179,17 +179,17 @@ Output:
 Hello, Alice! Role: admin
 ```
 
-This is useful when multiple nodes need the same input values -- store them in `$ctx` once, read them everywhere.
+This is useful when multiple nodes need the same input values -- store them in context once, read them everywhere.
 
-### Saving $output to Context
+### Saving output to Context
 
-Since `$output` gets overwritten, save important results to `$ctx`:
+Since `output` gets overwritten, save important results to context:
 
 ```juglans
 [step1]: print(message="important data")
-[save]: set_context(saved=$output)
+[save]: saved = output
 [step2]: print(message="other work")
-[step3]: print(message="saved value: " + $ctx.saved)
+[step3]: print(message="saved value: " + saved)
 [step1] -> [save] -> [step2] -> [step3]
 ```
 
@@ -201,7 +201,7 @@ other work
 saved value: important data
 ```
 
-Even though `[step2]` overwrote `$output`, `$ctx.saved` still holds the value from `[step1]`.
+Even though `[step2]` overwrote `output`, `saved` still holds the value from `[step1]`.
 
 ## 2.4 Expressions & Built-in Functions
 
@@ -212,7 +212,7 @@ Juglans has a built-in expression language. You've already seen string concatena
 Use `+` to join strings:
 
 ```juglans
-[greet]: print(message="Hello, " + $input.name + "! Welcome.")
+[greet]: print(message="Hello, " + input.name + "! Welcome.")
 [done]: print(message="Done")
 [greet] -> [done]
 ```
@@ -222,8 +222,8 @@ Use `+` to join strings:
 Numbers and strings cannot be concatenated directly. Use `str()` to convert:
 
 ```juglans
-[init]: set_context(count=42)
-[show]: print(message="The answer is " + str($ctx.count))
+[init]: count = 42
+[show]: print(message="The answer is " + str(count))
 [init] -> [show]
 ```
 
@@ -269,8 +269,8 @@ hello world
 Functions can be nested and combined with variables:
 
 ```juglans
-[init]: set_context(name="alice")
-[show]: print(message="Hello, " + upper($ctx.name) + "! (length: " + str(len($ctx.name)) + ")")
+[init]: name = "alice"
+[show]: print(message="Hello, " + upper(name) + "! (length: " + str(len(name)) + ")")
 [init] -> [show]
 ```
 
@@ -291,29 +291,23 @@ Hello, ALICE! (length: 5)
 | `lower(x)` | Lowercase | `lower("HI")` -> `"hi"` |
 | `type(x)` | Type name | `type(42)` -> `"number"` |
 | `round(x, n)` | Round to n digits | `round(3.14159, 2)` -> `3.14` |
-| `default(x, fallback)` | Use fallback if x is null/empty | `default($ctx.name, "anon")` |
-| `json(x)` | Serialize to JSON / parse from JSON | `json($ctx.data)` |
+| `default(x, fallback)` | Use fallback if x is null/empty | `default(name, "anon")` |
+| `json(x)` | Serialize to JSON / parse from JSON | `json(data)` |
 
 ## 2.5 Putting It All Together
 
-Here is a complete workflow that combines all four concepts: `$input` for external data, `$ctx` for shared state, `$output` for chaining, and expression functions for transformations.
+Here is a complete workflow that combines all four concepts: `input` for external data, context variables for shared state, `output` for chaining, and expression functions for transformations.
 
 ```juglans
-[init]: set_context(
-  greeting="Welcome",
-  visit_count=0
-)
+[init]: greeting = "Welcome", visit_count = 0
 
-[personalize]: set_context(
-  greeting=$ctx.greeting + ", " + $input.name,
-  visit_count=$ctx.visit_count + 1
-)
+[personalize]: greeting = greeting + ", " + input.name, visit_count = visit_count + 1
 
-[format]: print(message=upper($ctx.greeting) + "! (visit #" + str($ctx.visit_count) + ")")
+[format]: print(message=upper(greeting) + "! (visit #" + str(visit_count) + ")")
 
-[save]: set_context(last_message=$output)
+[save]: last_message = output
 
-[summary]: print(message="Saved: " + $ctx.last_message)
+[summary]: print(message="Saved: " + last_message)
 
 [init] -> [personalize] -> [format] -> [save] -> [summary]
 ```
@@ -332,34 +326,34 @@ Saved: WELCOME, ALICE! (visit #1)
 Data flow through this workflow:
 
 ```text
-$input.name = "Alice"
+input.name = "Alice"
        |
-  [init]  sets $ctx.greeting = "Welcome", $ctx.visit_count = 0
+  [init]  sets greeting = "Welcome", visit_count = 0
        |
-  [personalize]  reads $ctx + $input, writes $ctx.greeting = "Welcome, Alice"
+  [personalize]  reads greeting + input, writes greeting = "Welcome, Alice"
        |
-  [format]  reads $ctx, applies upper(), prints, stores to $output
+  [format]  reads greeting, applies upper(), prints, stores to output
        |
-  [save]  reads $output, saves to $ctx.last_message
+  [save]  reads output, saves to last_message
        |
-  [summary]  reads $ctx.last_message, prints final result
+  [summary]  reads last_message, prints final result
 ```
 
 ## Summary
 
 | Variable | Purpose | Scope | Writable |
 |----------|---------|-------|----------|
-| `$input` | External JSON data | Entire workflow | No |
-| `$output` | Last node's return value | Overwritten each step | No |
+| `input` | External JSON data | Entire workflow | No |
+| `output` | Last node's return value | Overwritten each step | No |
 | `$node_id.output` | Specific node's return value | Entire workflow | No |
-| `$ctx` | Shared context storage | Entire workflow | Yes (via `set_context()`) |
+| context variables | Shared context storage | Entire workflow | Yes (via assignment syntax) |
 
 Key rules:
 
-1. **$input** is set once at startup. Access nested fields with dot notation.
-2. **$output** is the most recent node's return value. It gets overwritten every step.
+1. **input** is set once at startup. Access nested fields with dot notation.
+2. **output** is the most recent node's return value. It gets overwritten every step.
 3. **$node_id.output** persists -- use it to reach back to earlier nodes.
-4. **$ctx** is your scratch space. Write with `set_context()`, read with `$ctx.key`.
+4. **Context variables** are your scratch space. Use assignment syntax to set, read by name.
 5. Use **str()** when concatenating numbers with strings.
 
 ## Next Up

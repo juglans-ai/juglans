@@ -243,7 +243,7 @@ agents: ["./pure-agents/*.jgagent"]
 
 [respond]: chat(
   agent="helper",
-  message=p(slug="system", user_message=$input.message)
+  message=p(slug="system", user_message=input.message)
 )
 ```
 
@@ -346,7 +346,7 @@ Import agent files with the `agents:` metadata, then reference by slug in `chat(
 ```juglans
 agents: ["./agents/*.jgagent"]
 
-[ask]: chat(agent="assistant", message=$input.question)
+[ask]: chat(agent="assistant", message=input.question)
 ```
 
 ### With Output Format
@@ -356,7 +356,7 @@ agents: ["./agents/*.jgagent"]
 
 [classify]: chat(
   agent="router",
-  message=$input.query,
+  message=input.query,
   format="json"
 )
 ```
@@ -368,7 +368,7 @@ agents: ["./agents/*.jgagent"]
 
 [analyze]: chat(
   agent="analyst",
-  message=$input.data,
+  message=input.data,
   stateless="true"
 )
 ```
@@ -382,15 +382,15 @@ agents: ["./agents/*.jgagent"]
 
 [classify]: chat(
   agent="router",
-  message=$input.query,
+  message=input.query,
   format="json"
 )
 
-[tech]: chat(agent="code-expert", message=$input.query)
-[general]: chat(agent="assistant", message=$input.query)
+[tech]: chat(agent="code-expert", message=input.query)
+[general]: chat(agent="assistant", message=input.query)
 [done]: notify(status="done")
 
-[classify] if $output.category == "technical" -> [tech]
+[classify] if output.category == "technical" -> [tech]
 [classify] -> [general]
 [tech] -> [done]
 [general] -> [done]

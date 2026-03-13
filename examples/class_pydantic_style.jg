@@ -4,7 +4,7 @@
   role: str = "user"
 }
 
-[CreateUserRequest.validate(self)]: valid = $self.name != ""
+[CreateUserRequest.validate(self)]: valid = self.name != ""
 
 [UserResponse]: {
   id: str
@@ -15,7 +15,7 @@
 }
 
 [req]: new CreateUserRequest(name="Alice", age=25)
-[v]: $req.validate()
-[resp]: new UserResponse(id="u_001", name=$req.name, age=$req.age, role=$req.role)
+[v]: req.validate()
+[resp]: new UserResponse(id="u_001", name=req.name, age=req.age, role=req.role)
 
 [req] -> [v] -> [resp]

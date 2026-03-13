@@ -2,7 +2,7 @@
 
 Juglans can turn any workflow into an HTTP API using two builtins:
 
-- **`serve()`** -- Marks a workflow as the HTTP entry point. Injects request data into `$input.*`.
+- **`serve()`** -- Marks a workflow as the HTTP entry point. Injects request data into `input.*`.
 - **`response()`** -- Sets the HTTP response status, body, and headers.
 
 ## Minimal HTTP API
@@ -26,17 +26,17 @@ curl http://localhost:8080/api/hello
 
 ## Routing
 
-Use `switch $input.route` to dispatch requests. `$input.route` is auto-computed as `"METHOD /path"` (e.g., `"GET /api/users"`).
+Use `switch input.route` to dispatch requests. `input.route` is auto-computed as `"METHOD /path"` (e.g., `"GET /api/users"`).
 
 ```juglans
 [request]: serve()
 
 [list_users]: response(status=200, body={"users": ["alice", "bob"]})
-[create_user]: response(status=201, body={"created": $input.body.name})
+[create_user]: response(status=201, body={"created": input.body.name})
 [get_status]: response(status=200, body={"status": "ok"})
 [not_found]: response(status=404, body={"error": "Not found"})
 
-[request] -> switch $input.route {
+[request] -> switch input.route {
   "GET /api/users": [list_users]
   "POST /api/users": [create_user]
   "GET /api/status": [get_status]
@@ -50,12 +50,12 @@ The web server injects these variables before workflow execution:
 
 | Variable | Type | Example |
 |----------|------|---------|
-| `$input.method` | string | `"GET"`, `"POST"` |
-| `$input.path` | string | `"/api/users"` |
-| `$input.query` | object | `{"page": "1"}` |
-| `$input.body` | any | Parsed JSON or string |
-| `$input.headers` | object | `{"content-type": "application/json"}` |
-| `$input.route` | string | `"GET /api/users"` (auto-computed) |
+| `input.method` | string | `"GET"`, `"POST"` |
+| `input.path` | string | `"/api/users"` |
+| `input.query` | object | `{"page": "1"}` |
+| `input.body` | any | Parsed JSON or string |
+| `input.headers` | object | `{"content-type": "application/json"}` |
+| `input.route` | string | `"GET /api/users"` (auto-computed) |
 
 ## Start the Server
 
@@ -83,8 +83,8 @@ When a `chat()` node runs inside a `serve()` workflow, its output streams back t
 
 ```juglans
 [request]: serve()
-[ask]: chat(agent="assistant", message=$input.body.question)
-[done]: response(status=200, body=$output)
+[ask]: chat(agent="assistant", message=input.body.question)
+[done]: response(status=200, body=output)
 
 [request] -> [ask] -> [done]
 ```

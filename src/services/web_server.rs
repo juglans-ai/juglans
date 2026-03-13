@@ -7,7 +7,7 @@ use axum::{
     http::{HeaderMap, Method, Request, StatusCode, Uri},
     response::{
         sse::{Event, Sse},
-        Html, Response,
+        Html, IntoResponse, Response,
     },
     routing::{get, post},
     Json, Router,
@@ -1697,69 +1697,87 @@ async fn handle_chat(
     });
 
     // SSE event format aligned with Jug0 (using standard SSE event types)
+    // Uses async_stream for yield-style done event after channel closes
     let pending_calls = state.pending_tool_calls.clone();
-    let stream = UnboundedReceiverStream::new(rx).map(move |event| {
-        match event {
-            // Token stream: content format consistent with jug0
-            WorkflowEvent::Token(t) => {
-                Ok(Event::default().data(json!({ "type": "content", "text": t }).to_string()))
-            }
-            // Status -> event: meta (workflow status update)
-            WorkflowEvent::Status(s) => Ok(Event::default()
-                .event("meta")
-                .data(json!({ "type": "meta", "status": s }).to_string())),
-            // Meta -> event: meta (chat_id, user_message_id, etc.)
-            WorkflowEvent::Meta(data) => Ok(Event::default().event("meta").data(data.to_string())),
-            // Error → event: error
-            WorkflowEvent::Error(e) => Ok(Event::default()
-                .event("error")
-                .data(json!({ "type": "error", "message": e }).to_string())),
-            // Tool call → event: tool_call
-            WorkflowEvent::ToolCall {
-                call_id,
-                tools,
-                result_tx,
-            } => {
-                if let Ok(mut map) = pending_calls.lock() {
-                    map.insert(call_id.clone(), result_tx);
-                }
-                Ok(Event::default().event("tool_call").data(
-                    json!({
-                        "type": "tool_call",
-                        "call_id": call_id,
-                        "tools": tools,
-                    })
-                    .to_string(),
-                ))
-            }
-            // Tool start → event: tool_event
-            WorkflowEvent::ToolStart(evt) => {
-                let mut data = serde_json::to_value(&evt).unwrap_or_default();
-                data["type"] = serde_json::Value::String("tool_start".to_string());
-                Ok(Event::default().event("tool_event").data(data.to_string()))
-            }
-            // Tool complete → event: tool_event
-            WorkflowEvent::ToolComplete(evt) => {
-                let mut data = serde_json::to_value(&evt).unwrap_or_default();
-                data["type"] = serde_json::Value::String("tool_complete".to_string());
-                Ok(Event::default().event("tool_event").data(data.to_string()))
-            }
-            // Node start → event: node_event
-            WorkflowEvent::NodeStart(evt) => {
-                let mut data = serde_json::to_value(&evt).unwrap_or_default();
-                data["type"] = serde_json::Value::String("node_start".to_string());
-                Ok(Event::default().event("node_event").data(data.to_string()))
-            }
-            // Node complete → event: node_event
-            WorkflowEvent::NodeComplete(evt) => {
-                let mut data = serde_json::to_value(&evt).unwrap_or_default();
-                data["type"] = serde_json::Value::String("node_complete".to_string());
-                Ok(Event::default().event("node_event").data(data.to_string()))
-            }
-        }
-    });
+    let sse_stream = async_stream::stream! {
+        let start = std::time::Instant::now();
+        let mut rx_stream = UnboundedReceiverStream::new(rx);
 
-    Ok(Sse::new(stream))
+        while let Some(event) = rx_stream.next().await {
+            yield Ok::<Event, std::convert::Infallible>(match event {
+                // Token stream: content format consistent with jug0
+                WorkflowEvent::Token(t) => {
+                    Event::default().data(json!({ "type": "content", "text": t }).to_string())
+                }
+                // Status -> event: meta (workflow status update)
+                WorkflowEvent::Status(s) => Event::default()
+                    .event("meta")
+                    .data(json!({ "type": "meta", "status": s }).to_string()),
+                // Meta -> event: meta (chat_id, user_message_id, etc.)
+                WorkflowEvent::Meta(data) => Event::default().event("meta").data(data.to_string()),
+                // Error → event: error
+                WorkflowEvent::Error(e) => Event::default()
+                    .event("error")
+                    .data(json!({ "type": "error", "message": e }).to_string()),
+                // Yield → SSE event (type field determines event name)
+                WorkflowEvent::Yield(data) => {
+                    let event_name = data.get("type")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("yield");
+                    Event::default().event(event_name).data(data.to_string())
+                }
+                // Tool call → event: tool_call
+                WorkflowEvent::ToolCall {
+                    call_id,
+                    tools,
+                    result_tx,
+                } => {
+                    if let Ok(mut map) = pending_calls.lock() {
+                        map.insert(call_id.clone(), result_tx);
+                    }
+                    Event::default().event("tool_call").data(
+                        json!({
+                            "type": "tool_call",
+                            "call_id": call_id,
+                            "tools": tools,
+                        })
+                        .to_string(),
+                    )
+                }
+                // Tool start → event: tool_event
+                WorkflowEvent::ToolStart(evt) => {
+                    let mut data = serde_json::to_value(&evt).unwrap_or_default();
+                    data["type"] = serde_json::Value::String("tool_start".to_string());
+                    Event::default().event("tool_event").data(data.to_string())
+                }
+                // Tool complete → event: tool_event
+                WorkflowEvent::ToolComplete(evt) => {
+                    let mut data = serde_json::to_value(&evt).unwrap_or_default();
+                    data["type"] = serde_json::Value::String("tool_complete".to_string());
+                    Event::default().event("tool_event").data(data.to_string())
+                }
+                // Node start → event: node_event
+                WorkflowEvent::NodeStart(evt) => {
+                    let mut data = serde_json::to_value(&evt).unwrap_or_default();
+                    data["type"] = serde_json::Value::String("node_start".to_string());
+                    Event::default().event("node_event").data(data.to_string())
+                }
+                // Node complete → event: node_event
+                WorkflowEvent::NodeComplete(evt) => {
+                    let mut data = serde_json::to_value(&evt).unwrap_or_default();
+                    data["type"] = serde_json::Value::String("node_complete".to_string());
+                    Event::default().event("node_event").data(data.to_string())
+                }
+            });
+        }
+
+        // Channel closed → workflow execution finished
+        yield Ok(Event::default().event("done").data(
+            json!({"type": "done", "duration_ms": start.elapsed().as_millis() as u64}).to_string()
+        ));
+    };
+
+    Ok(Sse::new(sse_stream))
 }
 
 // --- Tool Result Bridge Endpoint ---
@@ -1802,4 +1820,343 @@ async fn handle_tool_result(
             Json(json!({ "error": "No pending tool call found for this call_id" }))
         }
     }
+}
+
+// ============================================================
+// Inline Server — started by serve() builtin in CLI mode
+// ============================================================
+
+use crate::builtins::http::InlineRoute;
+use crate::core::graph::WorkflowGraph;
+
+struct InlineServerState {
+    routes: Vec<InlineRoute>,
+    workflow: Arc<WorkflowGraph>,
+    executor: Arc<WorkflowExecutor>,
+    runtime: Arc<dyn crate::services::interface::JuglansRuntime>,
+}
+
+/// Start a minimal HTTP server for serve() builtin.
+/// Dispatches requests to handler functions based on decorator-registered routes.
+pub async fn start_inline_server(
+    routes: Vec<InlineRoute>,
+    workflow: Arc<WorkflowGraph>,
+    executor: Arc<WorkflowExecutor>,
+    runtime: Arc<dyn crate::services::interface::JuglansRuntime>,
+    port: u16,
+) -> anyhow::Result<()> {
+    let route_summary: Vec<String> = routes
+        .iter()
+        .map(|r| format!("   - {} {} -> {}()", r.method, r.path, r.handler))
+        .collect();
+
+    let state = Arc::new(InlineServerState {
+        routes,
+        workflow,
+        executor,
+        runtime,
+    });
+
+    let app = Router::new()
+        .fallback(handle_inline_request)
+        .layer(CorsLayer::permissive())
+        .layer(Extension(state));
+
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+
+    info!("--------------------------------------------------");
+    info!("✨ Juglans Server");
+    info!("📡 Listening on: http://{}", addr);
+    for line in &route_summary {
+        info!("{}", line);
+    }
+    info!("--------------------------------------------------");
+
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    info!("🚀 Server is ready and waiting for requests...");
+    axum::serve(listener, app).await?;
+
+    Ok(())
+}
+
+async fn handle_inline_request(
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    Extension(state): Extension<Arc<InlineServerState>>,
+    request: Request<Body>,
+) -> Response {
+    // Match route
+    let matched = state
+        .routes
+        .iter()
+        .find(|r| r.method == method.as_str() && r.path == uri.path());
+
+    let route = match matched {
+        Some(r) => r,
+        None => return error_response(StatusCode::NOT_FOUND, "Not found"),
+    };
+
+    let handler_fn = route.handler.clone();
+
+    info!(
+        "🌐 [Serve] {} {} -> {}()",
+        method.as_str(),
+        uri.path(),
+        handler_fn
+    );
+
+    // Parse request body
+    let body_bytes = match axum::body::to_bytes(request.into_body(), 64 * 1024 * 1024).await {
+        Ok(b) => b,
+        Err(e) => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                &format!("Failed to read body: {}", e),
+            )
+        }
+    };
+    let body_value: Value = if body_bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&body_bytes)
+            .unwrap_or_else(|_| json!(String::from_utf8_lossy(&body_bytes).to_string()))
+    };
+
+    // Parse query string
+    let query_map: HashMap<String, String> = uri
+        .query()
+        .map(|q| {
+            q.split('&')
+                .filter_map(|pair| {
+                    let mut parts = pair.splitn(2, '=');
+                    let key = parts.next()?.to_string();
+                    let value = parts.next().unwrap_or("").to_string();
+                    Some((key, value))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Check if SSE requested (Accept header or body.stream=true)
+    let wants_sse = headers
+        .get("accept")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.contains("text/event-stream"))
+        .unwrap_or(false)
+        || body_value
+            .get("stream")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+    if wants_sse {
+        handle_inline_sse(
+            state, handler_fn, method, uri, headers, body_value, query_map,
+        )
+        .await
+    } else {
+        handle_inline_json(
+            state, handler_fn, method, uri, headers, body_value, query_map,
+        )
+        .await
+    }
+}
+
+async fn handle_inline_sse(
+    state: Arc<InlineServerState>,
+    handler_fn: String,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Value,
+    query: HashMap<String, String>,
+) -> Response {
+    // Extract auth tokens for jug0 API calls
+    if let Some(token) = headers
+        .get("X-Execution-Token")
+        .and_then(|v| v.to_str().ok())
+    {
+        // Path 1: jug0 forwarding → use execution token
+        state.runtime.set_execution_token(Some(token.to_string()));
+    } else if let Some(bearer) = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+    {
+        // Path 2: direct frontend connection → use JWT bearer token
+        state.runtime.set_bearer_token(Some(bearer.to_string()));
+    }
+
+    let (tx, rx) = mpsc::unbounded_channel::<WorkflowEvent>();
+    let ctx = WorkflowContext::with_sender(tx);
+
+    // Inject request data
+    ctx.set("input.method".to_string(), json!(method.as_str()))
+        .ok();
+    ctx.set("input.path".to_string(), json!(uri.path())).ok();
+    ctx.set("input.query".to_string(), json!(query)).ok();
+    ctx.set("input.headers".to_string(), headers_to_json(&headers))
+        .ok();
+    ctx.set("input.body".to_string(), body).ok();
+    let route = format!("{} {}", method.as_str(), uri.path());
+    ctx.set("input.route".to_string(), json!(route)).ok();
+
+    let executor = state.executor.clone();
+    let workflow = state.workflow.clone();
+
+    // Pin root workflow so on_token/on_result handlers can find functions
+    // defined in the main workflow (not just the handler's body sub-graph)
+    ctx.set_root_workflow(workflow.clone());
+
+    tokio::spawn(async move {
+        let args = HashMap::new();
+        if let Err(e) = executor
+            .execute_function(handler_fn, args, workflow, &ctx)
+            .await
+        {
+            error!("❌ [Serve] Handler error: {}", e);
+            ctx.emit(WorkflowEvent::Error(e.to_string()));
+        }
+    });
+
+    let sse_stream = async_stream::stream! {
+        let start = std::time::Instant::now();
+        let mut rx_stream = UnboundedReceiverStream::new(rx);
+
+        while let Some(event) = rx_stream.next().await {
+            yield Ok::<Event, std::convert::Infallible>(match event {
+                WorkflowEvent::Token(t) => {
+                    Event::default().data(json!({"type": "content", "text": t}).to_string())
+                }
+                WorkflowEvent::Status(s) => Event::default()
+                    .event("meta")
+                    .data(json!({"type": "meta", "status": s}).to_string()),
+                WorkflowEvent::Meta(data) => Event::default().event("meta").data(data.to_string()),
+                WorkflowEvent::Error(e) => Event::default()
+                    .event("error")
+                    .data(json!({"type": "error", "message": e}).to_string()),
+                WorkflowEvent::Yield(data) => {
+                    let event_name = data.get("type")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("yield");
+                    Event::default().event(event_name).data(data.to_string())
+                }
+                WorkflowEvent::ToolCall { call_id, tools, .. } => {
+                    Event::default().event("tool_call").data(
+                        json!({"type": "tool_call", "call_id": call_id, "tools": tools}).to_string(),
+                    )
+                }
+                WorkflowEvent::ToolStart(evt) => {
+                    let mut data = serde_json::to_value(&evt).unwrap_or_default();
+                    data["type"] = json!("tool_start");
+                    Event::default().event("tool_event").data(data.to_string())
+                }
+                WorkflowEvent::ToolComplete(evt) => {
+                    let mut data = serde_json::to_value(&evt).unwrap_or_default();
+                    data["type"] = json!("tool_complete");
+                    Event::default().event("tool_event").data(data.to_string())
+                }
+                WorkflowEvent::NodeStart(evt) => {
+                    let mut data = serde_json::to_value(&evt).unwrap_or_default();
+                    data["type"] = json!("node_start");
+                    Event::default().event("node_event").data(data.to_string())
+                }
+                WorkflowEvent::NodeComplete(evt) => {
+                    let mut data = serde_json::to_value(&evt).unwrap_or_default();
+                    data["type"] = json!("node_complete");
+                    Event::default().event("node_event").data(data.to_string())
+                }
+            });
+        }
+
+        // Channel closed → execution finished
+        yield Ok(Event::default().event("done").data(
+            json!({"type": "done", "duration_ms": start.elapsed().as_millis() as u64}).to_string()
+        ));
+    };
+
+    Sse::new(sse_stream).into_response()
+}
+
+async fn handle_inline_json(
+    state: Arc<InlineServerState>,
+    handler_fn: String,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Value,
+    query: HashMap<String, String>,
+) -> Response {
+    // Extract auth tokens for jug0 API calls
+    if let Some(token) = headers
+        .get("X-Execution-Token")
+        .and_then(|v| v.to_str().ok())
+    {
+        // Path 1: jug0 forwarding → use execution token
+        state.runtime.set_execution_token(Some(token.to_string()));
+    } else if let Some(bearer) = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+    {
+        // Path 2: direct frontend connection → use JWT bearer token
+        state.runtime.set_bearer_token(Some(bearer.to_string()));
+    }
+
+    let (tx, _rx) = mpsc::unbounded_channel::<WorkflowEvent>();
+    let ctx = WorkflowContext::with_sender(tx);
+
+    // Inject request data
+    ctx.set("input.method".to_string(), json!(method.as_str()))
+        .ok();
+    ctx.set("input.path".to_string(), json!(uri.path())).ok();
+    ctx.set("input.query".to_string(), json!(query)).ok();
+    ctx.set("input.headers".to_string(), headers_to_json(&headers))
+        .ok();
+    ctx.set("input.body".to_string(), body).ok();
+    let route = format!("{} {}", method.as_str(), uri.path());
+    ctx.set("input.route".to_string(), json!(route)).ok();
+
+    let executor = state.executor.clone();
+    let workflow = state.workflow.clone();
+
+    // Pin root workflow so on_token/on_result handlers can find functions
+    ctx.set_root_workflow(workflow.clone());
+
+    let args = HashMap::new();
+    if let Err(e) = executor
+        .execute_function(handler_fn, args, workflow, &ctx)
+        .await
+    {
+        error!("❌ [Serve] Handler error: {}", e);
+        return error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("Execution error: {}", e),
+        );
+    }
+
+    // Read response from context
+    let status_code = ctx
+        .resolve_path("response.status")
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_u64())
+        .unwrap_or(200) as u16;
+    let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
+
+    let resp_body = ctx
+        .resolve_path("response.body")
+        .ok()
+        .flatten()
+        .or_else(|| ctx.resolve_path("output").ok().flatten())
+        .unwrap_or(Value::Null);
+
+    let body_bytes = serde_json::to_vec(&resp_body).unwrap_or_default();
+    Response::builder()
+        .status(status)
+        .header("content-type", "application/json")
+        .body(Body::from(body_bytes))
+        .unwrap_or_else(|_| {
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, "Response build error")
+        })
 }

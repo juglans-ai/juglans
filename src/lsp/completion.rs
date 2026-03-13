@@ -29,7 +29,6 @@ const BUILTIN_TOOLS: &[(&str, &str)] = &[
     ("print", "Print to output"),
     ("reply", "Send reply message"),
     ("return", "Return value from function"),
-    ("set_context", "Set context variable"),
     ("timer", "Delay execution"),
     ("serve", "HTTP server entry point"),
     ("response", "HTTP response builder"),

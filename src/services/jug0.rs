@@ -103,6 +103,9 @@ pub struct Jug0Client {
     /// Execution token injected from jug0 when forwarding workflow requests.
     /// When set, this takes priority over api_key for authentication.
     execution_token: Arc<RwLock<Option<String>>>,
+    /// Bearer token from direct frontend connections (JWT from juglans-api).
+    /// Used when no execution_token is set. Sent as Authorization: Bearer.
+    bearer_token: Arc<RwLock<Option<String>>>,
 }
 
 impl Jug0Client {
@@ -126,6 +129,7 @@ impl Jug0Client {
             base_url: base_url_str,
             api_key: api_key_str,
             execution_token: Arc::new(RwLock::new(None)),
+            bearer_token: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -145,17 +149,36 @@ impl Jug0Client {
             .and_then(|guard| guard.clone())
     }
 
+    /// Set bearer token (from direct frontend connections, JWT from juglans-api).
+    pub fn set_bearer_token(&self, token: Option<String>) {
+        if let Ok(mut guard) = self.bearer_token.write() {
+            *guard = token;
+        }
+    }
+
+    /// Get the current bearer token (if set).
+    pub fn get_bearer_token(&self) -> Option<String> {
+        self.bearer_token
+            .read()
+            .ok()
+            .and_then(|guard| guard.clone())
+    }
+
     /// Build a request with the appropriate authentication header.
-    /// Priority: execution_token > api_key
+    /// Priority: execution_token > bearer_token > api_key
     fn build_auth_request(&self, method: reqwest::Method, url: &str) -> reqwest::RequestBuilder {
         let mut builder = self.http.request(method, url);
 
         if let Some(token) = self.get_execution_token() {
-            // Use execution token (forwarded from jug0, represents original caller)
+            // Path 1: execution token (forwarded from jug0)
             tracing::debug!("🔐 Using X-Execution-Token for jug0 request");
             builder = builder.header("X-Execution-Token", token);
+        } else if let Some(token) = self.get_bearer_token() {
+            // Path 2: JWT bearer token (direct frontend connection)
+            tracing::debug!("🔐 Using Bearer token for jug0 request");
+            builder = builder.header("Authorization", format!("Bearer {}", token));
         } else {
-            // Use api_key (local development or CLI mode)
+            // Fallback: api_key (local development or CLI mode)
             builder = builder.header("X-API-KEY", &self.api_key);
         }
 
@@ -956,6 +979,14 @@ impl JuglansRuntime for Jug0Client {
 
         let result: Value = res.json().await?;
         Ok(result)
+    }
+
+    fn set_execution_token(&self, token: Option<String>) {
+        Jug0Client::set_execution_token(self, token);
+    }
+
+    fn set_bearer_token(&self, token: Option<String>) {
+        Jug0Client::set_bearer_token(self, token);
     }
 
     async fn chat(&self, req: ChatRequest) -> Result<ChatOutput> {

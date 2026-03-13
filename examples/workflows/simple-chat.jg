@@ -6,7 +6,7 @@ agents: ["../agents/*.jgagent"]
 # 调用 Agent 进行对话
 [chat]: chat(
   agent="helpful-assistant",
-  message=$input.message
+  message=input.message
 )
 
 # 结束节点

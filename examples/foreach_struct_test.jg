@@ -15,16 +15,16 @@ libs: ["../std/ai.jg"]
   text="Get current UTC time"
 }
 
-[all]: output = [$t1, $t2]
+[all]: output = [t1, t2]
 
-[build]: foreach parallel($t in $all.output) {
-  [convert]: $t.to_schema()
-  [point]: output = {"id": $t.name, "text": $t.text, "payload": {"definition": $t.schema}}
+[build]: foreach parallel(t in all.output) {
+  [convert]: t.to_schema()
+  [point]: output = {"id": t.name, "text": t.text, "payload": {"definition": t.schema}}
   [convert] -> [point]
 }
 
 [verify()]: {
-  assert len($build.output) == 2
+  assert len(build.output) == 2
 }
 [run_verify]: verify()
 

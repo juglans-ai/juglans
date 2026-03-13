@@ -21,8 +21,10 @@ use crate::registry::cache::find_entry_in_dir;
 use crate::registry::package::{is_registry_import, parse_registry_import};
 
 lazy_static::lazy_static! {
-    /// Match variable references: $identifier.path.segments
+    /// Match legacy $variable references: $identifier.path.segments
     static ref VAR_REF_RE: Regex = Regex::new(r"\$([a-zA-Z_][a-zA-Z0-9_]*)(\.[a-zA-Z0-9_.]+)?").unwrap();
+    /// Match bare identifier references: identifier.path.segments (at word boundary)
+    static ref BARE_REF_RE: Regex = Regex::new(r"\b([a-zA-Z_][a-zA-Z0-9_]*)(\.[a-zA-Z0-9_.]+)").unwrap();
 }
 
 /// Expand "@/" prefix to base_path (project_root + config.paths.base).
@@ -69,6 +71,40 @@ pub fn resolve_lib_imports(
     let auto_namespaces = workflow.lib_auto_namespaces.clone();
 
     for (parser_namespace, rel_path) in imports {
+        // Built-in stdlib lookup (compile-time embedded via build.rs)
+        // Matches bare names like "api" or "api.jg" (no ./ or / prefix)
+        // Also matches "std/device.jg" → strip prefix to "device"
+        let stdlib_name = rel_path.strip_prefix("std/").unwrap_or(&rel_path);
+        if is_registry_import(stdlib_name) || rel_path.starts_with("std/") {
+            let clean_name = stdlib_name.trim_end_matches(".jg");
+            if let Some(content) = crate::core::stdlib::get(clean_name) {
+                let lib_graph = GraphParser::parse_lib(content)
+                    .with_context(|| format!("Stdlib parse error: '{}'", clean_name))?;
+
+                let namespace = if !auto_namespaces.contains(&parser_namespace) {
+                    parser_namespace.clone()
+                } else {
+                    clean_name.to_string()
+                };
+
+                for (func_name, func_def) in lib_graph.functions {
+                    let namespaced = format!("{}.{}", namespace, func_name);
+                    workflow.functions.insert(namespaced, func_def);
+                }
+                for (class_name, class_def) in lib_graph.classes {
+                    let namespaced = format!("{}.{}", namespace, class_name);
+                    workflow.classes.insert(namespaced, class_def);
+                }
+                for (type_name, method_name, func_def) in lib_graph.pending_methods {
+                    let namespaced_type = format!("{}.{}", namespace, type_name);
+                    workflow
+                        .pending_methods
+                        .push((namespaced_type, method_name, func_def));
+                }
+                continue;
+            }
+        }
+
         // Registry package detection — non-local paths are treated as registry packages
         if is_registry_import(&rel_path) {
             let (pkg_name, version_req) = parse_registry_import(&rel_path)?;
@@ -504,20 +540,31 @@ fn expand_glob(
 /// Add namespace prefix to variable references in a string.
 ///
 /// Rule: only variables whose first segment matches a sub-workflow node ID get prefixed.
-/// - $verify.output       -> $prefix.verify.output   (verify is a sub-flow node)
-/// - $ctx.some_var        -> $ctx.some_var            (ctx is not a node, unchanged)
-/// - $input.message       -> $input.message           (unchanged)
-/// - $output              -> $output                  (unchanged)
+/// - verify.output        -> prefix.verify.output     (verify is a sub-flow node)
+/// - input.message        -> input.message             (unchanged, not a node)
+/// - output               -> output                    (unchanged, no dot)
 fn prefix_variables(text: &str, prefix: &str, child_node_ids: &HashSet<String>) -> String {
-    VAR_REF_RE
+    // Pass 1: legacy $variable references (for backward compat with resolver-generated refs)
+    let result = VAR_REF_RE
         .replace_all(text, |caps: &Captures| {
-            let first_segment = &caps[1]; // First segment of the variable (e.g. verify, ctx, input)
+            let first_segment = &caps[1];
             if child_node_ids.contains(first_segment) {
-                // Is a sub-flow node -> add prefix
                 let rest = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-                format!("${}.{}{}", prefix, first_segment, rest)
+                format!("{}.{}{}", prefix, first_segment, rest)
             } else {
-                // Not a node (ctx, input, output, etc.) -> keep unchanged
+                caps[0].to_string()
+            }
+        })
+        .to_string();
+
+    // Pass 2: bare identifier references (node_id.field patterns)
+    BARE_REF_RE
+        .replace_all(&result, |caps: &Captures| {
+            let first_segment = &caps[1];
+            if child_node_ids.contains(first_segment) {
+                let rest = &caps[2];
+                format!("{}.{}{}", prefix, first_segment, rest)
+            } else {
                 caps[0].to_string()
             }
         })
@@ -632,6 +679,7 @@ fn prefix_node_type(
             // ReturnErr contains a JSON object — no variable references to prefix
             NodeType::ReturnErr(val.clone())
         }
+        NodeType::Yield(expr) => NodeType::Yield(prefix_variables(expr, prefix, child_node_ids)),
     }
 }
 
@@ -729,26 +777,22 @@ mod tests {
         node_ids.insert("verify".to_string());
         node_ids.insert("extract".to_string());
 
-        // Sub-flow node reference -> add prefix
+        // Bare identifier node reference -> add prefix
         assert_eq!(
-            prefix_variables("$verify.output", "auth", &node_ids),
-            "$auth.verify.output"
+            prefix_variables("verify.output", "auth", &node_ids),
+            "auth.verify.output"
         );
         assert_eq!(
-            prefix_variables("$extract.output.intent", "auth", &node_ids),
-            "$auth.extract.output.intent"
+            prefix_variables("extract.output.intent", "auth", &node_ids),
+            "auth.extract.output.intent"
         );
 
         // Global variables -> unchanged
         assert_eq!(
-            prefix_variables("$ctx.some_var", "auth", &node_ids),
-            "$ctx.some_var"
+            prefix_variables("input.message", "auth", &node_ids),
+            "input.message"
         );
-        assert_eq!(
-            prefix_variables("$input.message", "auth", &node_ids),
-            "$input.message"
-        );
-        assert_eq!(prefix_variables("$output", "auth", &node_ids), "$output");
+        assert_eq!(prefix_variables("output", "auth", &node_ids), "output");
     }
 
     #[test]
@@ -756,11 +800,12 @@ mod tests {
         let mut node_ids = HashSet::new();
         node_ids.insert("classify".to_string());
 
-        let input = r#"$classify.output.intent == "trade" && $ctx.ready"#;
+        // Bare identifiers in expressions
+        let input = r#"classify.output.intent == "trade" && ready"#;
         let result = prefix_variables(input, "trading", &node_ids);
         assert_eq!(
             result,
-            r#"$trading.classify.output.intent == "trade" && $ctx.ready"#
+            r#"trading.classify.output.intent == "trade" && ready"#
         );
     }
 
@@ -827,8 +872,8 @@ mod tests {
         writeln!(
             f,
             r#"
-[read(table)]: bash(command="sqlite3 db.sqlite 'SELECT * FROM " + $table + "'")
-[write(table, data)]: bash(command="echo " + $data)
+[read(table)]: bash(command="sqlite3 db.sqlite 'SELECT * FROM " + table + "'")
+[write(table, data)]: bash(command="echo " + data)
 "#
         )
         .unwrap();
@@ -876,7 +921,7 @@ libs: {{ db: "{}" }}
         writeln!(
             f,
             r#"
-[query(sql)]: bash(command="sqlite3 db.sqlite '" + $sql + "'")
+[query(sql)]: bash(command="sqlite3 db.sqlite '" + sql + "'")
 "#
         )
         .unwrap();
@@ -919,7 +964,7 @@ libs: ["{}"]
         writeln!(
             f,
             r#"
-[helper(x)]: bash(command="echo " + $x)
+[helper(x)]: bash(command="echo " + x)
 "#
         )
         .unwrap();

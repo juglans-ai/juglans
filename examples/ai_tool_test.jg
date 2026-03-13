@@ -20,20 +20,20 @@ libs: ["../std/ai.jg"]
 }
 
 # Convert to schemas — writes back to instance's .schema field
-[_1]: $t1.to_schema()
-[_2]: $t2.to_schema()
-[_3]: $t3.to_schema()
+[_1]: t1.to_schema()
+[_2]: t2.to_schema()
+[_3]: t3.to_schema()
 
 # Group into a toolbox
-[box]: ai.toolbox(tools=[$t1.schema, $t2.schema, $t3.schema])
+[box]: ai.toolbox(tools=[t1.schema, t2.schema, t3.schema])
 
 # Verify schemas
 [verify()]: {
-  assert $t1.schema.type == "function"
-  assert $t1.schema.function.name == "web_search"
-  assert $t2.schema.function.name == "get_weather"
-  assert $t3.schema.function.name == "get_time"
-  assert len($box.output) == 3
+  assert t1.schema.type == "function"
+  assert t1.schema.function.name == "web_search"
+  assert t2.schema.function.name == "get_weather"
+  assert t3.schema.function.name == "get_time"
+  assert len(box.output) == 3
 }
 [run_verify]: verify()
 

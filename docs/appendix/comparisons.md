@@ -19,9 +19,9 @@
 **Declarative over imperative.** Define *what* happens, not *how* to wire it:
 
 ```juglans
-[input]: set_context(query=$input.question)
-[search]: fetch(url="https://api.example.com/search?q=" + $ctx.query)
-[respond]: chat(agent="assistant", message=$search)
+[input]: query = input.question
+[search]: fetch(url="https://api.example.com/search?q=" + query)
+[respond]: chat(agent="assistant", message=output)
 
 [input] -> [search] -> [respond]
 ```
@@ -33,13 +33,13 @@ The equivalent Python script requires explicit function definitions, error handl
 **Built-in routing without code.**  Conditional edges and switch routing are part of the DSL, not bolted-on logic:
 
 ```juglans
-[classify]: chat(agent="router", message=$input.query, format="json")
+[classify]: chat(agent="router", message=input.query, format="json")
 
-[answer]: chat(agent="qa", message=$input.query)
-[execute]: chat(agent="coder", message=$input.query)
-[fallback]: chat(agent="general", message=$input.query)
+[answer]: chat(agent="qa", message=input.query)
+[execute]: chat(agent="coder", message=input.query)
+[fallback]: chat(agent="general", message=input.query)
 
-[classify] -> switch $output.intent {
+[classify] -> switch output.intent {
     "question": [answer]
     "task": [execute]
     default: [fallback]

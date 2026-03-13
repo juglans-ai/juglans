@@ -1,6 +1,6 @@
 [package]
 name = "juglans"
-version = "0.2.8"
+version = "0.2.9"
 edition = "2021"
 rust-version = "1.80"
 default-run = "juglans"
@@ -57,6 +57,7 @@ toml = "0.8"
 include_dir = "0.7"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 eventsource-stream = "0.2"
+async-stream = "0.3"
 async-trait = "0.1"
 pathdiff = "0.2"
 axum = { version = "0.7", features = ["multipart"] }
@@ -85,6 +86,9 @@ sqlx = { version = "0.8.1", features = ["runtime-tokio-rustls", "postgres", "sql
 tower-lsp = "0.20"
 cron = "0.15"
 notify = "7"
+enigo = "0.3"
+rdev = "0.5"
+xcap = "0.8"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

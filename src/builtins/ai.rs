@@ -908,8 +908,52 @@ impl Tool for Chat {
             base_config
         };
 
+        // on_token=[handler] — extract handler name for per-token callback
+        let on_token_handler = params.get("on_token").map(|s| {
+            s.trim()
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .to_string()
+        });
+
         // Get Token and Meta adapters from context (SSE output depends on state)
-        let effective_token_sender = if should_stream {
+        let effective_token_sender = if let Some(ref handler_name) = on_token_handler {
+            // Custom adapter: each token → call handler function
+            let registry = self
+                .builtin_registry
+                .as_ref()
+                .and_then(|w| w.upgrade())
+                .ok_or_else(|| anyhow!("on_token: BuiltinRegistry not available"))?;
+            let executor = registry
+                .get_executor()
+                .ok_or_else(|| anyhow!("on_token: WorkflowExecutor not available"))?;
+            let workflow = context
+                .get_root_workflow()
+                .or_else(|| context.get_current_workflow())
+                .ok_or_else(|| anyhow!("on_token: no workflow found"))?;
+
+            let ctx = context.clone();
+            let handler = handler_name.clone();
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+            info!("│   on_token: [{}]", handler_name);
+
+            tokio::spawn(async move {
+                while let Some(token) = rx.recv().await {
+                    let mut args = HashMap::new();
+                    args.insert("chunk".to_string(), json!(token));
+                    if let Err(e) = executor
+                        .clone()
+                        .execute_function(handler.clone(), args, workflow.clone(), &ctx)
+                        .await
+                    {
+                        error!("on_token handler [{}] error: {}", handler, e);
+                    }
+                }
+            });
+
+            Some(tx)
+        } else if should_stream {
             context.get_token_sender_adapter()
         } else if context.has_event_sender() {
             // TUI/web mode: provide a dummy sender to prevent the runtime
@@ -986,6 +1030,14 @@ impl Tool for Chat {
             })
             .await?;
 
+        // on_result=[handler] — extract handler name for post-completion callback
+        let on_result_handler = params.get("on_result").map(|s| {
+            s.trim()
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .to_string()
+        });
+
         match api_result {
             ChatOutput::Final { text, chat_id } => {
                 debug!("│   ✓ Response completed (session: {})", chat_id);
@@ -1019,6 +1071,32 @@ impl Tool for Chat {
                     }
                     return Ok(Some(parsed.unwrap_or(json!(text))));
                 }
+
+                // on_result: call handler with full response text
+                if let Some(ref handler_name) = on_result_handler {
+                    let registry = self
+                        .builtin_registry
+                        .as_ref()
+                        .and_then(|w| w.upgrade())
+                        .ok_or_else(|| anyhow!("on_result: BuiltinRegistry not available"))?;
+                    let executor = registry
+                        .get_executor()
+                        .ok_or_else(|| anyhow!("on_result: WorkflowExecutor not available"))?;
+                    let workflow = context
+                        .get_root_workflow()
+                        .or_else(|| context.get_current_workflow())
+                        .ok_or_else(|| anyhow!("on_result: no workflow found"))?;
+
+                    let mut args = HashMap::new();
+                    args.insert("text".to_string(), json!(&text));
+                    info!("│   on_result: [{}]", handler_name);
+
+                    let result = executor
+                        .execute_function(handler_name.clone(), args, workflow, context)
+                        .await?;
+                    return Ok(result);
+                }
+
                 Ok(Some(json!(text)))
             }
             ChatOutput::ToolCalls { .. } => {

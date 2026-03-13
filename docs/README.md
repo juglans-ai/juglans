@@ -6,12 +6,12 @@
 
 ```juglans
 [classify]: chat(agent="classifier", format="json")
-[answer]: chat(agent="qa", message=$input.query)
-[execute]: chat(agent="executor", message=$input.task)
+[answer]: chat(agent="qa", message=input.query)
+[execute]: chat(agent="executor", message=input.task)
 [fallback]: print(message="Unknown intent")
-[review]: chat(agent="reviewer", message=$output)
+[review]: chat(agent="reviewer", message=output)
 
-[classify] -> switch $output.intent {
+[classify] -> switch output.intent {
     "question": [answer]
     "task": [execute]
     default: [fallback]

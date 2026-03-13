@@ -146,9 +146,9 @@ With multiple parameters:
 ### Variable References in Parameters
 
 ```juglans
-[a]: chat(message=$input.question)
-[b]: notify(status=$output)
-[c]: set_context(data=$ctx.results)
+[a]: chat(message=input.question)
+[b]: notify(status=output)
+[c]: data = results
 [a] -> [b] -> [c]
 ```
 
@@ -167,9 +167,9 @@ With multiple parameters:
 }
 ```
 
-### Assignment Syntax (set_context sugar)
+### Assignment Syntax
 
-Assignment lines desugar to `set_context()` calls:
+Assignment syntax sets context variables directly:
 
 ```juglans
 [init]: count = 0, name = "Alice"
@@ -207,12 +207,12 @@ Multiple assignments separated by commas:
 ### Conditional Edge
 
 ```juglans
-[check]: set_context(score=85)
+[check]: score = 85
 [pass]: notify(status="passed")
 [fail]: notify(status="failed")
 
-[check] if $ctx.score >= 60 -> [pass]
-[check] if $ctx.score < 60 -> [fail]
+[check] if score >= 60 -> [pass]
+[check] if score < 60 -> [fail]
 ```
 
 Supported comparison operators: `==`, `!=`, `>`, `<`, `>=`, `<=`.
@@ -220,12 +220,12 @@ Supported comparison operators: `==`, `!=`, `>`, `<`, `>=`, `<=`.
 Boolean condition:
 
 ```juglans
-[gate]: set_context(ready=true)
+[gate]: ready = true
 [go]: notify(status="go")
 [wait]: notify(status="wait")
 
-[gate] if $ctx.ready -> [go]
-[gate] if !$ctx.ready -> [wait]
+[gate] if ready -> [go]
+[gate] if !ready -> [wait]
 ```
 
 ### Default Path (Unconditional Fallback)
@@ -238,8 +238,8 @@ When no conditional edge matches, an unconditional edge serves as the default:
 [path_b]: notify(status="b")
 [default_path]: notify(status="default")
 
-[router] if $ctx.x == "a" -> [path_a]
-[router] if $ctx.x == "b" -> [path_b]
+[router] if x == "a" -> [path_a]
+[router] if x == "b" -> [path_b]
 [router] -> [default_path]
 ```
 
@@ -254,19 +254,19 @@ When no conditional edge matches, an unconditional edge serves as the default:
 [risky] on error -> [err]
 ```
 
-The `$error` variable is set in the error handler node with fields: `code`, `message`, `node`, `details`.
+The `error` variable is set in the error handler node with fields: `code`, `message`, `node`, `details`.
 
 ### Switch Routing
 
 Execute exactly one matching branch:
 
 ```juglans
-[classify]: set_context(intent="question")
+[classify]: intent = "question"
 [answer]: notify(status="answering")
 [execute]: notify(status="executing")
 [fallback]: notify(status="fallback")
 
-[classify] -> switch $ctx.intent {
+[classify] -> switch intent {
     "question": [answer]
     "task": [execute]
     default: [fallback]
@@ -276,12 +276,12 @@ Execute exactly one matching branch:
 Switch with numeric cases:
 
 ```juglans
-[score]: set_context(level=2)
+[score]: level = 2
 [low]: notify(status="low")
 [mid]: notify(status="mid")
 [high]: notify(status="high")
 
-[score] -> switch $ctx.level {
+[score] -> switch level {
     1: [low]
     2: [mid]
     default: [high]
@@ -306,7 +306,7 @@ flows: {
 [start]: notify(status="begin")
 [done]: notify(status="end")
 
-[start] if $ctx.need_auth -> [auth.start]
+[start] if need_auth -> [auth.start]
 [auth.done] -> [done]
 [start] -> [done]
 ```
@@ -322,7 +322,7 @@ Functions are reusable parameterized blocks. They are NOT added to the main DAG.
 ### Single-Step Function
 
 ```juglans
-[greet(name)]: notify(status="Hello " + $name)
+[greet(name)]: notify(status="Hello " + name)
 
 [step1]: greet(name="world")
 ```
@@ -331,21 +331,21 @@ Functions are reusable parameterized blocks. They are NOT added to the main DAG.
 
 ```juglans
 [pipeline(msg)]: {
-  notify(status="start: " + $msg)
-  notify(status="end: " + $msg)
+  notify(status="start: " + msg)
+  notify(status="end: " + msg)
 }
 
 [run]: pipeline(msg="test")
 ```
 
-Steps separated by newlines or semicolons. The function returns `$output` from its last step.
+Steps separated by newlines or semicolons. The function returns `output` from its last step.
 
 ### Multiple Parameters
 
 ```juglans
 [deploy(env, tag)]: {
-  notify(status="deploying " + $tag + " to " + $env)
-  notify(status="done deploying " + $tag)
+  notify(status="deploying " + tag + " to " + env)
+  notify(status="done deploying " + tag)
 }
 
 [staging]: deploy(env="staging", tag="v1.0")
@@ -358,8 +358,8 @@ Steps separated by newlines or semicolons. The function returns `$output` from i
 
 ```juglans
 [check_health(url)]: {
-  result = fetch_url(url=$url)
-  notify(status="checked " + $url)
+  result = fetch_url(url=url)
+  notify(status="checked " + url)
 }
 
 [step]: check_health(url="https://example.com")
@@ -369,8 +369,8 @@ Steps separated by newlines or semicolons. The function returns `$output` from i
 
 ```juglans
 [validate(x)]: {
-  assert $x != ""
-  notify(status="valid: " + $x)
+  assert x != ""
+  notify(status="valid: " + x)
 }
 
 [step]: validate(x="hello")
@@ -385,11 +385,11 @@ Steps separated by newlines or semicolons. The function returns `$output` from i
 Iterate over a collection:
 
 ```juglans
-[init]: set_context(results=[])
+[init]: results = []
 
-[loop]: foreach($item in $input.items) {
-  [handle]: notify(status=$item)
-  [save]: set_context(results=append($ctx.results, $output))
+[loop]: foreach(item in input.items) {
+  [handle]: notify(status=item)
+  [save]: results = append(results, output)
   [handle] -> [save]
 }
 
@@ -403,8 +403,8 @@ Iterate over a collection:
 Run iterations concurrently:
 
 ```juglans
-[batch]: foreach parallel($item in $input.urls) {
-  [fetch]: fetch_url(url=$item)
+[batch]: foreach parallel(item in input.urls) {
+  [fetch]: fetch_url(url=item)
 }
 ```
 
@@ -413,11 +413,11 @@ Run iterations concurrently:
 Condition-based loop:
 
 ```juglans
-[init]: set_context(count=0)
+[init]: count = 0
 
-[loop]: while($ctx.count < 5) {
-  [inc]: set_context(count=$ctx.count + 1)
-  [log]: notify(status="count=" + $ctx.count)
+[loop]: while(count < 5) {
+  [inc]: count = count + 1
+  [log]: notify(status="count=" + count)
   [inc] -> [log]
 }
 
@@ -431,15 +431,15 @@ Condition-based loop:
 Loop bodies contain their own node definitions and edge definitions:
 
 ```juglans
-[start]: set_context(total=0)
+[start]: total = 0
 
-[process]: foreach($item in $input.data) {
-  [step_a]: notify(status="processing " + $item.id)
-  [step_b]: set_context(total=$ctx.total + 1)
+[process]: foreach(item in input.data) {
+  [step_a]: notify(status="processing " + item.id)
+  [step_b]: total = total + 1
   [step_a] -> [step_b]
 }
 
-[end]: notify(status="total: " + $ctx.total)
+[end]: notify(status="total: " + total)
 
 [start] -> [process] -> [end]
 ```
@@ -466,15 +466,15 @@ Line comments start with `#`:
 
 ## Variable System
 
-| Prefix | Description | Example |
+| Variable | Description | Example |
 |---|---|---|
-| `$input` | CLI/API input data | `$input.message`, `$input.items` |
-| `$output` | Previous node output | `$output`, `$output.field` |
-| `$ctx` | Workflow context | `$ctx.count`, `$ctx.results` |
-| `$reply` | Agent reply metadata | `$reply.output`, `$reply.status` |
-| `$error` | Error info (in error handlers) | `$error.message`, `$error.code` |
+| `input` | CLI/API input data | `input.message`, `input.items` |
+| `output` | Previous node output | `output`, `output.field` |
+| Context vars | Workflow context (via assignment syntax) | `count`, `results` |
+| `reply` | Agent reply metadata | `reply.output`, `reply.status` |
+| `error` | Error info (in error handlers) | `error.message`, `error.code` |
 
-Variables use dot notation for nested access: `$output.data.items[0].name`.
+Variables use dot notation for nested access: `output.data.items[0].name`.
 
 ---
 
@@ -487,20 +487,20 @@ prompts: ["./prompts/*.jgprompt"]
 # Classify user intent
 [classify]: chat(
   agent="classifier",
-  message=$input.query,
+  message=input.query,
   format="json"
 )
 
 # Handler branches
-[handle_question]: chat(agent="expert", message=$input.query)
-[handle_task]: chat(agent="executor", message=$input.query)
-[handle_chat]: chat(agent="assistant", message=$input.query)
+[handle_question]: chat(agent="expert", message=input.query)
+[handle_task]: chat(agent="executor", message=input.query)
+[handle_chat]: chat(agent="assistant", message=input.query)
 
 # Final output
 [done]: notify(status="processed")
 
 # Routing logic
-[classify] -> switch $output.intent {
+[classify] -> switch output.intent {
     "question": [handle_question]
     "task": [handle_task]
     default: [handle_chat]

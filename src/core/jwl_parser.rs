@@ -310,6 +310,9 @@ impl<'a> JwlParser<'a> {
                         self.parse_node_def(&mut wf)?;
                     }
                 }
+                TokenKind::At => {
+                    self.parse_decorator_and_node(&mut wf)?;
+                }
                 TokenKind::Ident(s) if is_meta_key(s) => {
                     self.parse_metadata(&mut wf)?;
                 }
@@ -487,6 +490,96 @@ impl<'a> JwlParser<'a> {
         Ok(())
     }
 
+    // ==================== Decorator ====================
+
+    /// Parse `@dotted.path(args...) \n [node_id]: body` and expand at compile time.
+    /// Generates a synthetic registration node `[_deco_N]: path(args..., handler="node_id")`.
+    fn parse_decorator_and_node(&mut self, wf: &mut WorkflowGraph) -> Result<()> {
+        self.expect(&TokenKind::At)?;
+
+        // Parse dotted path: e.g. api.post
+        let mut path = self.expect_ident_or_keyword()?;
+        while matches!(self.peek_kind(), TokenKind::Dot) {
+            self.advance(); // consume .
+            let part = self.expect_ident_or_keyword()?;
+            path = format!("{}.{}", path, part);
+        }
+
+        // Parse optional args: (expr, expr, ...)
+        let mut deco_args: Vec<String> = Vec::new();
+        if matches!(self.peek_kind(), TokenKind::LParen) {
+            self.advance(); // consume (
+            self.skip_newlines();
+            while !matches!(self.peek_kind(), TokenKind::RParen | TokenKind::Eof) {
+                let arg = self.capture_expression(true, false, true)?;
+                deco_args.push(arg);
+                self.skip_newlines();
+                if matches!(self.peek_kind(), TokenKind::Comma) {
+                    self.advance();
+                }
+                self.skip_newlines();
+            }
+            self.expect(&TokenKind::RParen)?;
+        }
+
+        self.skip_newlines();
+
+        // Next must be [node_def]
+        if !matches!(self.peek_kind(), TokenKind::LBracket) {
+            let tok = self.peek().clone();
+            return Err(self.error_at(tok.span, "Expected [node_def] after @decorator".to_string()));
+        }
+
+        // Peek the node_id from [node_id] before parsing (works for both nodes and function defs)
+        let decorated_node_id = if self.pos + 1 < self.tokens.len() {
+            match &self.tokens[self.pos + 1].kind {
+                TokenKind::Ident(s) => s.clone(),
+                _ => {
+                    return Err(anyhow!("Expected identifier after '[' in decorated node"));
+                }
+            }
+        } else {
+            return Err(anyhow!("Unexpected end of file after @decorator"));
+        };
+
+        // Parse the decorated node normally
+        self.parse_node_def(wf)?;
+
+        // Generate synthetic registration node: [_deco_N]: path(args..., handler="node_id")
+        let deco_counter = wf
+            .node_map
+            .keys()
+            .filter(|k| k.starts_with("_deco_"))
+            .count();
+        let deco_node_id = format!("_deco_{}", deco_counter);
+
+        // Build params: positional args as arg0, arg1, ... + handler=node_id
+        let mut params = HashMap::new();
+        for (i, arg) in deco_args.iter().enumerate() {
+            params.insert(format!("arg{}", i), arg.clone());
+        }
+        params.insert("handler".to_string(), format!("\"{}\"", decorated_node_id));
+
+        let deco_node = NodeType::Task(Action {
+            name: path.clone(),
+            params,
+        });
+        self.add_node(wf, &deco_node_id, deco_node)?;
+
+        // Auto-insert edge: instance_node -> _deco_N (ensures instance is created first)
+        if let Some(dot_pos) = path.find('.') {
+            let instance_name = &path[..dot_pos];
+            if let (Some(&from_idx), Some(&to_idx)) = (
+                wf.node_map.get(instance_name),
+                wf.node_map.get(&deco_node_id),
+            ) {
+                wf.graph.add_edge(from_idx, to_idx, Edge::default());
+            }
+        }
+
+        Ok(())
+    }
+
     // ==================== Node definition ====================
 
     fn parse_node_def(&mut self, wf: &mut WorkflowGraph) -> Result<()> {
@@ -546,9 +639,10 @@ impl<'a> JwlParser<'a> {
                 let nt = self.parse_new_expr()?;
                 self.add_node(wf, &node_id, nt)?;
             }
-            TokenKind::Variable(_) => {
-                let nt = self.parse_method_call_node()?;
-                self.add_node(wf, &node_id, nt)?;
+            TokenKind::Yield => {
+                self.advance();
+                let expr = self.capture_expression(false, true, true)?;
+                self.add_node(wf, &node_id, NodeType::Yield(expr))?;
             }
             TokenKind::Ident(s) => {
                 let s = s.clone();
@@ -795,6 +889,14 @@ impl<'a> JwlParser<'a> {
 
     fn parse_task_def(&mut self, context_id: &str) -> Result<NodeType> {
         let name = self.parse_scoped_identifier()?;
+        if name == "set_context" {
+            let span = self.peek().span;
+            return Err(self.error_at(
+                span,
+                "set_context() is no longer supported. Use assignment syntax instead: key = value"
+                    .into(),
+            ));
+        }
         let params = self.parse_param_pairs(context_id)?;
         Ok(NodeType::Task(Action { name, params }))
     }
@@ -889,6 +991,11 @@ impl<'a> JwlParser<'a> {
                 Ok(NodeType::Assert(expr))
             }
             TokenKind::Return => self.parse_return_err(),
+            TokenKind::Yield => {
+                self.advance();
+                let expr = self.capture_expression(false, true, true)?;
+                Ok(NodeType::Yield(expr))
+            }
             TokenKind::Ident(_) => {
                 // Could be: assign_call (ident = task(...)), task_def (ident(...)),
                 // or assignment_block (ident = value)
@@ -1124,11 +1231,6 @@ impl<'a> JwlParser<'a> {
                     self.advance();
                     serde_json::Value::Null
                 }
-                TokenKind::Variable(v) => {
-                    let v = v.clone();
-                    self.advance();
-                    serde_json::Value::String(v)
-                }
                 _ => {
                     // Capture as raw expression string (for template rendering)
                     let expr = self.capture_expression(true, true, false)?;
@@ -1190,10 +1292,6 @@ impl<'a> JwlParser<'a> {
 
     fn parse_var_or_ident(&mut self) -> Result<String> {
         match self.peek_kind().clone() {
-            TokenKind::Variable(v) => {
-                self.advance();
-                Ok(v.trim_start_matches('$').to_string())
-            }
             TokenKind::Ident(s) => {
                 let mut name = s.clone();
                 self.advance();
@@ -1208,10 +1306,7 @@ impl<'a> JwlParser<'a> {
                 let tok = self.peek().clone();
                 Err(self.error_at(
                     tok.span,
-                    format!(
-                        "Expected variable or identifier, found {}",
-                        tok.kind.describe()
-                    ),
+                    format!("Expected identifier, found {}", tok.kind.describe()),
                 ))
             }
         }
@@ -1264,35 +1359,9 @@ impl<'a> JwlParser<'a> {
         Ok(NodeType::NewInstance { class_name, args })
     }
 
-    fn parse_method_call_node(&mut self) -> Result<NodeType> {
-        let tok = self.peek().clone();
-        let var_ref = match &tok.kind {
-            TokenKind::Variable(v) => v.clone(),
-            _ => return Err(self.error_at(tok.span, "Expected variable reference".into())),
-        };
-        self.advance();
-
-        // variable_ref includes the $, and method is already consumed via dots
-        // Format: $instance.path.method — but the lexer captured the full $x.y.z as one token
-        // We need to split off the last segment as the method name
-        let clean = var_ref.trim_start_matches('$');
-        let (instance_path, method_name) = clean.rsplit_once('.').ok_or_else(|| {
-            self.error_at(
-                tok.span,
-                format!(
-                    "Invalid method call '{}': expected $instance.method",
-                    var_ref
-                ),
-            )
-        })?;
-
-        let args = self.parse_param_pairs(&var_ref)?;
-        Ok(NodeType::MethodCall {
-            instance_path: instance_path.to_string(),
-            method_name: method_name.to_string(),
-            args,
-        })
-    }
+    // parse_method_call_node removed — $ prefix no longer supported.
+    // Method calls on instances (instance.method()) are now handled at runtime
+    // through the scoped task_def path (parse_task_def → NodeType::Task).
 
     fn parse_struct_init(&mut self) -> Result<NodeType> {
         let mut class_name = self.expect_ident()?;
@@ -1601,11 +1670,6 @@ impl<'a> JwlParser<'a> {
                         self.advance();
                         Some("false".to_string())
                     }
-                    TokenKind::Variable(v) => {
-                        let v = v.clone();
-                        self.advance();
-                        Some(v)
-                    }
                     TokenKind::Ident(s) => {
                         let s = s.clone();
                         self.advance();
@@ -1784,7 +1848,7 @@ mod tests {
             [case_a]: notify(message="A")
             [case_b]: notify(message="B")
             [fallback]: notify(message="default")
-            [start] -> switch $type {
+            [start] -> switch type {
                 "a": [case_a]
                 "b": [case_b]
                 default: [fallback]
@@ -1794,7 +1858,7 @@ mod tests {
         .unwrap();
         assert!(wf.switch_routes.contains_key("start"));
         let sr = wf.switch_routes.get("start").unwrap();
-        assert_eq!(sr.subject.trim(), "$type");
+        assert_eq!(sr.subject.trim(), "type");
         assert_eq!(sr.cases.len(), 3);
     }
 
@@ -1818,7 +1882,7 @@ mod tests {
     fn test_function_def() {
         let wf = parse(
             r#"
-            [greet(name)]: bash(command="echo " + $name)
+            [greet(name)]: bash(command="echo " + name)
             [step1]: greet(name="world")
         "#,
         )
@@ -1833,8 +1897,8 @@ mod tests {
         let wf = parse(
             r#"
             [build(dir)]: {
-                bash(command="cd " + $dir + " && make")
-                bash(command="cd " + $dir + " && make test")
+                bash(command="cd " + dir + " && make")
+                bash(command="cd " + dir + " && make test")
             }
             [step1]: build(dir="/app")
         "#,
@@ -1889,7 +1953,7 @@ mod tests {
     #[test]
     fn test_nested_function_calls() {
         let wf = parse(r#"
-            [start]: chat(message=p(slug="test", user_message=$input.message, articles=map($data, x => {"title": x.title})))
+            [start]: chat(message=p(slug="test", user_message=input.message, articles=map(data, x => {"title": x.title})))
         "#).unwrap();
         let node = &wf.graph[*wf.node_map.get("start").unwrap()];
         if let NodeType::Task(action) = &node.node_type {
@@ -1907,7 +1971,7 @@ mod tests {
             r#"
             [start]: chat(
                 agent="helper",
-                message=$input.query
+                message=input.query
             )
         "#,
         )
@@ -1958,7 +2022,7 @@ mod tests {
             [start]: notify(message="test")
             [a]: notify(message="a")
             [b]: notify(message="b")
-            [start] if $output.category == "technical" -> [a]
+            [start] if output.category == "technical" -> [a]
             [start] -> [b]
         "#,
         )
@@ -2068,7 +2132,7 @@ mod tests {
                 age: int
             }
             [User.greet(self, prefix)]: {
-                notify(message=$prefix + " " + $self.name)
+                notify(message=prefix + " " + self.name)
             }
         "#,
         )

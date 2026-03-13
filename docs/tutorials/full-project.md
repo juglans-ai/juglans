@@ -130,32 +130,32 @@ agents: ["./agents/*.jgagent"]
 prompts: ["./prompts/*.jgprompt"]
 
 # Step 1: Receive input and save to context
-[receive]: set_context(user_message=$input.message)
+[receive]: user_message = input.message
 
 # Step 2: Use the classifier agent to determine intent, requiring JSON output
 [classify]: chat(
   agent="classifier",
-  message=$ctx.user_message,
+  message=user_message,
   format="json"
 )
 
 # Step 3: Save the classification result
-[save_intent]: set_context(intent=$output.intent)
+[save_intent]: intent = output.intent
 
 # Step 4: Handler nodes -- three branches
-[handle_qa]: chat(agent="qa", message=$ctx.user_message)
-[handle_task]: chat(agent="qa", message="Help the user complete this task: " + $ctx.user_message)
-[handle_chat]: chat(agent="qa", message="Respond casually to: " + $ctx.user_message)
+[handle_qa]: chat(agent="qa", message=user_message)
+[handle_task]: chat(agent="qa", message="Help the user complete this task: " + user_message)
+[handle_chat]: chat(agent="qa", message="Respond casually to: " + user_message)
 
 # Step 5: Fallback node
 [fallback]: print(message="Unknown intent, routing to QA")
 
 # Step 6: Error handling
-[error_handler]: print(message="Classification failed: " + $error.message)
+[error_handler]: print(message="Classification failed: " + error.message)
 
 # Step 7: Format output
-[format]: set_context(response=$output)
-[output]: print(message="[" + $ctx.intent + "] " + $ctx.response)
+[format]: response = output
+[output]: print(message="[" + intent + "] " + response)
 
 # --- Edge definitions ---
 
@@ -168,7 +168,7 @@ prompts: ["./prompts/*.jgprompt"]
 [error_handler] -> [handle_qa]
 
 # Intent routing
-[save_intent] -> switch $ctx.intent {
+[save_intent] -> switch intent {
     "question": [handle_qa]
     "task": [handle_task]
     "chat": [handle_chat]
@@ -198,21 +198,21 @@ Section-by-section explanation:
 
 | Node | Tool | Purpose |
 |------|------|---------|
-| `[receive]` | `set_context()` | Stores `$input.message` into `$ctx.user_message` |
+| `[receive]` | assignment | Stores `input.message` into `user_message` |
 | `[classify]` | `chat(format="json")` | Uses the classifier agent to classify intent, returns JSON |
-| `[save_intent]` | `set_context()` | Stores `$output.intent` into `$ctx.intent` |
+| `[save_intent]` | assignment | Stores `output.intent` into `intent` |
 | `[handle_qa]` | `chat()` | QA agent answers questions |
 | `[handle_task]` | `chat()` | QA agent handles tasks |
 | `[handle_chat]` | `chat()` | QA agent handles casual chat |
 | `[fallback]` | `print()` | Fallback for unknown intents |
 | `[error_handler]` | `print()` | Handles classification errors |
-| `[format]` | `set_context()` | Saves the response to context |
+| `[format]` | assignment | Saves the response to context |
 | `[output]` | `print()` | Final output |
 
 **Edge definitions**
 
 - `[classify] on error -> [error_handler]` -- on classification failure, instead of terminating, route to error handling, then to QA.
-- `switch $ctx.intent { ... }` -- three-way mutually exclusive routing; unmatched cases go to `default: [fallback]`.
+- `switch intent { ... }` -- three-way mutually exclusive routing; unmatched cases go to `default: [fallback]`.
 - All branches ultimately converge at `[format] -> [output]`.
 
 ## 9.6 Running and Testing
@@ -276,10 +276,10 @@ Create dedicated agents for each intent type (instead of reusing the qa agent fo
 ```juglans
 agents: ["./agents/*.jgagent"]
 
-[handle_qa]: chat(agent="qa", message=$ctx.user_message)
-[handle_task]: chat(agent="task-executor", message=$ctx.user_message)
-[handle_chat]: chat(agent="chat-companion", message=$ctx.user_message)
-[format]: print(message=$output)
+[handle_qa]: chat(agent="qa", message=user_message)
+[handle_task]: chat(agent="task-executor", message=user_message)
+[handle_chat]: chat(agent="chat-companion", message=user_message)
+[format]: print(message=output)
 
 [handle_qa] -> [format]
 [handle_task] -> [format]
@@ -294,9 +294,9 @@ Use `p()` to render a prompt, then pass the result to `chat()`:
 prompts: ["./prompts/*.jgprompt"]
 agents: ["./agents/*.jgagent"]
 
-[build_prompt]: p(slug="classify", message=$input.message)
-[classify]: chat(agent="classifier", message=$output, format="json")
-[show]: print(message=$output)
+[build_prompt]: p(slug="classify", message=input.message)
+[classify]: chat(agent="classifier", message=output, format="json")
+[show]: print(message=output)
 
 [build_prompt] -> [classify] -> [show]
 ```
@@ -308,10 +308,10 @@ Have the summarizer agent refine the answer before output:
 ```juglans
 agents: ["./agents/*.jgagent"]
 
-[answer]: chat(agent="qa", message=$input.message)
-[save]: set_context(raw_answer=$output)
-[summarize]: chat(agent="summarizer", message="Summarize: " + $ctx.raw_answer)
-[done]: print(message=$output)
+[answer]: chat(agent="qa", message=input.message)
+[save]: raw_answer = output
+[summarize]: chat(agent="summarizer", message="Summarize: " + raw_answer)
+[done]: print(message=output)
 
 [answer] -> [save] -> [summarize] -> [done]
 ```
@@ -337,10 +337,10 @@ Nine chapters, each focused on a core topic:
 | Chapter | Topic | Key Concepts |
 |---------|-------|--------------|
 | Tutorial 1 | Hello Workflow | Nodes, edges, `print()`, `notify()`, entry nodes |
-| Tutorial 2 | Variables & Data Flow | `$input`, `$output`, `$ctx`, `set_context()`, `str()` |
+| Tutorial 2 | Variables & Data Flow | `input`, `output`, assignment syntax, `str()` |
 | Tutorial 3 | Branching & Routing | `if` conditional edges, `switch` multi-way routing, branch convergence |
-| Tutorial 4 | Loops | `foreach`, `while`, accumulating `$ctx` in loops |
-| Tutorial 5 | Error Handling | `on error`, `$error`, fallback patterns |
+| Tutorial 4 | Loops | `foreach`, `while`, accumulating context in loops |
+| Tutorial 5 | Error Handling | `on error`, `error`, fallback patterns |
 | Tutorial 6 | AI Chat | `chat()`, `.jgagent`, `format="json"`, multi-turn conversations |
 | Tutorial 7 | Prompt Templates | `.jgprompt`, `p()`, Jinja templates, combining prompts with chat |
 | Tutorial 8 | Workflow Composition | `flows:` import, namespaced nodes, cross-file routing |

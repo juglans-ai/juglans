@@ -2,40 +2,34 @@ prompts: ["../prompts/*.jgprompt"]
 agents: ["../agents/*.jgagent"]
 
 # 初始化上下文
-[init]: set_context(
-  results=[],
-  processed=0
-)
+[init]: results = [], processed = 0
 
 [start_notify]: notify(status="Starting batch processing...")
 
 # 批量处理循环
-[process_loop]: foreach($item in $input.items) {
+[process_loop]: foreach(item in input.items) {
   # 使用 prompt 模板
   [render]: p(
     slug="data-analysis",
-    data=[$item],
+    data=[item],
     focus="key metrics"
   )
 
   # 调用分析 Agent
   [analyze]: chat(
     agent="data-analyst",
-    message=$output
+    message=output
   )
 
   # 收集结果
-  [collect]: set_context(
-    results=append($ctx.results, {
-      "id": $item.id,
-      "analysis": $output
-    }),
-    processed=$ctx.processed + 1
-  )
+  [collect]: results = append(results, {
+      "id": item.id,
+      "analysis": output
+    }), processed = processed + 1
 
   # 进度通知
   [progress]: notify(
-    status="Processed " + $ctx.processed + " / " + len($input.items)
+    status="Processed " + processed + " / " + len(input.items)
   )
 
   [render] -> [analyze] -> [collect] -> [progress]
@@ -44,10 +38,10 @@ agents: ["../agents/*.jgagent"]
 # 生成摘要
 [summary]: chat(
   agent="data-analyst",
-  message="Summarize these analysis results: " + json($ctx.results)
+  message="Summarize these analysis results: " + json(results)
 )
 
-[done]: notify(status="Completed! Total processed: " + $ctx.processed)
+[done]: notify(status="Completed! Total processed: " + processed)
 
 # 执行流程
 [init] -> [start_notify] -> [process_loop] -> [summary] -> [done]

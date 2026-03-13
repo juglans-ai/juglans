@@ -1,0 +1,45 @@
+# api.jg — HTTP API framework
+# Usage: libs: ["api.jg"]
+#
+# Define an API with decorated route handlers:
+#   [api]: new Api()
+#   @api.post("/api/stream")
+#   [process_stream()]: { yield { type: "content", text: "hello" } }
+#   [start]: api.listen()
+#   [_deco_0] -> [start]
+
+[Api]: {
+  tag: str = "api"
+}
+
+# Route registration methods — called by @decorator expansion
+# The handler name is stored for use with call() dispatch
+
+[Api.post(self, path, handler)]: {
+  _api_method = "POST"
+  _api_path = path
+  _api_handler = handler
+}
+
+[Api.get(self, path, handler)]: {
+  _api_method = "GET"
+  _api_path = path
+  _api_handler = handler
+}
+
+[Api.put(self, path, handler)]: {
+  _api_method = "PUT"
+  _api_path = path
+  _api_handler = handler
+}
+
+[Api.delete(self, path, handler)]: {
+  _api_method = "DELETE"
+  _api_path = path
+  _api_handler = handler
+}
+
+# Start HTTP server — use serve() as entry point
+[Api.listen(self)]: {
+  serve()
+}

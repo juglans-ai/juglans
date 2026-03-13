@@ -91,20 +91,20 @@ Sends a status notification. Accepts a `status` parameter, used to display workf
 
 The difference between `print` and `notify`: `print` produces plain text output, while `notify` carries semantic meaning (it is a status notification) and renders with a different style in the Web UI.
 
-### set_context()
+### Assignment Syntax
 
-Sets **context variables**, accepting arbitrary `key=value` pairs. Once stored in the context, subsequent nodes can read them via `$ctx.key`.
+Sets **context variables** using `key = value` pairs. Once stored in the context, subsequent nodes can read them by name.
 
 ```juglans
 [start]: print(message="Starting workflow")
-[save]: set_context(user="Alice", score=100)
+[save]: user = "Alice", score = 100
 [report]: notify(status="User saved: Alice")
 [done]: print(message="All done")
 
 [start] -> [save] -> [report] -> [done]
 ```
 
-`set_context` produces no visible output, but it changes the workflow's internal state. The variable system is the topic of the next chapter; for now, just know that `set_context` means "writing something into the workflow's memory."
+Assignment produces no visible output, but it changes the workflow's internal state. The variable system is the topic of the next chapter; for now, just know that assignment means "writing something into the workflow's memory."
 
 ## Combining Tools
 
@@ -112,7 +112,7 @@ Put the tools you have learned together:
 
 ```juglans
 [init]: notify(status="Pipeline starting...")
-[setup]: set_context(stage="prepared")
+[setup]: stage = "prepared"
 [work]: print(message="Doing the real work here")
 [report]: notify(status="Work complete")
 [finish]: print(message="Pipeline finished")
@@ -120,7 +120,7 @@ Put the tools you have learned together:
 [init] -> [setup] -> [work] -> [report] -> [finish]
 ```
 
-This workflow demonstrates a typical pattern: use `notify` to mark key milestones, `set_context` to record intermediate state, and `print` for debug output.
+This workflow demonstrates a typical pattern: use `notify` to mark key milestones, assignment syntax to record intermediate state, and `print` for debug output.
 
 ## Common Errors
 
@@ -161,7 +161,7 @@ This chapter covered the fundamentals of Juglans workflows:
 
 - **Nodes** `[name]` are execution units, bound to tool calls via `:`
 - **Edges** `->` define execution order
-- **Tools** are the actual behavior of nodes: `print` outputs text, `notify` sends notifications, `set_context` writes to the context
+- **Tools** are the actual behavior of nodes: `print` outputs text, `notify` sends notifications, assignment syntax writes to the context
 - **Entry nodes** are automatically determined by topological sort -- nodes with in-degree 0 are entry points, no extra declarations needed
 
-Next chapter: [Tutorial 2: Variables & Data Flow]() -- learn about `$input`, `$output`, `$ctx`, and how to pass data between nodes.
+Next chapter: [Tutorial 2: Variables & Data Flow]() -- learn about `input`, `output`, context variables, and how to pass data between nodes.

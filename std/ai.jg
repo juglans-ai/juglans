@@ -9,9 +9,9 @@
 #     params={"query": {"type": "string", "description": "Search query"}}
 #   }
 #
-#   [_]: $search.to_schema()
-#   [tools]: ai.toolbox(tools=[$search.schema])
-#   [ask]: chat(message="...", tools=$tools.output, on_tool=[handler])
+#   [_]: search.to_schema()
+#   [tools]: ai.toolbox(tools=[search.schema])
+#   [ask]: chat(message="...", tools=tools.output, on_tool=[handler])
 
 # Tool definition struct.
 [tool]: {
@@ -23,19 +23,19 @@
   schema: dict = {}
 }
 
-# Convert to OpenAI function calling schema — writes to $self.schema field.
+# Convert to OpenAI function calling schema — writes to self.schema field.
 [tool.to_schema(self)]: schema = {
   "type": "function",
   "function": {
-    "name": $self.name,
-    "description": $self.description,
+    "name": self.name,
+    "description": self.description,
     "parameters": {
       "type": "object",
-      "properties": $self.params,
-      "required": default($self.required, keys($self.params))
+      "properties": self.params,
+      "required": default(self.required, keys(self.params))
     }
   }
 }
 
 # Group multiple tool schemas into an array for chat(tools=...).
-[toolbox(tools)]: output = $tools
+[toolbox(tools)]: output = tools

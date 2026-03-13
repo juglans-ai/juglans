@@ -16,6 +16,7 @@ pub mod prompt_parser;
 pub mod renderer;
 pub mod resolver;
 pub mod skill_parser;
+pub mod stdlib;
 pub mod tool_loader;
 pub mod type_checker;
 pub mod types;

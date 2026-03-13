@@ -1,0 +1,20 @@
+# std/telegram.jg — Telegram Bot Library
+#
+# Usage:
+#   libs: ["std/telegram.jg"]
+#
+#   [_]: tg.send(token="BOT_TOKEN", chat_id="CHAT_ID", message="Hello")
+#   [_]: tg.send_photo(token="BOT_TOKEN", chat_id="CHAT_ID", path="shot.png", caption="Look!")
+
+# Send text message
+[send(token, chat_id, message)]: {
+  _url = "https://api.telegram.org/bot" + token + "/sendMessage"
+  _resp = fetch(url=_url, method="POST", headers={"Content-Type": "application/json"}, body=json({"chat_id": chat_id, "text": message}))
+}
+
+# Send photo (local file via curl multipart upload)
+[send_photo(token, chat_id, path, caption)]: {
+  _url = "https://api.telegram.org/bot" + token + "/sendPhoto"
+  _cmd = "curl -s -X POST '" + _url + "' -F chat_id=" + str(chat_id) + " -F 'photo=@" + path + "' -F 'caption=" + default(caption, "") + "'"
+  _resp = bash(cmd=_cmd)
+}

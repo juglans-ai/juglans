@@ -21,9 +21,8 @@ enum Tk {
     True,
     False,
     Null,
-    // Identifiers & variables
+    // Identifiers
     Ident(String),
-    Variable(String),
     // Delimiters
     LParen,
     RParen,
@@ -134,8 +133,11 @@ impl<'a> Lexer<'a> {
             // String literals
             b'"' => self.lex_double_string(start),
             b'\'' => self.lex_single_string(start),
-            // Variable
-            b'$' => self.lex_variable(start),
+            // $ prefix is no longer supported
+            b'$' => Err(anyhow!(
+                "The '$' prefix is no longer supported. Use bare identifiers instead: \
+                     '$ctx.x' → 'x', '$input.x' → 'input.x', '$output' → 'output'"
+            ))?,
             // Number
             b'0'..=b'9' => self.lex_number(start),
             // Identifier / keyword
@@ -393,22 +395,7 @@ impl<'a> Lexer<'a> {
         Ok(Token { kind, pos: start })
     }
 
-    fn lex_variable(&mut self, start: usize) -> Result<Token> {
-        self.pos += 1; // skip $
-        while self.pos < self.src.len() {
-            let b = self.src[self.pos];
-            if b.is_ascii_alphanumeric() || b == b'_' || b == b'.' {
-                self.pos += 1;
-            } else {
-                break;
-            }
-        }
-        let s = std::str::from_utf8(&self.src[start..self.pos]).unwrap();
-        Ok(Token {
-            kind: Tk::Variable(s.to_string()),
-            pos: start,
-        })
-    }
+    // lex_variable removed — $ prefix is no longer supported
 
     fn lex_double_string(&mut self, start: usize) -> Result<Token> {
         self.pos += 1; // skip first "
@@ -827,11 +814,6 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Ok(Expr::None)
             }
-            // Variable
-            Tk::Variable(v) => {
-                self.advance();
-                Ok(Expr::Variable(v))
-            }
             // Identifier or function call
             Tk::Ident(name) => {
                 self.advance();
@@ -1141,9 +1123,15 @@ mod tests {
     }
 
     #[test]
-    fn test_variable() {
-        assert!(matches!(p("$ctx.field"), Expr::Variable(ref v) if v == "$ctx.field"));
-        assert!(matches!(p("$input"), Expr::Variable(ref v) if v == "$input"));
+    fn test_dollar_prefix_rejected() {
+        assert!(parse_expr("$ctx.field").is_err());
+        assert!(parse_expr("$input").is_err());
+    }
+
+    #[test]
+    fn test_bare_identifiers() {
+        assert!(matches!(p("field"), Expr::Identifier(ref s) if s == "field"));
+        assert!(matches!(p("input"), Expr::Identifier(ref s) if s == "input"));
     }
 
     #[test]
@@ -1184,8 +1172,9 @@ mod tests {
         let e = p("x.upper()");
         assert!(matches!(e, Expr::MethodCall { ref method, .. } if method == "upper"));
 
-        let e = p("$ctx.items.length");
-        assert!(matches!(e, Expr::Variable(ref v) if v == "$ctx.items.length"));
+        // Bare identifier with dot access chain
+        let e = p("items.length");
+        assert!(matches!(e, Expr::DotAccess { .. }));
     }
 
     #[test]

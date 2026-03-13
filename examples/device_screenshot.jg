@@ -1,0 +1,37 @@
+# 双击右 Cmd → 截图 → AI 分析 → 发送 Telegram
+#
+# 用法: juglans examples/device_screenshot.jg
+# 注意: macOS 需要授予终端辅助功能权限和屏幕录制权限
+
+libs: ["../std/device.jg", "../std/telegram.jg"]
+
+[_]: _last_meta_ms = 0
+[_]: _token = "5860973339:AAFvRtjSmwax6iCSsHSvwpcskmSbg7XebTo"
+[_]: _chat_id = "5515722973"
+[_]: print(message="监听中... 双击右 Cmd 截图+分析+发送 Telegram，Ctrl+C 退出")
+[_]: key_listen(on_press=[on_key], keys=["meta_right"], timeout_ms=0)
+
+[on_key(key, modifiers)]: {
+  _prev = default(_last_meta_ms, 0)
+  _last_meta_ms = default(timestamp_ms(), 0)
+  _delta = _last_meta_ms - _prev
+  call(fn=if(_delta > 50 and _delta < 400, "do_screenshot", "noop"))
+}
+
+[do_screenshot()]: {
+  _ts = default(timestamp(), 0)
+  _path = "/Users/ops/Desktop/ops-png/shot_" + str(_ts) + ".png"
+  screenshot(path=_path)
+  print(message="截图已保存: " + _path)
+
+  # AI 分析用户在做什么
+  _ai = chat(message="现在时间是 " + default(now(), "") + "，用户刚刚截了一张屏幕截图。请用一句话简短分析用户可能正在做什么。", model="byteplus/kimi-k2-thinking-251104", state="silent")
+  _analysis = default(get(_ai, "content", ""), str(_ai))
+  print(message="AI 分析: " + _analysis)
+
+  # 发送截图+分析到 Telegram
+  tg.send_photo(token=_token, chat_id=_chat_id, path=_path, caption=_analysis)
+  print(message="已发送到 Telegram")
+}
+
+[noop()]: return(value="")

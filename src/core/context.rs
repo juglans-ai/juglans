@@ -110,6 +110,8 @@ pub enum WorkflowEvent {
     NodeStart(NodeStartEvent),
     /// Workflow node execution complete event
     NodeComplete(NodeCompleteEvent),
+    /// Explicit yield from workflow — emitted as SSE event
+    Yield(Value),
 }
 
 /// A thread-safe, shared state for a single workflow execution.
@@ -126,6 +128,8 @@ pub struct WorkflowContext {
     max_depth: usize,
     /// Currently executing workflow (used by on_tool=[node] handler)
     current_workflow: Arc<RwLock<Option<Arc<WorkflowGraph>>>>,
+    /// Root (top-level) workflow — set once at first execute_graph, never overwritten
+    root_workflow: Arc<RwLock<Option<Arc<WorkflowGraph>>>>,
     /// Whether to push tool execution events to frontend (default false)
     stream_tool_events: Arc<AtomicBool>,
     /// Whether to push node execution events to frontend (default false)
@@ -158,6 +162,7 @@ impl WorkflowContext {
             execution_stack: Arc::new(Mutex::new(Vec::new())),
             max_depth: 10,
             current_workflow: Arc::new(RwLock::new(None)),
+            root_workflow: Arc::new(RwLock::new(None)),
             stream_tool_events: Arc::new(AtomicBool::new(false)),
             stream_node_events: Arc::new(AtomicBool::new(false)),
             tool_trace: Arc::new(Mutex::new(Vec::new())),
@@ -182,6 +187,7 @@ impl WorkflowContext {
             execution_stack: Arc::new(Mutex::new(Vec::new())),
             max_depth: 10,
             current_workflow: Arc::new(RwLock::new(None)),
+            root_workflow: Arc::new(RwLock::new(None)),
             stream_tool_events: Arc::new(AtomicBool::new(false)),
             stream_node_events: Arc::new(AtomicBool::new(false)),
             tool_trace: Arc::new(Mutex::new(Vec::new())),
@@ -202,6 +208,7 @@ impl WorkflowContext {
             execution_stack: self.execution_stack.clone(),
             max_depth: self.max_depth,
             current_workflow: self.current_workflow.clone(),
+            root_workflow: self.root_workflow.clone(),
             stream_tool_events: self.stream_tool_events.clone(),
             stream_node_events: self.stream_node_events.clone(),
             tool_trace: self.tool_trace.clone(),
@@ -455,6 +462,19 @@ impl WorkflowContext {
     /// Get the currently executing workflow
     pub fn get_current_workflow(&self) -> Option<Arc<WorkflowGraph>> {
         self.current_workflow.read().clone()
+    }
+
+    /// Set the root (top-level) workflow — only sets if not already set
+    pub fn set_root_workflow(&self, workflow: Arc<WorkflowGraph>) {
+        let mut w = self.root_workflow.write();
+        if w.is_none() {
+            *w = Some(workflow);
+        }
+    }
+
+    /// Get the root workflow (top-level, never overwritten by sub-graph execution)
+    pub fn get_root_workflow(&self) -> Option<Arc<WorkflowGraph>> {
+        self.root_workflow.read().clone()
     }
 
     /// Set whether to push tool execution events

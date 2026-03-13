@@ -4,15 +4,15 @@ libs: ["../std/mcps.jg"]
 [mock]: mcps.MCP(name="mock", url="http://localhost:9876", token="")
 
 # Verify tool discovery
-[show_tools]: print(message="Tools count: " + str(len($ctx.mcp_tools)))
-[show_url]: print(message="URL registry: " + str($ctx._mcp_url))
+[show_tools]: print(message="Tools count: " + str(len(mcp_tools)))
+[show_url]: print(message="URL registry: " + str(_mcp_url))
 
 # Test handle dispatch - echo
 [test_echo]: mcps.handle(name="mock.echo", arguments={"message": "hello from juglans"})
-[show_echo]: print(message="Echo result: " + str($output))
+[show_echo]: print(message="Echo result: " + str(output))
 
 # Test handle dispatch - add
 [test_add]: mcps.handle(name="mock.add", arguments={"a": 3, "b": 4})
-[show_add]: print(message="Add result: " + str($output))
+[show_add]: print(message="Add result: " + str(output))
 
 [mock] -> [show_tools] -> [show_url] -> [test_echo] -> [show_echo] -> [test_add] -> [show_add]

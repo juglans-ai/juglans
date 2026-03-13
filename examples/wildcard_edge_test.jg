@@ -5,13 +5,13 @@
 [t_c]: output = "c"
 [other]: output = "other"
 
-[collect]: output = [$t_a.output, $t_b.output, $t_c.output]
+[collect]: output = [t_a.output, t_b.output, t_c.output]
 
 [verify()]: {
-  assert len($collect.output) == 3
-  assert "a" in $collect.output
-  assert "b" in $collect.output
-  assert "c" in $collect.output
+  assert len(collect.output) == 3
+  assert "a" in collect.output
+  assert "b" in collect.output
+  assert "c" in collect.output
 }
 [run_verify]: verify()
 

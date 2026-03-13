@@ -1,0 +1,10 @@
+# call_test.jg — 验证 call() 动态派发
+
+[hello()]: {
+  yield { type: "content", text: "hello from dynamic call" }
+}
+
+[start]: fn_name = "hello"
+[run]: call(fn=fn_name)
+
+[start] -> [run]

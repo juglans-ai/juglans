@@ -1,0 +1,8 @@
+# yield_test.jg — 验证 yield 关键字基础功能
+
+[start]: yield { type: "meta", status: "started" }
+[msg1]: yield { type: "content", text: "Hello " }
+[msg2]: yield { type: "content", text: "World!" }
+[end]: yield { type: "done" }
+
+[start] -> [msg1] -> [msg2] -> [end]

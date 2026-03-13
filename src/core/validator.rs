@@ -393,7 +393,6 @@ impl WorkflowValidator {
             "reply",
             "print",
             "return",
-            "set_context",
             "feishu_webhook",
             // HTTP backend tools
             "serve",
@@ -643,20 +642,51 @@ impl WorkflowValidator {
             Err(_) => HashMap::new(), // Cycle detected — skip DAG checks (covered by Check 2)
         };
 
-        let var_re = Regex::new(r"\$([a-zA-Z_][a-zA-Z0-9_.]*)").unwrap();
+        // Legacy $var.path regex (for resolver-produced references)
+        let dollar_var_re = Regex::new(r"\$([a-zA-Z_][a-zA-Z0-9_.]*)").unwrap();
+        // Bare identifier.path regex (new syntax: no $ prefix)
+        // Matches identifier.path patterns not preceded by word chars or dots
+        let bare_var_re =
+            Regex::new(r"(?:^|[^a-zA-Z0-9_.])([a-zA-Z_][a-zA-Z0-9_]*\.[a-zA-Z0-9_.]+)").unwrap();
+        let bare_start_re = Regex::new(r"^([a-zA-Z_][a-zA-Z0-9_]*\.[a-zA-Z0-9_.]+)").unwrap();
 
         for idx in graph.graph.node_indices() {
             let node = &graph.graph[idx];
             if let NodeType::Task(action) = &node.node_type {
                 for param_value in action.params.values() {
-                    for cap in var_re.captures_iter(param_value) {
-                        let var_path = &cap[1];
+                    // Collect variable references from both legacy $var and bare var.path patterns
+                    let mut var_refs: Vec<String> = Vec::new();
+
+                    // Legacy $var.path references
+                    for cap in dollar_var_re.captures_iter(param_value) {
+                        var_refs.push(cap[1].to_string());
+                    }
+
+                    // Bare identifier.path references (not inside quotes)
+                    // Strip quoted strings first, then match bare refs
+                    let unquoted = strip_quoted_strings(param_value);
+                    for cap in bare_var_re.captures_iter(&unquoted) {
+                        let var_path = cap[1].to_string();
+                        // Skip if already captured via $ prefix
+                        if !var_refs.contains(&var_path) {
+                            var_refs.push(var_path);
+                        }
+                    }
+                    // Also match bare var.path at start of string
+                    for cap in bare_start_re.captures_iter(&unquoted) {
+                        let var_path = cap[1].to_string();
+                        if !var_refs.contains(&var_path) {
+                            var_refs.push(var_path);
+                        }
+                    }
+
+                    for var_path in &var_refs {
                         let root = var_path.split('.').next().unwrap_or("");
                         if !valid_prefixes.contains(root) {
                             result.add_warning(
                                 "W006",
                                 &format!(
-                                    "Variable '${}' has unknown prefix '{}'. Known: $input, $output, $ctx, $reply, $error, $config",
+                                    "Variable '{}' has unknown prefix '{}'. Known: input, output, ctx, reply, error, config",
                                     var_path, root
                                 ),
                                 Some(&node.id),
@@ -670,7 +700,7 @@ impl WorkflowValidator {
                                     result.add_warning(
                                         "W010",
                                         &format!(
-                                            "Variable '${}' references node '{}' which is not a DAG predecessor of '{}' — output may not be available",
+                                            "Variable '{}' references node '{}' which is not a DAG predecessor of '{}' — output may not be available",
                                             var_path, root, node.id
                                         ),
                                         Some(&node.id),
@@ -985,6 +1015,14 @@ impl WorkflowValidator {
         for (namespace, rel_path) in &graph.lib_imports {
             let path = rel_path.trim().trim_matches('"');
 
+            // Embedded stdlib (std/ prefix) — skip if found in compiled-in stdlib
+            if path.starts_with("std/") {
+                let stdlib_name = path.strip_prefix("std/").unwrap().trim_end_matches(".jg");
+                if crate::core::stdlib::get(stdlib_name).is_some() {
+                    continue;
+                }
+            }
+
             // Registry packages — check jg_modules/ if available, otherwise warn
             if is_registry_import(path) {
                 let jg_modules_path = project.base_dir.join("jg_modules").join(namespace);
@@ -1071,6 +1109,30 @@ impl WorkflowValidator {
     }
 }
 
+/// Strip double-quoted strings from a value, replacing them with spaces.
+/// This allows regex matching on only the non-quoted (variable reference) parts.
+fn strip_quoted_strings(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut in_quote = false;
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' && in_quote {
+            // Skip escaped character inside quotes
+            chars.next();
+            result.push(' ');
+            result.push(' ');
+        } else if c == '"' {
+            in_quote = !in_quote;
+            result.push(' ');
+        } else if in_quote {
+            result.push(' ');
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1114,7 +1176,7 @@ mod tests {
     #[test]
     fn test_unknown_variable_prefix() {
         let content = r#"
-[start]: notify(message=$unknown.var)
+[start]: notify(message=unknown.var)
 "#;
         let graph = GraphParser::parse(content).unwrap();
         let result = WorkflowValidator::validate(&graph);
@@ -1124,7 +1186,7 @@ mod tests {
     #[test]
     fn test_valid_variable_prefix() {
         let content = r#"
-[start]: notify(message=$input.query)
+[start]: notify(message=input.query)
 "#;
         let graph = GraphParser::parse(content).unwrap();
         let result = WorkflowValidator::validate(&graph);
@@ -1138,7 +1200,7 @@ mod tests {
 [a]: notify(message="a")
 [b]: notify(message="b")
 
-[start] -> switch $type {
+[start] -> switch type {
     "a": [a]
     "b": [b]
 }
@@ -1155,7 +1217,7 @@ mod tests {
 [a]: notify(message="a")
 [fallback]: notify(message="fb")
 
-[start] -> switch $type {
+[start] -> switch type {
     "a": [a]
     default: [fallback]
 }
@@ -1172,7 +1234,7 @@ mod tests {
     #[test]
     fn test_function_call_correct_params() {
         let content = r#"
-[greet(name)]: bash(command="echo " + $name)
+[greet(name)]: bash(command="echo " + name)
 [step1]: greet(name="world")
 "#;
         let graph = GraphParser::parse(content).unwrap();
@@ -1191,7 +1253,7 @@ mod tests {
     #[test]
     fn test_function_call_wrong_param_count() {
         let content = r#"
-[greet(name, greeting)]: bash(command="echo " + $greeting + " " + $name)
+[greet(name, greeting)]: bash(command="echo " + greeting + " " + name)
 [step1]: greet(name="world")
 "#;
         let graph = GraphParser::parse(content).unwrap();
@@ -1206,7 +1268,7 @@ mod tests {
     #[test]
     fn test_function_call_unknown_param_name() {
         let content = r#"
-[greet(name)]: bash(command="echo " + $name)
+[greet(name)]: bash(command="echo " + name)
 [step1]: greet(unknown="world")
 "#;
         let graph = GraphParser::parse(content).unwrap();
@@ -1222,7 +1284,7 @@ mod tests {
     fn test_function_not_w004_unknown() {
         // Function calls should NOT trigger W004 (unknown tool)
         let content = r#"
-[greet(name)]: bash(command="echo " + $name)
+[greet(name)]: bash(command="echo " + name)
 [step1]: greet(name="world")
 "#;
         let graph = GraphParser::parse(content).unwrap();
@@ -1241,7 +1303,7 @@ mod tests {
     fn test_function_body_validation() {
         // Function body with unknown variable should produce nested warning
         let content = r#"
-[bad_func(x)]: bash(command=$unknown_var)
+[bad_func(x)]: bash(command=unknown_var.path)
 [step1]: bad_func(x="test")
 "#;
         let graph = GraphParser::parse(content).unwrap();
@@ -1260,7 +1322,7 @@ mod tests {
     fn test_function_body_valid_param_usage() {
         // Function parameters should be valid variable prefixes in body
         let content = r#"
-[greet(name)]: bash(command=$name)
+[greet(name)]: bash(command=name.value)
 [step1]: greet(name="world")
 "#;
         let graph = GraphParser::parse(content).unwrap();
@@ -1313,7 +1375,7 @@ mod tests {
     #[test]
     fn test_on_tool_function_reference() {
         let content = r#"
-[handle(name, args)]: bash(command="echo " + $name)
+[handle(name, args)]: bash(command="echo " + name)
 [chat_node]: chat(agent="test", message="hi", on_tool=[handle])
 "#;
         let graph = GraphParser::parse(content).unwrap();
@@ -1333,7 +1395,7 @@ mod tests {
     fn test_variable_dag_predecessor_valid() {
         let content = r#"
 [step1]: notify(message="hello")
-[step2]: notify(message=$step1.output)
+[step2]: notify(message=step1.output)
 [step1] -> [step2]
 "#;
         let graph = GraphParser::parse(content).unwrap();
@@ -1350,7 +1412,7 @@ mod tests {
         // step2 references step3 which comes AFTER it in the DAG
         let content = r#"
 [step1]: notify(message="hello")
-[step2]: notify(message=$step3.output)
+[step2]: notify(message=step3.output)
 [step3]: notify(message="world")
 [step1] -> [step2] -> [step3]
 "#;
@@ -1460,8 +1522,8 @@ flows: { auth: "./nonexistent.jg" }
     fn test_multi_step_function_validation() {
         let content = r#"
 [build(dir)]: {
-  bash(command="cd " + $dir + " && make");
-  bash(command="cd " + $dir + " && test")
+  bash(command="cd " + dir + " && make");
+  bash(command="cd " + dir + " && test")
 }
 [step1]: build(dir="/app")
 "#;

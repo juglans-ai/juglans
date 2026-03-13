@@ -2,24 +2,90 @@
 //
 // HTTP backend builtins: serve() and response()
 //
-// serve()    — Marks entry node; web server registers catch-all route upon discovery
+// serve()    — Starts inline HTTP server (CLI mode) or pass-through (request mode)
 // response() — Controls HTTP response status/body/headers
 
 use super::Tool;
 use crate::core::context::WorkflowContext;
-use anyhow::Result;
+use crate::core::graph::NodeType;
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use tracing::info;
 
-/// serve() — HTTP entry point marker
+/// serve() — HTTP server entry point
 ///
-/// At startup, the web server scans all .jg/.jgflow files; upon finding a node
-/// containing serve(), it registers that workflow as a catch-all HTTP handler.
+/// CLI mode (no input.method): extracts routes from decorator nodes, starts an
+/// inline Axum server that dispatches requests to handler functions. Blocks forever.
 ///
-/// At runtime, acts as pass-through returning request summary for debugging.
-/// Request data is pre-injected into $input.* by the web server.
-pub struct Serve;
+/// Request mode (input.method set): pass-through that returns request summary.
+/// Request data is pre-injected into $input.* by the server.
+pub struct Serve {
+    builtin_registry: Option<std::sync::Weak<super::BuiltinRegistry>>,
+}
+
+impl Default for Serve {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Serve {
+    pub fn new() -> Self {
+        Self {
+            builtin_registry: None,
+        }
+    }
+
+    pub fn set_registry(&mut self, registry: std::sync::Weak<super::BuiltinRegistry>) {
+        self.builtin_registry = Some(registry);
+    }
+}
+
+/// Route extracted from decorator nodes in the workflow graph
+#[derive(Clone, Debug)]
+pub struct InlineRoute {
+    pub method: String,
+    pub path: String,
+    pub handler: String,
+}
+
+/// Scan workflow graph for _deco_N nodes and extract route table
+fn extract_routes_from_graph(workflow: &crate::core::graph::WorkflowGraph) -> Vec<InlineRoute> {
+    let mut routes = Vec::new();
+    for (node_id, &node_idx) in &workflow.node_map {
+        if !node_id.starts_with("_deco_") {
+            continue;
+        }
+        let node = &workflow.graph[node_idx];
+        if let NodeType::Task(action) = &node.node_type {
+            // action.name is like "api.post" or "api.get"
+            let method = action.name.rsplit('.').next().unwrap_or("").to_uppercase();
+            if !["GET", "POST", "PUT", "DELETE", "PATCH"].contains(&method.as_str()) {
+                continue;
+            }
+            let path = action
+                .params
+                .get("arg0")
+                .map(|s| s.trim_matches('"').to_string())
+                .unwrap_or_default();
+            let handler = action
+                .params
+                .get("handler")
+                .map(|s| s.trim_matches('"').to_string())
+                .unwrap_or_default();
+            if !path.is_empty() && !handler.is_empty() {
+                routes.push(InlineRoute {
+                    method,
+                    path,
+                    handler,
+                });
+            }
+        }
+    }
+    routes
+}
 
 #[async_trait]
 impl Tool for Serve {
@@ -29,41 +95,87 @@ impl Tool for Serve {
 
     async fn execute(
         &self,
-        _params: &HashMap<String, String>,
+        params: &HashMap<String, String>,
         context: &WorkflowContext,
     ) -> Result<Option<Value>> {
-        // pass-through: return request data summary
-        let method = context
+        // Check if we're in request-handling mode (input.method is already set)
+        let existing_method = context
             .resolve_path("input.method")
             .ok()
             .flatten()
-            .and_then(|v| v.as_str().map(|s| s.to_string()))
-            .unwrap_or_else(|| "unknown".to_string());
-        let path = context
-            .resolve_path("input.path")
-            .ok()
-            .flatten()
-            .and_then(|v| v.as_str().map(|s| s.to_string()))
-            .unwrap_or_else(|| "/".to_string());
-        let query = context.resolve_path("input.query").ok().flatten();
-        let has_body = context
-            .resolve_path("input.body")
-            .ok()
-            .flatten()
-            .map(|v| !v.is_null())
-            .unwrap_or(false);
+            .and_then(|v| v.as_str().map(|s| s.to_string()));
 
-        // Pre-compute $input.route = "METHOD /path" for convenient switch routing
-        let route = format!("{} {}", method, path);
-        context.set("input.route".to_string(), json!(route)).ok();
+        if let Some(method) = existing_method {
+            // Pass-through mode: return request data summary (called from inline server handler)
+            let path = context
+                .resolve_path("input.path")
+                .ok()
+                .flatten()
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "/".to_string());
+            let query = context.resolve_path("input.query").ok().flatten();
+            let has_body = context
+                .resolve_path("input.body")
+                .ok()
+                .flatten()
+                .map(|v| !v.is_null())
+                .unwrap_or(false);
 
-        Ok(Some(json!({
-            "method": method,
-            "path": path,
-            "route": route,
-            "query": query,
-            "has_body": has_body,
-        })))
+            let route = format!("{} {}", method, path);
+            context.set("input.route".to_string(), json!(route)).ok();
+
+            return Ok(Some(json!({
+                "method": method,
+                "path": path,
+                "route": route,
+                "query": query,
+                "has_body": has_body,
+            })));
+        }
+
+        // Server mode: start inline HTTP server
+        let registry = self
+            .builtin_registry
+            .as_ref()
+            .and_then(|w| w.upgrade())
+            .ok_or_else(|| anyhow!("serve(): BuiltinRegistry not available"))?;
+        let executor = registry
+            .get_executor()
+            .ok_or_else(|| anyhow!("serve(): WorkflowExecutor not available"))?;
+        let runtime = registry.get_runtime();
+        let workflow = context
+            .get_root_workflow()
+            .ok_or_else(|| anyhow!("serve(): no root workflow found"))?;
+
+        // Extract routes from decorator nodes
+        let routes = extract_routes_from_graph(&workflow);
+        if routes.is_empty() {
+            info!("serve(): no decorator routes found, starting pass-through server");
+        }
+
+        for r in &routes {
+            info!("  📌 {} {} -> {}()", r.method, r.path, r.handler);
+        }
+
+        // Get port from params, config, or default
+        let port = params
+            .get("port")
+            .and_then(|p| p.trim_matches('"').parse::<u16>().ok())
+            .or_else(|| {
+                context
+                    .resolve_path("config.server.port")
+                    .ok()
+                    .flatten()
+                    .and_then(|v| v.as_u64())
+                    .map(|p| p as u16)
+            })
+            .unwrap_or(8080);
+
+        // Start server (blocks indefinitely)
+        crate::services::web_server::start_inline_server(routes, workflow, executor, runtime, port)
+            .await?;
+
+        Ok(None) // never reached
     }
 }
 

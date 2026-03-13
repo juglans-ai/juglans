@@ -217,9 +217,19 @@ impl<'a> Lexer<'a> {
             }
             b'"' => self.lex_string()?,
             b'\'' => self.lex_single_quoted_string()?,
-            b'$' => self.lex_variable()?,
+            b'$' => {
+                return Err(self.err(
+                    "The '$' prefix is no longer supported. Use bare identifiers instead: \
+                     '$ctx.x' → 'x', '$input.x' → 'input.x', '$output' → 'output'"
+                        .to_string(),
+                ));
+            }
             b'0'..=b'9' => self.lex_number()?,
-            b'+' | b'*' | b'/' | b'%' | b'@' | b'|' | b'&' => {
+            b'@' => {
+                self.advance_byte();
+                TokenKind::At
+            }
+            b'+' | b'*' | b'/' | b'%' | b'|' | b'&' => {
                 self.advance_byte();
                 TokenKind::Ident(String::from(b as char))
             }
@@ -319,21 +329,7 @@ impl<'a> Lexer<'a> {
         Ok(TokenKind::String(raw))
     }
 
-    fn lex_variable(&mut self) -> Result<TokenKind, LexError> {
-        let start = self.pos;
-        self.advance_byte(); // $
-        while let Some(b) = self.peek_byte() {
-            if b.is_ascii_alphanumeric() || b == b'_' || b == b'.' {
-                self.advance_byte();
-            } else {
-                break;
-            }
-        }
-        let raw = std::str::from_utf8(&self.source[start..self.pos])
-            .unwrap_or("$")
-            .to_string();
-        Ok(TokenKind::Variable(raw))
-    }
+    // lex_variable removed — $ prefix is no longer supported
 
     fn lex_number(&mut self) -> Result<TokenKind, LexError> {
         let start = self.pos;
@@ -391,6 +387,7 @@ impl<'a> Lexer<'a> {
             "err" => TokenKind::Err,
             "return" => TokenKind::Return,
             "new" => TokenKind::New,
+            "yield" => TokenKind::Yield,
             _ => TokenKind::Ident(word.to_string()),
         };
         Ok(kind)
@@ -500,9 +497,11 @@ mod tests {
     }
 
     #[test]
-    fn test_variable() {
-        let tokens = lex("$ctx.articles");
-        assert_eq!(tokens[0], TokenKind::Variable("$ctx.articles".into()));
+    fn test_dollar_prefix_rejected() {
+        let result = Lexer::new("$ctx.articles").tokenize();
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("no longer supported"), "Error: {}", err);
     }
 
     #[test]

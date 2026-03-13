@@ -458,11 +458,12 @@ pub async fn run_agent_for_message(
                 }
             }
             WorkflowEvent::Meta(_)
+            | WorkflowEvent::Yield(_)
             | WorkflowEvent::ToolStart(_)
             | WorkflowEvent::ToolComplete(_)
             | WorkflowEvent::NodeStart(_)
             | WorkflowEvent::NodeComplete(_) => {
-                // Bot mode ignores meta / tool / node events
+                // Bot mode ignores meta / yield / tool / node events
             }
         }
     }

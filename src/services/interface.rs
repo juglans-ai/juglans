@@ -91,4 +91,10 @@ pub trait JuglansRuntime: Send + Sync {
 
     /// Delete specific vectors by ID from a space
     async fn vector_delete(&self, space: &str, ids: Vec<String>) -> Result<Value>;
+
+    /// Set execution token for jug0-forwarded requests (default: no-op)
+    fn set_execution_token(&self, _token: Option<String>) {}
+
+    /// Set bearer token for direct frontend connections (default: no-op)
+    fn set_bearer_token(&self, _token: Option<String>) {}
 }

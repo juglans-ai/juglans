@@ -1,0 +1,9 @@
+# yield_func_test.jg — 验证 yield 在函数体内
+
+[greet(name)]: {
+  yield { type: "meta", greeting: name }
+  yield { type: "content", text: "Hi, " + name + "!" }
+  yield { type: "done" }
+}
+
+[start]: greet(name="Juglans")

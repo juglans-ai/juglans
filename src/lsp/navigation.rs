@@ -94,7 +94,7 @@ pub fn hover(doc: &DocumentState, position: Position) -> Option<Hover> {
         let desc = match var.as_str() {
             "$input" => "Input data passed to the workflow",
             "$output" => "Output from the previous node",
-            "$ctx" => "Workflow context (set via set_context)",
+            "$ctx" => "Workflow context variables",
             "$reply" => "Agent reply metadata (output, status)",
             "$error" => "Error information from on_error edge",
             _ => "Variable",
@@ -250,7 +250,7 @@ fn tool_description(name: &str) -> Option<&'static str> {
         "notify" => Some("Send notification.\n\nParams: `message`"),
         "print" => Some("Print value to output.\n\nParams: (value expression)"),
         "reply" => Some("Send reply to client.\n\nParams: `message`, `type`"),
-        "set_context" | "set" => Some("Set a context variable.\n\nParams: `key`, `value`"),
+        "set" => Some("Set a context variable.\n\nParams: `key`, `value`"),
         "serve" => Some("Mark node as HTTP entry point.\n\nParams: `method`, `path`"),
         "response" => Some("Build HTTP response.\n\nParams: `status`, `body`, `headers`"),
         "assert" => Some("Test assertion.\n\nParams: `contains`, `eq`, `true`"),

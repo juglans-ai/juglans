@@ -326,4 +326,77 @@ impl Tool for Return {
     }
 }
 
+/// call(fn="function_name", ...args) — Dynamic function dispatch by string name
+/// Looks up a function defined in the current workflow and executes it with the provided arguments.
+/// The `fn` parameter specifies the function name; all other parameters are passed as arguments.
+pub struct Call {
+    builtin_registry: Option<std::sync::Weak<super::BuiltinRegistry>>,
+}
+
+impl Default for Call {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Call {
+    pub fn new() -> Self {
+        Self {
+            builtin_registry: None,
+        }
+    }
+
+    pub fn set_registry(&mut self, registry: std::sync::Weak<super::BuiltinRegistry>) {
+        self.builtin_registry = Some(registry);
+    }
+}
+
+#[async_trait]
+impl Tool for Call {
+    fn name(&self) -> &str {
+        "call"
+    }
+    async fn execute(
+        &self,
+        params: &HashMap<String, String>,
+        context: &WorkflowContext,
+    ) -> Result<Option<Value>> {
+        let fn_name = params
+            .get("fn")
+            .ok_or_else(|| anyhow!("call() requires 'fn' parameter (function name)"))?;
+
+        // Get executor via builtin registry
+        let registry = self
+            .builtin_registry
+            .as_ref()
+            .and_then(|w| w.upgrade())
+            .ok_or_else(|| anyhow!("call(): BuiltinRegistry not available"))?;
+
+        let executor = registry
+            .get_executor()
+            .ok_or_else(|| anyhow!("call(): WorkflowExecutor not available"))?;
+
+        // Get workflow: prefer root workflow (where functions are defined),
+        // fall back to current workflow for nested contexts
+        let workflow = context
+            .get_root_workflow()
+            .or_else(|| context.get_current_workflow())
+            .ok_or_else(|| anyhow!("call(): no active workflow"))?;
+
+        // Collect remaining params as function args (exclude "fn")
+        let args: HashMap<String, Value> = params
+            .iter()
+            .filter(|(k, _)| k.as_str() != "fn")
+            .map(|(k, v)| {
+                let val = serde_json::from_str(v).unwrap_or(json!(v));
+                (k.clone(), val)
+            })
+            .collect();
+
+        executor
+            .execute_function(fn_name.clone(), args, workflow, context)
+            .await
+    }
+}
+
 // Shell has been replaced by devtools::Bash (registered as "bash" + "sh" alias)
