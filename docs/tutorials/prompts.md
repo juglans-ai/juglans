@@ -9,8 +9,8 @@ Consider a workflow with a hardcoded prompt:
 ```juglans
 agents: ["./agents/*.jgagent"]
 
-[ask]: chat(agent="assistant", message="You are a senior code reviewer. Please review the following code and provide feedback on: 1) correctness 2) performance 3) readability. Code: " + $input.code)
-[show]: print(message=$output)
+[ask]: chat(agent="assistant", message="You are a senior code reviewer. Please review the following code and provide feedback on: 1) correctness 2) performance 3) readability. Code: " + input.code)
+[show]: print(message=output)
 
 [ask] -> [show]
 ```
@@ -76,7 +76,7 @@ Use the `p()` tool to render templates, and `prompts:` metadata to load files:
 prompts: ["./prompts/*.jgprompt"]
 
 [render]: p(slug="greeting", name="Alice", style="casual")
-[show]: print(message=$output)
+[show]: print(message=output)
 
 [render] -> [show]
 ```
@@ -85,7 +85,7 @@ Line-by-line explanation:
 
 1. `prompts: ["./prompts/*.jgprompt"]` — Loads all `.jgprompt` files from the `prompts/` directory into the PromptRegistry.
 2. `p(slug="greeting", name="Alice", style="casual")` — Renders the template with slug `"greeting"`, passing `name="Alice"` and `style="casual"`.
-3. `$output` — Stores the rendered plain text result.
+3. `output` — Stores the rendered plain text result.
 
 `p()` parameter rules:
 
@@ -130,25 +130,25 @@ In a workflow, override only some variables:
 prompts: ["./prompts/*.jgprompt"]
 
 [full]: p(slug="welcome", name="Alice", role="admin", lang="Chinese")
-[show1]: print(message=$output)
+[show1]: print(message=output)
 
 [partial]: p(slug="welcome", name="Bob")
-[show2]: print(message=$output)
+[show2]: print(message=output)
 
 [full] -> [show1] -> [partial] -> [show2]
 ```
 
 `[full]` overrides all three variables. `[partial]` only passes `name="Bob"` — `role` and `lang` use their default values `"user"` and `"English"`.
 
-### Passing Dynamic Values with $input
+### Passing Dynamic Values with input
 
 Variable values can come from workflow input:
 
 ```juglans
 prompts: ["./prompts/*.jgprompt"]
 
-[render]: p(slug="welcome", name=$input.name, role=$input.role)
-[show]: print(message=$output)
+[render]: p(slug="welcome", name=input.name, role=input.role)
+[show]: print(message=output)
 
 [render] -> [show]
 ```
@@ -157,7 +157,7 @@ prompts: ["./prompts/*.jgprompt"]
 juglans app.jg --input '{"name": "Alice", "role": "admin"}'
 ```
 
-`$input.name` and `$input.role` are resolved to their actual values at execution time and passed into the template for rendering.
+`input.name` and `input.role` are resolved to their actual values at execution time and passed into the template for rendering.
 
 ## 7.5 Conditional Rendering
 
@@ -190,7 +190,7 @@ Use in a workflow:
 prompts: ["./prompts/*.jgprompt"]
 
 [expert]: p(slug="tone", topic="Transformer architecture", audience="expert")
-[show]: print(message=$output)
+[show]: print(message=output)
 
 [expert] -> [show]
 ```
@@ -336,17 +336,17 @@ Score: 95 points
 prompts: ["./prompts/*.jgprompt"]
 agents: ["./agents/*.jgagent"]
 
-[render]: p(slug="tone", topic=$input.topic, audience=$input.audience)
-[ask]: chat(agent="assistant", message=$output)
-[show]: print(message=$output)
+[render]: p(slug="tone", topic=input.topic, audience=input.audience)
+[ask]: chat(agent="assistant", message=output)
+[show]: print(message=output)
 
 [render] -> [ask] -> [show]
 ```
 
 Execution flow:
 
-1. `[render]` — `p()` renders the template, generating the complete prompt text, stored in `$output`.
-2. `[ask]` — `chat()` reads `$output` as the `message` and sends it to the AI.
+1. `[render]` — `p()` renders the template, generating the complete prompt text, stored in `output`.
+2. `[ask]` — `chat()` reads `output` as the `message` and sends it to the AI.
 3. `[show]` — Prints the AI's response.
 
 ### Inline Usage
@@ -357,8 +357,8 @@ Execution flow:
 prompts: ["./prompts/*.jgprompt"]
 agents: ["./agents/*.jgagent"]
 
-[ask]: chat(agent="assistant", message=p(slug="tone", topic=$input.topic, audience="expert"))
-[show]: print(message=$output)
+[ask]: chat(agent="assistant", message=p(slug="tone", topic=input.topic, audience="expert"))
+[show]: print(message=output)
 
 [ask] -> [show]
 ```
@@ -373,11 +373,11 @@ In complex scenarios, you can combine prompts from multiple templates:
 prompts: ["./prompts/*.jgprompt"]
 agents: ["./agents/*.jgagent"]
 
-[system]: p(slug="tone", topic=$input.topic, audience="expert")
-[save_sys]: set_context(system_prompt=$output)
+[system]: p(slug="tone", topic=input.topic, audience="expert")
+[save_sys]: system_prompt = output
 [user_msg]: p(slug="checklist")
-[ask]: chat(agent="assistant", message=$ctx.system_prompt + "\n\n" + $output)
-[show]: print(message=$output)
+[ask]: chat(agent="assistant", message=system_prompt + "\n\n" + output)
+[show]: print(message=output)
 
 [system] -> [save_sys] -> [user_msg] -> [ask] -> [show]
 ```
@@ -402,7 +402,7 @@ Key rules:
 1. Before using `p()`, you must load template files via `prompts:` metadata.
 2. The `slug` parameter is required; other parameters correspond to template variables.
 3. Values in `inputs` are defaults; parameters passed to `p()` override them.
-4. `p()` returns a rendered plain text string, stored in `$output`.
+4. `p()` returns a rendered plain text string, stored in `output`.
 5. `p()` + `chat()` is the most common combination: render the prompt first, then send it to the AI.
 
 ## Next Chapter

@@ -7,10 +7,10 @@ This chapter covers two loop constructs: **foreach** for iterating over lists, a
 Iterate over a list, executing the loop body for each element:
 
 ```juglans
-[init]: set_context(items=["apple", "banana", "cherry"])
+[init]: items = ["apple", "banana", "cherry"]
 
-[loop]: foreach($item in $ctx.items) {
-  [show]: print(message="Fruit: " + $item)
+[loop]: foreach(item in items) {
+  [show]: print(message="Fruit: " + item)
 }
 
 [done]: print(message="All done")
@@ -20,35 +20,32 @@ Iterate over a list, executing the loop body for each element:
 
 Line-by-line explanation:
 
-1. `[init]` stores a string array into `$ctx.items`.
-2. `[loop]` is the loop node. `foreach($item in $ctx.items)` means: iterate over `$ctx.items`, binding the current element to `$item` on each iteration.
+1. `[init]` stores a string array into `items`.
+2. `[loop]` is the loop node. `foreach($item in items)` means: iterate over `items`, binding the current element to `$item` on each iteration.
 3. The braces `{ ... }` contain the **loop body**, which executes once per iteration. Here there is only one node `[show]`, which prints the current fruit name.
 4. After the loop finishes, execution follows the edge to `[done]`.
 
 foreach syntax:
 
 ```text
-[node_name]: foreach($variable in $collection) {
+[node_name]: foreach($variable in collection) {
     loop body (nodes + edges)
 }
 ```
 
-The `$` prefix on `$item` is optional — `foreach(item in $ctx.items)` is equally valid. However, keeping the `$` prefix is recommended for consistency with variable references.
+The `$` prefix on `$item` is optional -- `foreach(item in items)` is equally valid. However, keeping the `$` prefix is recommended for consistency with loop-scoped variable references.
 
 ## Multiple Nodes Inside a foreach Body
 
 The loop body is not limited to a single node. You can define multiple nodes connected by edges:
 
 ```juglans
-[init]: set_context(
-  tasks=["compile", "test", "deploy"],
-  completed=0
-)
+[init]: tasks = ["compile", "test", "deploy"], completed = 0
 
-[process]: foreach($task in $ctx.tasks) {
-  [start]: print(message="Starting: " + $task)
-  [run]: notify(status="Running " + $task + "...")
-  [finish]: print(message="Finished: " + $task)
+[process]: foreach(task in tasks) {
+  [start]: print(message="Starting: " + task)
+  [run]: notify(status="Running " + task + "...")
+  [finish]: print(message="Finished: " + task)
   [start] -> [run] -> [finish]
 }
 
@@ -59,13 +56,13 @@ The loop body is not limited to a single node. You can define multiple nodes con
 
 The three nodes `[start] -> [run] -> [finish]` inside the loop body form a chain, executing in order on each iteration. The loop body is essentially a nested subgraph — node names have their own scope within the loop body and will not conflict with external nodes.
 
-## foreach with $input
+## foreach with input
 
 The most common use of foreach is iterating over external input:
 
 ```juglans
-[loop]: foreach($user in $input.users) {
-  [greet]: print(message="Hello, " + $user)
+[loop]: foreach(user in input.users) {
+  [greet]: print(message="Hello, " + user)
 }
 ```
 
@@ -80,11 +77,11 @@ juglans greet.jg --input '{"users": ["Alice", "Bob", "Charlie"]}'
 When you need to "repeat until a condition is no longer met" rather than iterate over a list, use `while`:
 
 ```juglans
-[init]: set_context(count=0)
+[init]: count = 0
 
-[loop]: while($ctx.count < 5) {
-  [step]: set_context(count=$ctx.count + 1)
-  [log]: print(message="Count: " + str($ctx.count))
+[loop]: while(count < 5) {
+  [step]: count = count + 1
+  [log]: print(message="Count: " + str(count))
   [step] -> [log]
 }
 
@@ -96,9 +93,9 @@ When you need to "repeat until a condition is no longer met" rather than iterate
 Line-by-line explanation:
 
 1. `[init]` initializes the counter `count` to 0.
-2. `[loop]` is the while loop node. Before each iteration, it checks the condition `$ctx.count < 5` — if true, the loop body executes.
+2. `[loop]` is the while loop node. Before each iteration, it checks the condition `count < 5` -- if true, the loop body executes.
 3. Inside the loop body, `[step]` increments `count` by 1, and `[log]` prints the current value.
-4. When `$ctx.count` reaches 5, the condition becomes false, the loop ends, and `[done]` executes.
+4. When `count` reaches 5, the condition becomes false, the loop ends, and `[done]` executes.
 
 while syntax:
 
@@ -116,29 +113,29 @@ while condition expressions use the same syntax as `if` conditional edges, suppo
 
 | Expression | Meaning |
 |--------|------|
-| `$ctx.count < 10` | Less than |
-| `$ctx.status != "done"` | Not equal to |
-| `$ctx.active && $ctx.count < 100` | Logical AND |
+| `count < 10` | Less than |
+| `status != "done"` | Not equal to |
+| `active && count < 100` | Logical AND |
 
 ## Using Context Within Loops
 
-One of the core capabilities of loops is **accumulating results** across iterations. The foreach loop variable is overwritten on each iteration, but `$ctx` persists throughout the entire workflow — you can leverage this to collect data within loops:
+One of the core capabilities of loops is **accumulating results** across iterations. The foreach loop variable is overwritten on each iteration, but context variables persist throughout the entire workflow -- you can leverage this to collect data within loops:
 
 ```juglans
-[init]: set_context(total=0, items=[10, 20, 30, 40])
+[init]: total = 0, items = [10, 20, 30, 40]
 
-[sum]: foreach($n in $ctx.items) {
-  [add]: set_context(total=$ctx.total + $n)
+[sum]: foreach(n in items) {
+  [add]: total = total + n
 }
 
-[result]: print(message="Sum: " + str($ctx.total))
+[result]: print(message="Sum: " + str(total))
 
 [init] -> [sum] -> [result]
 ```
 
 Execution trace:
 
-| Iteration | $n | $ctx.total (after iteration) |
+| Iteration | $n | total (after iteration) |
 |------|----|---------------------|
 | 1    | 10 | 10                  |
 | 2    | 20 | 30                  |
@@ -150,16 +147,13 @@ Execution trace:
 The same pattern applies to while loops. The following example builds a list within a while loop:
 
 ```juglans
-[init]: set_context(i=0, squares=[])
+[init]: i = 0, squares = []
 
-[build]: while($ctx.i < 5) {
-  [calc]: set_context(
-    squares=append($ctx.squares, $ctx.i * $ctx.i),
-    i=$ctx.i + 1
-  )
+[build]: while(i < 5) {
+  [calc]: squares = append(squares, i * i), i = i + 1
 }
 
-[show]: print(message="Squares: " + json($ctx.squares))
+[show]: print(message="Squares: " + json(squares))
 
 [init] -> [build] -> [show]
 ```
@@ -171,28 +165,22 @@ The `append()` function appends a new element to the end of an array and returns
 A data processing pipeline: receive a batch of records, filter and summarize them.
 
 ```juglans
-[init]: set_context(
-  records=[
+[init]: records = [
     {"name": "Alice", "score": 85},
     {"name": "Bob", "score": 42},
     {"name": "Charlie", "score": 91},
     {"name": "Diana", "score": 67},
     {"name": "Eve", "score": 55}
-  ],
-  passed=0,
-  total=0
-)
+  ], passed = 0, total = 0
 
-[process]: foreach($record in $ctx.records) {
-  [count]: set_context(total=$ctx.total + 1)
-  [check]: set_context(
-    passed=$ctx.passed + 1
-  )
+[process]: foreach(record in records) {
+  [count]: total = total + 1
+  [check]: passed = passed + 1
   [count] -> [check]
 }
 
 [report]: print(
-  message="Results: " + str($ctx.passed) + "/" + str($ctx.total) + " processed"
+  message="Results: " + str(passed) + "/" + str(total) + " processed"
 )
 
 [init] -> [process] -> [report]
@@ -206,10 +194,10 @@ This workflow demonstrates a typical use of loops in real-world scenarios:
 
 ## Summary
 
-- **foreach** `[node]: foreach($item in $list) { ... }` — Iterate over a list, executing the loop body once per element
+- **foreach** `[node]: foreach($item in list) { ... }` -- Iterate over a list, executing the loop body once per element
 - **while** `[node]: while(condition) { ... }` — Repeat the loop body while the condition is true
 - The loop body is a nested subgraph that can contain multiple nodes and edges
-- Use `$ctx` to accumulate data across iterations (counting, summing, building lists)
+- Use context variables to accumulate data across iterations (counting, summing, building lists)
 - The while loop body must modify the condition variable; the engine has a maximum iteration limit for protection
 - The `append()` function appends elements to an array
 

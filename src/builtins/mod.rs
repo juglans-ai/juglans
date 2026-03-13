@@ -52,6 +52,7 @@ pub struct BuiltinRegistry {
     /// Back-reference to WorkflowExecutor for nested execution.
     /// Set post-construction via `set_executor()`. See struct-level docs for rationale.
     executor: RwLock<Option<std::sync::Weak<crate::core::executor::WorkflowExecutor>>>,
+    runtime: Arc<dyn JuglansRuntime>,
     _prompt_registry: Arc<PromptRegistry>,
     _agent_registry: Arc<AgentRegistry>,
 }
@@ -81,7 +82,7 @@ impl BuiltinRegistry {
         reg!(system::Return);
 
         // HTTP backend
-        reg!(http::Serve);
+        // Serve is registered post-construction (needs Weak<BuiltinRegistry>)
         reg!(http::HttpResponse);
 
         // Devtools (Claude Code style)
@@ -106,6 +107,19 @@ impl BuiltinRegistry {
         // Testing tools
         reg!(testing::Config);
         // Mock is registered post-construction (needs Weak<BuiltinRegistry>)
+
+        // Device control
+        reg!(device::KeyTap);
+        reg!(device::KeyCombo);
+        reg!(device::TypeText);
+        reg!(device::MouseMove);
+        reg!(device::MouseClick);
+        reg!(device::MouseScroll);
+        reg!(device::MousePosition);
+        reg!(device::MouseDrag);
+        reg!(device::ScreenSize);
+        reg!(device::Screenshot);
+        // KeyListen / MouseListen registered post-construction (need Weak<BuiltinRegistry>)
 
         // Database ORM
         reg!(database::DbConnect);
@@ -133,6 +147,7 @@ impl BuiltinRegistry {
         let registry_arc = Arc::new(Self {
             tools: RwLock::new(tool_map),
             executor: RwLock::new(None),
+            runtime: runtime.clone(),
             _prompt_registry: prompts.clone(),
             _agent_registry: agents.clone(),
         });
@@ -146,6 +161,18 @@ impl BuiltinRegistry {
         let mut mock_tool = testing::Mock::new();
         mock_tool.set_registry(Arc::downgrade(&registry_arc));
 
+        let mut call_tool = system::Call::new();
+        call_tool.set_registry(Arc::downgrade(&registry_arc));
+
+        let mut serve_tool = http::Serve::new();
+        serve_tool.set_registry(Arc::downgrade(&registry_arc));
+
+        let mut key_listen_tool = device::KeyListen::new();
+        key_listen_tool.set_registry(Arc::downgrade(&registry_arc));
+
+        let mut mouse_listen_tool = device::MouseListen::new();
+        mouse_listen_tool.set_registry(Arc::downgrade(&registry_arc));
+
         {
             let mut guard = registry_arc.tools.write().expect("Lock poisoned");
             guard.insert("chat".to_string(), Arc::new(Box::new(chat_tool)));
@@ -154,6 +181,16 @@ impl BuiltinRegistry {
                 Arc::new(Box::new(exec_wf_tool)),
             );
             guard.insert("mock".to_string(), Arc::new(Box::new(mock_tool)));
+            guard.insert("call".to_string(), Arc::new(Box::new(call_tool)));
+            guard.insert("serve".to_string(), Arc::new(Box::new(serve_tool)));
+            guard.insert(
+                "key_listen".to_string(),
+                Arc::new(Box::new(key_listen_tool)),
+            );
+            guard.insert(
+                "mouse_listen".to_string(),
+                Arc::new(Box::new(mouse_listen_tool)),
+            );
         }
 
         registry_arc
@@ -194,6 +231,11 @@ impl BuiltinRegistry {
     /// Get WorkflowExecutor reference (for accessing ToolRegistry)
     pub fn get_executor(&self) -> Option<Arc<crate::core::executor::WorkflowExecutor>> {
         self.executor.read().ok()?.as_ref()?.upgrade()
+    }
+
+    /// Get runtime reference (for injecting execution tokens, etc.)
+    pub fn get_runtime(&self) -> Arc<dyn JuglansRuntime> {
+        self.runtime.clone()
     }
 
     /// Execute nested workflow (called by Chat tool)
@@ -273,6 +315,7 @@ impl BuiltinRegistry {
 
 pub mod ai;
 pub mod database;
+pub mod device;
 pub mod devtools;
 pub mod http;
 pub mod network;

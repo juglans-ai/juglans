@@ -34,9 +34,8 @@ pub enum TokenKind {
     False,
     Null,
 
-    // Identifiers & variables
+    // Identifiers
     Ident(String),
-    Variable(String), // $var.path
 
     // Keywords
     If,
@@ -53,6 +52,8 @@ pub enum TokenKind {
     While,
     Assert,
     New,
+    Yield,
+    At, // @
 
     // Special
     Newline,
@@ -86,7 +87,6 @@ impl TokenKind {
             Self::True | Self::False => "boolean",
             Self::Null => "null",
             Self::Ident(_) => "identifier",
-            Self::Variable(_) => "variable",
             Self::If => "'if'",
             Self::On => "'on'",
             Self::Error => "'error'",
@@ -101,6 +101,8 @@ impl TokenKind {
             Self::Err => "'err'",
             Self::Return => "'return'",
             Self::New => "'new'",
+            Self::Yield => "'yield'",
+            Self::At => "'@'",
             Self::Newline => "newline",
             Self::Eof => "end of file",
         }

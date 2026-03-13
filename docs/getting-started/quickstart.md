@@ -38,8 +38,8 @@ Workflow complete.
 Workflows become useful when they accept input. Edit `hello.jg`:
 
 ```juglans
-[greet]: print(message="Hello, " + $input.name + "!")
-[info]: print(message="You are " + $input.role)
+[greet]: print(message="Hello, " + input.name + "!")
+[info]: print(message="You are " + input.role)
 [greet] -> [info]
 ```
 
@@ -56,15 +56,15 @@ Hello, Alice!
 You are developer
 ```
 
-**`$input`** refers to the JSON data you pass via `--input`. Use dot notation to access fields: `$input.name`, `$input.role`.
+**`input`** refers to the JSON data you pass via `--input`. Use dot notation to access fields: `input.name`, `input.role`.
 
 ## Step 3: Use Context Variables
 
 Nodes can store data in the workflow **context** and pass it to later nodes:
 
 ```juglans
-[init]: set_context(greeting="Good morning", count=3)
-[show]: print(message=$ctx.greeting + " — count is " + str($ctx.count))
+[init]: greeting = "Good morning", count = 3
+[show]: print(message=greeting + " — count is " + str(count))
 [init] -> [show]
 ```
 
@@ -78,20 +78,20 @@ Output:
 Good morning — count is 3
 ```
 
-**`$ctx`** is the shared context. `set_context()` writes to it, `$ctx.key` reads from it. The `str()` function converts a number to string for concatenation.
+Variables are shared across the workflow. Use assignment syntax to set them, and read by name. The `str()` function converts a number to string for concatenation.
 
 ## Step 4: Branching
 
 Make your workflow take different paths based on conditions:
 
 ```juglans
-[check]: set_context(score=85)
+[check]: score = 85
 [pass]: print(message="Passed!")
 [fail]: print(message="Failed.")
 [done]: print(message="Evaluation complete.")
 
-[check] if $ctx.score >= 60 -> [pass]
-[check] if $ctx.score < 60 -> [fail]
+[check] if score >= 60 -> [pass]
+[check] if score < 60 -> [fail]
 [pass] -> [done]
 [fail] -> [done]
 ```
@@ -116,16 +116,16 @@ Try changing the score to `50` and run again — you'll see `Failed.` instead.
 Let's combine everything into a workflow that processes a task:
 
 ```juglans
-[start]: set_context(status="received")
-[validate]: set_context(status="validated")
-[process]: print(message="Processing task: " + $input.task)
+[start]: status = "received"
+[validate]: status = "validated"
+[process]: print(message="Processing task: " + input.task)
 [success]: print(message="Task completed successfully")
 [error]: print(message="Task validation failed")
-[done]: print(message="Final status: " + $ctx.status)
+[done]: print(message="Final status: " + status)
 
 [start] -> [validate]
-[validate] if $input.priority == "high" -> [process]
-[validate] if $input.priority != "high" -> [error]
+[validate] if input.priority == "high" -> [process]
+[validate] if input.priority != "high" -> [error]
 [process] -> [success]
 [success] -> [done]
 [error] -> [done]
@@ -169,8 +169,8 @@ You've learned the core building blocks:
 |---------|--------|-------------|
 | **Node** | `[name]: tool(params)` | Step 1 |
 | **Edge** | `[a] -> [b]` | Step 1 |
-| **Input** | `$input.field` | Step 2 |
-| **Context** | `set_context()` / `$ctx.key` | Step 3 |
+| **Input** | `input.field` | Step 2 |
+| **Context** | `key = value` (assignment syntax) | Step 3 |
 | **Conditionals** | `[a] if expr -> [b]` | Step 4 |
 | **Composition** | Combine nodes into real workflows | Step 5 |
 | **Structure** | `src/` layout with agents, prompts, tools | Step 6 |
@@ -178,7 +178,7 @@ You've learned the core building blocks:
 Continue with the tutorials to learn the language in depth:
 
 - **[Tutorial 1: Hello Workflow](../tutorials/hello-workflow.md)** — Deeper dive into nodes and edges
-- **[Tutorial 2: Variables & Data Flow](../tutorials/variables.md)** — Master `$input`, `$output`, `$ctx`
+- **[Tutorial 2: Variables & Data Flow](../tutorials/variables.md)** — Master `input`, `output`, context variables
 - **[Tutorial 3: Branching & Routing](../tutorials/branching.md)** — `if`, `switch`, complex routing
 
 Or jump to the reference if you want to explore on your own:

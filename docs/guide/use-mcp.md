@@ -15,17 +15,17 @@ libs: ["std/mcps.jg"]
 [github]: mcps.MCP(name="github", url="http://localhost:3001/mcp/github")
 [fs]: mcps.MCP(name="fs", url="http://localhost:3001/mcp/filesystem")
 
-# $ctx.mcp_tools contains all discovered tools in OpenAI function calling format
+# mcp_tools contains all discovered tools in OpenAI function calling format
 [ask]: chat(
-  message=$input.message,
-  tools=$ctx.mcp_tools,
+  message=input.message,
+  tools=mcp_tools,
   on_tool=[mcps.handle]
 )
 
 [github] -> [fs] -> [ask]
 ```
 
-That's it. Each `mcps.MCP()` call fetches the server's `tools/list`, converts schemas to OpenAI format, and accumulates them into `$ctx.mcp_tools`. The `mcps.handle` function routes tool calls to the correct server by name prefix.
+That's it. Each `mcps.MCP()` call fetches the server's `tools/list`, converts schemas to OpenAI format, and accumulates them into `mcp_tools`. The `mcps.handle` function routes tool calls to the correct server by name prefix.
 
 ## How It Works
 
@@ -50,12 +50,12 @@ libs: ["std/mcps.jg"]
 [github]: mcps.MCP(
   name="github",
   url="http://localhost:3001/mcp/github",
-  token=$input.github_token
+  token=input.github_token
 )
 
 [ask]: chat(
-  message=$input.message,
-  tools=$ctx.mcp_tools,
+  message=input.message,
+  tools=mcp_tools,
   on_tool=[mcps.handle]
 )
 
@@ -69,18 +69,18 @@ libs: ["std/mcps.jg"]
 agents: ["./agents/*.jgagent"]
 
 # Connect to GitHub and filesystem MCP servers
-[github]: mcps.MCP(name="github", url="http://localhost:3001/mcp/github", token=$input.github_token)
+[github]: mcps.MCP(name="github", url="http://localhost:3001/mcp/github", token=input.github_token)
 [fs]: mcps.MCP(name="fs", url="http://localhost:3001/mcp/filesystem")
 
 # AI agent with access to all MCP tools
 [review]: chat(
   agent="code-reviewer",
-  message="Review PR #" + str($input.pr_number) + " in " + $input.repo,
-  tools=$ctx.mcp_tools,
+  message="Review PR #" + str(input.pr_number) + " in " + input.repo,
+  tools=mcp_tools,
   on_tool=[mcps.handle]
 )
 
-[notify]: print(message="Review completed: " + $output)
+[notify]: print(message="Review completed: " + output)
 
 [github] -> [fs] -> [review] -> [notify]
 ```
@@ -140,7 +140,7 @@ Then use it:
 libs: ["std/mcps.jg"]
 
 [my_server]: mcps.MCP(name="my-tools", url="http://localhost:5000")
-[ask]: chat(message=$input.query, tools=$ctx.mcp_tools, on_tool=[mcps.handle])
+[ask]: chat(message=input.query, tools=mcp_tools, on_tool=[mcps.handle])
 
 [my_server] -> [ask]
 ```

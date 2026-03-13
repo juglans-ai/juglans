@@ -1,0 +1,75 @@
+# std/device.jg — Device Control Library
+#
+# Keyboard/mouse simulation, event listening, and screen capture.
+#
+# Usage:
+#   libs: ["std/device.jg"]
+#
+#   [_]: device.click(x=100, y=200)
+#   [_]: device.type(text="Hello")
+#   [_]: device.hotkey(keys=["meta", "c"])
+#   [pos]: device.cursor()
+#   [size]: device.screen()
+#   [_]: device.capture(path="shot.png")
+#   [_]: device.listen_keys(on_press=[handler])
+
+# --- Keyboard ---
+
+# Tap a single key
+[tap(key)]: key_tap(key=key)
+
+# Key combination (e.g. Cmd+C)
+[hotkey(keys)]: key_combo(keys=keys)
+
+# Type text string
+[type(text, delay_ms)]: type_text(text=text, delay_ms=default(delay_ms, 0))
+
+# --- Mouse ---
+
+# Move to (x, y) and click
+[click(x, y, button)]: {
+  mouse_move(x=x, y=y)
+  mouse_click(button=default(button, "left"))
+}
+
+# Double click
+[double_click(x, y, button)]: {
+  mouse_move(x=x, y=y)
+  mouse_click(button=default(button, "left"), count=2)
+}
+
+# Right click
+[right_click(x, y)]: {
+  mouse_move(x=x, y=y)
+  mouse_click(button="right")
+}
+
+# Drag from (x1,y1) to (x2,y2)
+[drag(x1, y1, x2, y2, button, duration_ms)]: mouse_drag(x1=x1, y1=y1, x2=x2, y2=y2, button=default(button, "left"), duration_ms=default(duration_ms, 300))
+
+# Scroll (y>0 up, y<0 down)
+[scroll(y, x)]: mouse_scroll(y=y, x=default(x, 0))
+
+# Get cursor position → {x, y}
+[cursor()]: mouse_position()
+
+# Move cursor without clicking
+[move(x, y)]: mouse_move(x=x, y=y)
+
+# --- Screen ---
+
+# Screen dimensions → {width, height}
+[screen()]: screen_size()
+
+# Screenshot → {path, width, height}
+[capture(path, x, y, w, h)]: screenshot(path=path, x=default(x, 0), y=default(y, 0), w=default(w, 0), h=default(h, 0))
+
+# --- Listeners (callback handler style) ---
+
+# Listen keyboard events — on_press=[handler_func]
+# handler receives (key, modifiers) params
+[listen_keys(on_press, keys, timeout_ms)]: key_listen(on_press=on_press, keys=default(keys, []), timeout_ms=default(timeout_ms, 0))
+
+# Listen mouse events — on_click=[handler_func], on_move=[handler_func]
+# click handler receives (button, x, y), move handler receives (x, y)
+[listen_mouse(on_click, on_move, timeout_ms)]: mouse_listen(on_click=on_click, on_move=default(on_move, ""), timeout_ms=default(timeout_ms, 0))

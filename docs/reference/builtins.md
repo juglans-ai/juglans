@@ -53,7 +53,7 @@ Composite syntax: `state="input_state:output_state"` controls input and output i
 ```juglans
 [classify]: chat(
   agent="classifier",
-  message=$input.text,
+  message=input.text,
   format="json"
 )
 ```
@@ -61,7 +61,7 @@ Composite syntax: `state="input_state:output_state"` controls input and output i
 ```juglans
 [hidden]: chat(
   agent="analyst",
-  message=$input.data,
+  message=input.data,
   state="context_hidden"
 )
 ```
@@ -69,8 +69,8 @@ Composite syntax: `state="input_state:output_state"` controls input and output i
 ```juglans
 [reply]: chat(
   agent="assistant",
-  chat_id=$reply.chat_id,
-  message=$input.followup
+  chat_id=reply.chat_id,
+  message=input.followup
 )
 ```
 
@@ -105,7 +105,7 @@ Search for relevant content in memory storage (semantic/RAG search via Jug0).
 **Example:**
 
 ```juglans
-[search]: memory_search(query=$input.question, limit=5)
+[search]: memory_search(query=input.question, limit=5)
 ```
 
 ---
@@ -122,7 +122,7 @@ Fetch chat history for a conversation session.
 **Example:**
 
 ```juglans
-[msgs]: history(chat_id=$reply.chat_id, include_all="true")
+[msgs]: history(chat_id=reply.chat_id, include_all="true")
 ```
 
 ---
@@ -147,11 +147,11 @@ Print a message to stdout. No prefix, no context modification. Suitable for debu
 
 ### notify()
 
-Send a status notification. Updates `$reply.status` and displays in console/UI.
+Send a status notification. Updates `reply.status` and displays in console/UI.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `status` | string | No | - | Status text (updates `$reply.status`) |
+| `status` | string | No | - | Status text (updates `reply.status`) |
 | `message` | string | No | `""` | Notification message |
 
 **Example:**
@@ -162,35 +162,27 @@ Send a status notification. Updates `$reply.status` and displays in console/UI.
 
 ---
 
-### set_context()
+### Assignment Syntax
 
-Set one or more context variables. Supports two modes.
+Set one or more context variables using assignment syntax.
 
-**Multi-field mode** (recommended):
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `<key>` | any | Yes | - | Any key-value pairs to set on `$ctx` |
-
-**Legacy mode:**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `path` | string | Yes | - | Context key path |
-| `value` | any | Yes | - | Value to assign |
+| Syntax | Description |
+|--------|-------------|
+| `[node]: key = value` | Set a single variable |
+| `[node]: k1 = v1, k2 = v2` | Set multiple variables |
 
 **Example:**
 
 ```juglans
-[init]: set_context(count=0, status="ready")
+[init]: count = 0, status = "ready"
 ```
 
 ```juglans
-[inc]: set_context(count=$ctx.count + 1)
+[inc]: count = count + 1
 ```
 
 ```juglans
-[add]: set_context(results=append($ctx.results, $output))
+[add]: results = append(results, output)
 ```
 
 ---
@@ -235,7 +227,7 @@ Return a text message directly without calling an AI model. Supports state contr
 
 ### return()
 
-Explicitly return a value as `$output`. Designed for use inside function definitions.
+Explicitly return a value as `output`. Designed for use inside function definitions.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
@@ -245,7 +237,7 @@ Explicitly return a value as `$output`. Designed for use inside function definit
 
 ```juglans
 [add(a, b)]: {
-  result = return(value=$ctx.a + $ctx.b)
+  result = return(value=a + b)
 }
 
 [main]: add(a=1, b=2)
@@ -282,7 +274,7 @@ Send an HTTP request. Recommended over `fetch_url()`.
 [post]: fetch(
   url="https://api.example.com/submit",
   method="POST",
-  body=$input.data
+  body=input.data
 )
 ```
 
@@ -315,7 +307,7 @@ HTTP request tool (legacy). `fetch()` is recommended instead.
 
 ### serve()
 
-Mark a workflow node as the HTTP entry point. When `juglans web` starts, it scans all `.jg` files and registers the workflow containing `serve()` as the catch-all HTTP handler. At runtime, `serve()` is a pass-through that reads pre-injected request data and computes `$input.route`.
+Mark a workflow node as the HTTP entry point. When `juglans web` starts, it scans all `.jg` files and registers the workflow containing `serve()` as the catch-all HTTP handler. At runtime, `serve()` is a pass-through that reads pre-injected request data and computes `input.route`.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
@@ -325,12 +317,12 @@ Mark a workflow node as the HTTP entry point. When `juglans web` starts, it scan
 
 | Variable | Type | Description |
 |----------|------|-------------|
-| `$input.method` | string | HTTP method (`GET`, `POST`, etc.) |
-| `$input.path` | string | Request path |
-| `$input.query` | object | Query parameters |
-| `$input.body` | any | Request body |
-| `$input.headers` | object | HTTP headers |
-| `$input.route` | string | Auto-computed `"METHOD /path"` |
+| `input.method` | string | HTTP method (`GET`, `POST`, etc.) |
+| `input.path` | string | Request path |
+| `input.query` | object | Query parameters |
+| `input.body` | any | Request body |
+| `input.headers` | object | HTTP headers |
+| `input.route` | string | Auto-computed `"METHOD /path"` |
 
 **Example:**
 
@@ -340,7 +332,7 @@ Mark a workflow node as the HTTP entry point. When `juglans web` starts, it scan
 [hello]: response(status=200, body={"message": "Hello!"})
 [not_found]: response(status=404, body={"error": "Not found"})
 
-[request] -> switch $input.route {
+[request] -> switch input.route {
   "GET /api/hello": [hello]
   default: [not_found]
 }
@@ -350,7 +342,7 @@ Mark a workflow node as the HTTP entry point. When `juglans web` starts, it scan
 
 ### response()
 
-Set the HTTP response for a `serve()` workflow. Writes to `$response.*` which the web server reads after execution.
+Set the HTTP response for a `serve()` workflow. Writes to `response.*` which the web server reads after execution.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
@@ -359,7 +351,7 @@ Set the HTTP response for a `serve()` workflow. Writes to `$response.*` which th
 | `headers` | object | No | - | Custom response headers |
 | `file` | string | No | - | File path to serve |
 
-If `response()` is never called, the web server returns status `200` with `$output` as body.
+If `response()` is never called, the web server returns status `200` with `output` as body.
 
 **Example:**
 
@@ -368,7 +360,7 @@ If `response()` is never called, the web server returns status `200` with `$outp
 ```
 
 ```juglans
-[cors]: response(status=200, body=$output, headers={"X-Custom": "value"})
+[cors]: response(status=200, body=output, headers={"X-Custom": "value"})
 ```
 
 ---
@@ -423,7 +415,7 @@ Write content to a file (overwrite). Automatically creates parent directories.
 **Example:**
 
 ```juglans
-[write]: write_file(file_path="./output/result.json", content=$ctx.result)
+[write]: write_file(file_path="./output/result.json", content=result)
 ```
 
 ---
@@ -613,7 +605,7 @@ Search for similar vectors in a space.
 **Example:**
 
 ```juglans
-[results]: vector_search(query=$input.question, space="docs", limit=10)
+[results]: vector_search(query=input.question, space="docs", limit=10)
 ```
 
 ---
@@ -728,77 +720,77 @@ Functions available in parameter expressions.
 
 | Function | Description | Example |
 |----------|-------------|---------|
-| `len(x)` | Length of string, array, or object | `len($ctx.items)` |
-| `json(x)` | Serialize to JSON string | `json($ctx.data)` |
-| `append(arr, item)` | Append element to array | `append($ctx.list, $output)` |
-| `keys(obj)` | Get object keys as array | `keys($ctx.config)` |
-| `values(obj)` | Get object values as array | `values($ctx.config)` |
-| `flatten(arr)` | Flatten nested arrays | `flatten($ctx.nested)` |
-| `unique(arr)` | Remove duplicate elements | `unique($ctx.tags)` |
-| `sort(arr)` | Sort array | `sort($ctx.scores)` |
-| `reverse(arr)` | Reverse array | `reverse($ctx.items)` |
-| `slice(arr, start, end)` | Sub-array extraction | `slice($ctx.items, 0, 5)` |
-| `sum(arr)` | Sum numeric array | `sum($ctx.values)` |
+| `len(x)` | Length of string, array, or object | `len(items)` |
+| `json(x)` | Serialize to JSON string | `json(data)` |
+| `append(arr, item)` | Append element to array | `append(list, output)` |
+| `keys(obj)` | Get object keys as array | `keys(config)` |
+| `values(obj)` | Get object values as array | `values(config)` |
+| `flatten(arr)` | Flatten nested arrays | `flatten(nested)` |
+| `unique(arr)` | Remove duplicate elements | `unique(tags)` |
+| `sort(arr)` | Sort array | `sort(scores)` |
+| `reverse(arr)` | Reverse array | `reverse(items)` |
+| `slice(arr, start, end)` | Sub-array extraction | `slice(items, 0, 5)` |
+| `sum(arr)` | Sum numeric array | `sum(values)` |
 | `range(n)` | Generate `[0, 1, ..., n-1]` | `range(10)` |
-| `default(val, fallback)` | Return `fallback` if `val` is null | `default($ctx.x, 0)` |
+| `default(val, fallback)` | Return `fallback` if `val` is null | `default(x, 0)` |
 
 ### String Functions
 
 | Function | Description | Example |
 |----------|-------------|---------|
-| `str(x)` | Convert to string | `str($ctx.count)` |
-| `upper(s)` | Uppercase | `upper($input.name)` |
-| `lower(s)` | Lowercase | `lower($input.name)` |
-| `trim(s)` | Strip whitespace | `trim($input.text)` |
-| `split(s, delim)` | Split string into array | `split($input.csv, ",")` |
-| `join(arr, delim)` | Join array into string | `join($ctx.tags, ", ")` |
-| `replace(s, old, new)` | Replace substring | `replace($input.text, "foo", "bar")` |
-| `contains(s, sub)` | Check if string/array contains value | `contains($ctx.list, "x")` |
+| `str(x)` | Convert to string | `str(count)` |
+| `upper(s)` | Uppercase | `upper(input.name)` |
+| `lower(s)` | Lowercase | `lower(input.name)` |
+| `trim(s)` | Strip whitespace | `trim(input.text)` |
+| `split(s, delim)` | Split string into array | `split(input.csv, ",")` |
+| `join(arr, delim)` | Join array into string | `join(tags, ", ")` |
+| `replace(s, old, new)` | Replace substring | `replace(input.text, "foo", "bar")` |
+| `contains(s, sub)` | Check if string/array contains value | `contains(list, "x")` |
 
 ### Numeric Functions
 
 | Function | Description | Example |
 |----------|-------------|---------|
-| `int(x)` | Convert to integer | `int($input.count)` |
-| `float(x)` | Convert to float | `float($input.price)` |
-| `abs(x)` | Absolute value | `abs($ctx.delta)` |
-| `round(x)` | Round to nearest integer | `round($ctx.score)` |
-| `min(a, b)` / `min(arr)` | Minimum value | `min($ctx.a, $ctx.b)` |
-| `max(a, b)` / `max(arr)` | Maximum value | `max($ctx.scores)` |
+| `int(x)` | Convert to integer | `int(input.count)` |
+| `float(x)` | Convert to float | `float(input.price)` |
+| `abs(x)` | Absolute value | `abs(delta)` |
+| `round(x)` | Round to nearest integer | `round(score)` |
+| `min(a, b)` / `min(arr)` | Minimum value | `min(a, b)` |
+| `max(a, b)` / `max(arr)` | Maximum value | `max(scores)` |
 
 ### Type & Logic Functions
 
 | Function | Description | Example |
 |----------|-------------|---------|
-| `type(x)` | Type name as string | `type($ctx.value)` |
-| `if(cond, a, b)` | Conditional expression | `if($ctx.ok, "yes", "no")` |
+| `type(x)` | Type name as string | `type(value)` |
+| `if(cond, a, b)` | Conditional expression | `if(ok, "yes", "no")` |
 
 ### Operators
 
 ```text
 # Arithmetic
-$ctx.a + $ctx.b        # Addition / String concatenation
-$ctx.a - $ctx.b        # Subtraction
-$ctx.a * $ctx.b        # Multiplication
-$ctx.a / $ctx.b        # Division
-$ctx.a % $ctx.b        # Modulo
+a + b        # Addition / String concatenation
+a - b        # Subtraction
+a * b        # Multiplication
+a / b        # Division
+a % b        # Modulo
 
 # Comparison
-$ctx.a == $ctx.b       # Equal
-$ctx.a != $ctx.b       # Not equal
-$ctx.a > $ctx.b        # Greater than
-$ctx.a >= $ctx.b       # Greater than or equal
-$ctx.a < $ctx.b        # Less than
-$ctx.a <= $ctx.b       # Less than or equal
+a == b       # Equal
+a != b       # Not equal
+a > b        # Greater than
+a >= b       # Greater than or equal
+a < b        # Less than
+a <= b       # Less than or equal
 
 # Logical
-$ctx.a and $ctx.b      # Logical AND (also &&)
-$ctx.a or $ctx.b       # Logical OR (also ||)
-not $ctx.flag          # Logical NOT (also !)
+a and b      # Logical AND (also &&)
+a or b       # Logical OR (also ||)
+not flag     # Logical NOT (also !)
 
 # Membership
-$item in $ctx.list     # Membership test
-$item not in $ctx.list # Negated membership
+$item in list     # Membership test
+$item not in list # Negated membership
 ```
 
 ---
@@ -809,29 +801,26 @@ $item not in $ctx.list # Negated membership
 prompts: ["./prompts/*.jgprompt"]
 agents: ["./agents/*.jgagent"]
 
-[init]: set_context(results=[], processed=0)
+[init]: results = [], processed = 0
 [start_notify]: notify(status="Starting data processing...")
 
-[fetch_data]: fetch(url=$input.data_url)
+[fetch_data]: fetch(url=input.data_url)
 
-[process]: foreach($item in $output.items) {
-  [render]: p(slug="analyze-item", item=$item)
-  [analyze]: chat(agent="analyst", message=$output, format="json")
-  [collect]: set_context(
-    results=append($ctx.results, $output),
-    processed=$ctx.processed + 1
-  )
-  [progress]: notify(status="Processed: " + str($ctx.processed))
+[process]: foreach(item in output.items) {
+  [render]: p(slug="analyze-item", item=item)
+  [analyze]: chat(agent="analyst", message=output, format="json")
+  [collect]: results = append(results, output), processed = processed + 1
+  [progress]: notify(status="Processed: " + str(processed))
 
   [render] -> [analyze] -> [collect] -> [progress]
 }
 
 [summarize]: chat(
   agent="summarizer",
-  message="Summarize: " + json($ctx.results)
+  message="Summarize: " + json(results)
 )
 
-[done]: notify(status="Done! Processed " + str($ctx.processed) + " items")
+[done]: notify(status="Done! Processed " + str(processed) + " items")
 
 [init] -> [start_notify] -> [fetch_data] -> [process] -> [summarize] -> [done]
 ```

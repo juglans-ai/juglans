@@ -21,48 +21,45 @@ agents: ["./agents/test-worker.jgagent"]
   agent="test-worker",
   message=p(
     slug="intent-classifier",
-    user_message=$input.message
+    user_message=input.message
   ),
   format="json"
 )
 
 # 3. 保存意图到上下文
-[save_intent]: set(
-  intent=$classify_intent.output.intent,
-  confidence=$classify_intent.output.confidence
-)
+[save_intent]: intent = classify_intent.output.intent, confidence = classify_intent.output.confidence
 
 # 4. 根据意图分支处理
-[route]: notify(status="🔀 路由到: " + $ctx.intent)
+[route]: notify(status="🔀 路由到: " + intent)
 
 # 5a. 问候类回复
 [handle_greeting]: chat(
   agent="test-worker",
-  message="用户说：" + $input.message + "\n请给出友好的问候回复。"
+  message="用户说：" + input.message + "\n请给出友好的问候回复。"
 )
 
 # 5b. 问题类回复
 [handle_question]: chat(
   agent="test-worker",
-  message="用户提问：" + $input.message + "\n请给出详细的解答。"
+  message="用户提问：" + input.message + "\n请给出详细的解答。"
 )
 
 # 5c. 命令类回复
 [handle_command]: chat(
   agent="test-worker",
-  message="用户命令：" + $input.message + "\n请确认并说明如何执行。"
+  message="用户命令：" + input.message + "\n请确认并说明如何执行。"
 )
 
 # 5d. 闲聊类回复
 [handle_chat]: chat(
   agent="test-worker",
-  message="用户说：" + $input.message + "\n请自然地聊天回应。"
+  message="用户说：" + input.message + "\n请自然地聊天回应。"
 )
 
 # 6. 最终回复
 [reply]: notify(
   status="✅ 完成",
-  message=$output
+  message=output
 )
 
 # ========== 流程定义 ==========
@@ -71,10 +68,10 @@ agents: ["./agents/test-worker.jgagent"]
 [start] -> [classify_intent] -> [save_intent] -> [route]
 
 # 条件路由（根据意图类型）
-[route] if $ctx.intent == "greeting" -> [handle_greeting]
-[route] if $ctx.intent == "question" -> [handle_question]
-[route] if $ctx.intent == "command" -> [handle_command]
-[route] if $ctx.intent == "chat" -> [handle_chat]
+[route] if intent == "greeting" -> [handle_greeting]
+[route] if intent == "question" -> [handle_question]
+[route] if intent == "command" -> [handle_command]
+[route] if intent == "chat" -> [handle_chat]
 
 # 默认路由（兜底）
 [route] -> [handle_chat]

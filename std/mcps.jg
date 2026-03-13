@@ -10,7 +10,7 @@
 #   [fs]: mcps.MCP(name="fs", url="http://localhost:3002/mcp")
 #
 #   # All tools:
-#   [ask]: chat(tools=$ctx.mcp_tools, on_tool=[mcps.handle])
+#   [ask]: chat(tools=mcp_tools, on_tool=[mcps.handle])
 #
 #   # Per-server tools (selective):
 #   [ask]: chat(
@@ -20,27 +20,27 @@
 
 # Connect to an MCP server: initialize → tools/list → convert to OpenAI schema → register
 [MCP(name, url, token)]: {
-  _auth_headers = if(default($token, "") != "", {"Authorization": "Bearer " + $token, "Accept": "application/json", "Content-Type": "application/json"}, {"Accept": "application/json", "Content-Type": "application/json"})
-  _init = fetch(url=$url, method="POST", headers=$_auth_headers, body=json({"jsonrpc": "2.0", "method": "initialize", "params": {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "juglans", "version": "0.1"}}, "id": "init"}))
-  _session = default(get(default(get($_init, "headers", {}), {}), "mcp-session-id", ""), "")
-  _list_headers = if($_session != "", merge($_auth_headers, {"mcp-session-id": $_session}), $_auth_headers)
-  discover = fetch(url=$url, method="POST", headers=$_list_headers, body=json({"jsonrpc": "2.0", "method": "tools/list", "id": "discover"}))
-  set_context(_mcp_converted = map(get(get($discover.data, "result", {}), "tools", []), t => {"type": "function", "function": {"name": $name + "." + get(t, "name", "unknown"), "description": get(t, "description", ""), "parameters": default(get(t, "inputSchema", null), get(t, "input_schema", {}))}}))
-  set_context(_mcp_url = merge(default($ctx._mcp_url, {}), from_entries([[$name, $url]])), _mcp_token = merge(default($ctx._mcp_token, {}), from_entries([[$name, default($token, "")]])), _mcp_session = merge(default($ctx._mcp_session, {}), from_entries([[$name, $_session]])), _mcp_registry = merge(default($ctx._mcp_registry, {}), from_entries([[$name, $ctx._mcp_converted]])), mcp_tools = default($ctx.mcp_tools, []) + $ctx._mcp_converted)
+  _auth_headers = if(default(token, "") != "", {"Authorization": "Bearer " + token, "Accept": "application/json", "Content-Type": "application/json"}, {"Accept": "application/json", "Content-Type": "application/json"})
+  _init = fetch(url=url, method="POST", headers=_auth_headers, body=json({"jsonrpc": "2.0", "method": "initialize", "params": {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "juglans", "version": "0.1"}}, "id": "init"}))
+  _session = default(get(default(get(_init, "headers", {}), {}), "mcp-session-id", ""), "")
+  _list_headers = if(_session != "", merge(_auth_headers, {"mcp-session-id": _session}), _auth_headers)
+  discover = fetch(url=url, method="POST", headers=_list_headers, body=json({"jsonrpc": "2.0", "method": "tools/list", "id": "discover"}))
+  _mcp_converted = map(get(get(discover.data, "result", {}), "tools", []), t => {"type": "function", "function": {"name": name + "." + get(t, "name", "unknown"), "description": get(t, "description", ""), "parameters": default(get(t, "inputSchema", null), get(t, "input_schema", {}))}})
+  _mcp_url = merge(default(_mcp_url, {}), from_entries([[name, url]])), _mcp_token = merge(default(_mcp_token, {}), from_entries([[name, default(token, "")]])), _mcp_session = merge(default(_mcp_session, {}), from_entries([[name, _session]])), _mcp_registry = merge(default(_mcp_registry, {}), from_entries([[name, _mcp_converted]])), mcp_tools = default(mcp_tools, []) + _mcp_converted
 }
 
 # Get tools for a specific MCP server by name
 [tools(name)]: {
-  result = get(default($ctx._mcp_registry, {}), $name, [])
+  result = get(default(_mcp_registry, {}), name, [])
 }
 
 # Unified tool call handler — dispatches to the correct MCP server by name prefix.
 # When on_tool=[mcps.handle], the engine passes name + arguments.
 [handle(name, arguments)]: {
-  set_context(_mcp_server = split($name, ".")[0], _mcp_tool = join(slice(split($name, "."), 1), "."))
-  _session = get(default($ctx._mcp_session, {}), $ctx._mcp_server, "")
-  _headers = if($_session != "", {"Accept": "application/json", "Content-Type": "application/json", "mcp-session-id": $_session}, {"Accept": "application/json", "Content-Type": "application/json"})
-  _headers = if(get($ctx._mcp_token, $ctx._mcp_server, "") != "", merge($_headers, {"Authorization": "Bearer " + get($ctx._mcp_token, $ctx._mcp_server, "")}), $_headers)
-  _call = fetch(url=get($ctx._mcp_url, $ctx._mcp_server, ""), method="POST", headers=$_headers, body=json({"jsonrpc": "2.0", "method": "tools/call", "params": {"name": $ctx._mcp_tool, "arguments": $arguments}, "id": "1"}))
-  result = get(get(get(get($_call.data, "result", {}), "content", [{}]), 0, {}), "text", "")
+  _mcp_server = split(name, ".")[0], _mcp_tool = join(slice(split(name, "."), 1), ".")
+  _session = get(default(_mcp_session, {}), _mcp_server, "")
+  _headers = if(_session != "", {"Accept": "application/json", "Content-Type": "application/json", "mcp-session-id": _session}, {"Accept": "application/json", "Content-Type": "application/json"})
+  _headers = if(get(_mcp_token, _mcp_server, "") != "", merge(_headers, {"Authorization": "Bearer " + get(_mcp_token, _mcp_server, "")}), _headers)
+  _call = fetch(url=get(_mcp_url, _mcp_server, ""), method="POST", headers=_headers, body=json({"jsonrpc": "2.0", "method": "tools/call", "params": {"name": _mcp_tool, "arguments": arguments}, "id": "1"}))
+  result = get(get(get(get(_call.data, "result", {}), "content", [{}]), 0, {}), "text", "")
 }

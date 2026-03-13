@@ -1,0 +1,22 @@
+# api_test.jg — 测试 api.jg 标准库 + @ 装饰器 + yield + call()
+
+libs: ["../stdlib/api.jg"]
+
+[api]: new api.Api()
+
+@api.post("/api/stream")
+[process_stream()]: {
+  yield { type: "meta", status: "started" }
+  yield { type: "content", text: "streaming response" }
+  yield { type: "done" }
+}
+
+@api.get("/api/health")
+[health()]: {
+  response(status=200, body={"ok": true})
+}
+
+[start]: api.listen()
+
+[_deco_0] -> [start]
+[_deco_1] -> [start]

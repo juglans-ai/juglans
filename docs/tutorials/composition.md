@@ -8,11 +8,11 @@ Suppose you need to perform the same "logging" operation multiple times in a wor
 
 ```juglans
 [log1]: print(message="[LOG] Step 1 started")
-[work1]: set_context(data="result1")
+[work1]: data = "result1"
 [log2]: print(message="[LOG] Step 2 started")
-[work2]: set_context(data="result2")
+[work2]: data = "result2"
 [log3]: print(message="[LOG] Step 3 started")
-[work3]: set_context(data="result3")
+[work3]: data = "result3"
 
 [log1] -> [work1] -> [log2] -> [work2] -> [log3] -> [work3]
 ```
@@ -26,7 +26,7 @@ Functions let you encapsulate repeated logic into a reusable unit.
 ### Minimal Example
 
 ```juglans
-[log(msg)]: print(message="[LOG] " + $msg)
+[log(msg)]: print(message="[LOG] " + msg)
 
 [step1]: log(msg="Step 1 started")
 [step2]: log(msg="Step 2 started")
@@ -53,7 +53,7 @@ Function definition syntax:
 Functions can accept any number of parameters:
 
 ```juglans
-[greet(name, greeting)]: print(message=$greeting + ", " + $name + "!")
+[greet(name, greeting)]: print(message=greeting + ", " + name + "!")
 
 [step1]: greet(name="Alice", greeting="Hello")
 [step2]: greet(name="Bob", greeting="Good morning")
@@ -70,8 +70,8 @@ When the function body requires multiple steps, wrap them in curly braces `{ ...
 
 ```juglans
 [deploy(service, env)]: {
-  print(message="Deploying " + $service + " to " + $env)
-  notify(status=$service + " deployed to " + $env)
+  print(message="Deploying " + service + " to " + env)
+  notify(status=service + " deployed to " + env)
 }
 
 [step1]: deploy(service="api", env="staging")
@@ -95,7 +95,7 @@ Steps within a multi-step function body are automatically chained into a sequent
 Multi-step function bodies can also be written on a single line, separated by `;`:
 
 ```juglans
-[ping(host)]: { print(message="Pinging " + $host); notify(status="Pinged " + $host) }
+[ping(host)]: { print(message="Pinging " + host); notify(status="Pinged " + host) }
 
 [a]: ping(host="server-1")
 [b]: ping(host="server-2")
@@ -108,7 +108,7 @@ Multi-step function bodies can also be written on a single line, separated by `;
 Function calls are used in node positions, with the same syntax as tool calls:
 
 ```juglans
-[check(item)]: print(message="Checking: " + $item)
+[check(item)]: print(message="Checking: " + item)
 
 [c1]: check(item="database")
 [c2]: check(item="cache")
@@ -123,7 +123,7 @@ When a function is called, the engine:
 1. Looks up the function definition named `check`.
 2. Binds the parameter `item="database"` to `$item` in the function body.
 3. Executes the function body.
-4. Stores the function body's output in `$output`, available to subsequent nodes.
+4. Stores the function body's output in `output`, available to subsequent nodes.
 
 Function calls and built-in tool calls are syntactically identical. The engine resolves tool names in this order: built-in tools -> function definitions -> Python -> MCP -> client bridge.
 
@@ -137,7 +137,7 @@ Suppose you have an authentication sub-workflow `auth.jg`:
 
 ```text
 # auth.jg
-[login]: set_context(user="authenticated")
+[login]: user = "authenticated"
 [verify]: print(message="Verifying user...")
 [complete]: print(message="Auth complete")
 
@@ -231,7 +231,7 @@ A typical library file (`utils.jg`) contains only function definitions:
 slug: "utils"
 
 [log(msg)]: print(message="[LOG] " + $msg)
-[format_name(first, last)]: set_context(full_name=$first + " " + $last)
+[format_name(first, last)]: full_name = $first + " " + $last
 ```
 
 ### List-Style Import
@@ -295,21 +295,21 @@ libs: ["./lib/helpers.jg"]
 
 # Local function definition
 [validate(data)]: {
-  print(message="Validating: " + $data)
-  set_context(is_valid=true)
+  print(message="Validating: " + data)
+  is_valid = true
 }
 
 # Entry
-[start]: set_context(order_id="ORD-001")
+[start]: order_id = "ORD-001"
 
 # Call local function
-[check]: validate(data=$ctx.order_id)
+[check]: validate(data=order_id)
 
 # Call library function
-[log]: helpers.log(msg="Order validated: " + $ctx.order_id)
+[log]: helpers.log(msg="Order validated: " + order_id)
 
 # Report
-[report]: print(message="Order " + $ctx.order_id + " processed")
+[report]: print(message="Order " + order_id + " processed")
 
 # Execution flow: local -> sub-workflow -> report
 [start] -> [check]

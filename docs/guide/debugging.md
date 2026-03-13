@@ -86,7 +86,7 @@ Code blocks that should not be validated can be marked with `ignore`:
 | 6 | `Tool not found: X` | An unregistered tool was called | Verify the tool name is a builtin or that the MCP server is configured |
 | 7 | `Cycle detected` | The graph contains a cycle | Review the edge definitions; DAGs do not allow cycles (use `while`/`foreach` instead) |
 | 8 | `Parse error at line N` | DSL syntax error | Check the syntax near that line: bracket matching, quote closure, parameter format |
-| 9 | `Variable not found: $ctx.X` | A context variable was not set | Ensure the variable is set via `set_context()` before it is used |
+| 9 | `Variable not found: X` | A context variable was not set | Ensure the variable is set via assignment syntax before it is used |
 | 10 | `Timeout` | Tool execution timed out | Check the network connection or increase the timeout configuration |
 
 ## Debugging Tips
@@ -96,26 +96,26 @@ Code blocks that should not be validated can be marked with `ignore`:
 Insert `print()` nodes at key positions to inspect intermediate state:
 
 ```juglans
-[step1]: set_context(data=$input.items)
-[debug1]: print(message="After step1, data = " + json($ctx.data))
-[step2]: chat(agent="processor", message=json($ctx.data))
-[debug2]: print(message="After step2, output = " + json($output))
+[step1]: data = input.items
+[debug1]: print(message="After step1, data = " + json(data))
+[step2]: chat(agent="processor", message=json(data))
+[debug2]: print(message="After step2, output = " + json(output))
 [done]: notify(status="complete")
 
 [step1] -> [debug1] -> [step2] -> [debug2] -> [done]
 ```
 
-### Save Intermediate State with set_context()
+### Save Intermediate State with Assignment
 
-Use `set_context()` to save intermediate results so they can be referenced by later nodes or error paths:
+Use assignment syntax to save intermediate results so they can be referenced by later nodes or error paths:
 
 ```juglans
-[fetch]: fetch_url(url=$input.url)
-[save_raw]: set_context(raw_response=$output)
-[process]: chat(agent="parser", message=$output)
-[save_parsed]: set_context(parsed=$output)
-[handle_error]: print(message="Failed. Raw response: " + json($ctx.raw_response))
-[done]: print(message="Result: " + json($ctx.parsed))
+[fetch]: fetch_url(url=input.url)
+[save_raw]: raw_response = output
+[process]: chat(agent="parser", message=output)
+[save_parsed]: parsed = output
+[handle_error]: print(message="Failed. Raw response: " + json(raw_response))
+[done]: print(message="Result: " + json(parsed))
 
 [fetch] -> [save_raw] -> [process] -> [save_parsed] -> [done]
 [process] on error -> [handle_error]

@@ -36,7 +36,7 @@ juglans router.jg --input '{"query": "Tell me a joke"}'
 ### batch-process.jg
 批量处理工作流，演示：
 - `foreach` 循环
-- 上下文变量管理 (`set_context`)
+- 上下文变量管理 (assignment syntax)
 - Prompt 模板调用
 - 结果聚合
 
@@ -63,8 +63,8 @@ juglans batch-process.jg --input '{
 - **while**: 条件循环
 
 ### 数据流模式
-- **变量传递**: `$input`, `$output`, `$ctx`
-- **上下文共享**: `set_context()` 设置全局变量
+- **变量传递**: `input`, `output`, context variables
+- **上下文共享**: assignment syntax 设置全局变量
 - **结果聚合**: 使用 `append()` 收集结果
 
 ## 最佳实践
@@ -73,7 +73,7 @@ juglans batch-process.jg --input '{
 2. **错误处理** - 为关键操作添加 `on error` 路径
 3. **进度反馈** - 使用 `notify()` 提供状态更新
 4. **模块化** - 复杂逻辑拆分为多个小工作流
-5. **变量管理** - 合理使用 `$input`, `$ctx`, `$output`
+5. **变量管理** - 合理使用 `input`, `output`, context variables
 
 更多语法请参考：[工作流语法指南](../../docs/guide/workflow-syntax.md)
 

@@ -554,6 +554,17 @@ fn value_to_f64(val: &Value) -> Result<f64> {
 // ============================================================
 
 impl ExprEvaluator {
+    /// Collect a chain of DotAccess nodes back into a single dotted path string.
+    /// e.g. DotAccess(DotAccess(Identifier("a"), "b"), "c") → Some("a.b.c")
+    fn collect_dot_path(expr: &Expr, last_field: &str) -> Option<String> {
+        match expr {
+            Expr::Identifier(name) => Some(format!("{}.{}", name, last_field)),
+            Expr::DotAccess { object, field } => Self::collect_dot_path(object, field)
+                .map(|prefix| format!("{}.{}", prefix, last_field)),
+            _ => None,
+        }
+    }
+
     fn eval_expr(&self, expr: &Expr, resolver: &dyn Fn(&str) -> Option<Value>) -> Result<Value> {
         match expr {
             Expr::Number(n) => {
@@ -624,7 +635,19 @@ impl ExprEvaluator {
 
             Expr::DotAccess { object, field } => {
                 let obj_val = self.eval_expr(object, resolver)?;
-                Ok(self.access_field_with_registry(&obj_val, field))
+                let result = self.access_field_with_registry(&obj_val, field);
+                // Fallback: if object resolved to null and it was an identifier,
+                // try resolving the full dotted path as a single context path.
+                // This handles node output references like `node_id.output` which
+                // are stored as "node_id.output" in the context (not nested objects).
+                if result.is_null() {
+                    if let Some(full_path) = Self::collect_dot_path(object, field) {
+                        if let Some(resolved) = resolver(&full_path) {
+                            return Ok(resolved);
+                        }
+                    }
+                }
+                Ok(result)
             }
 
             Expr::BracketAccess { object, index } => {
@@ -2851,9 +2874,9 @@ mod tests {
     fn test_missing_variable_is_null() {
         let ctx = json!({"message": "hello"});
         // Non-existent variable → null
-        assert_eq!(eval_with("$event_type", ctx.clone()), Value::Null);
+        assert_eq!(eval_with("event_type", ctx.clone()), Value::Null);
         // null is falsy
-        assert!(!eval_bool("$event_type", ctx.clone()));
+        assert!(!eval_bool("event_type", ctx.clone()));
     }
 
     #[test]
@@ -2862,16 +2885,16 @@ mod tests {
         let ctx = json!({
             "input": {"message": "Buy 0.1 BTC at market price"}
         });
-        // $input.event_type should be null (not Rhai unit)
-        assert_eq!(eval_with("$input.event_type", ctx.clone()), Value::Null);
+        // input.event_type should be null (not Rhai unit)
+        assert_eq!(eval_with("input.event_type", ctx.clone()), Value::Null);
         // null is falsy — so in a condition context, this is false
-        assert!(!eval_bool("$input.event_type", ctx.clone()));
-        // $input.event_type == "" → false (null != empty string)
-        assert!(!eval_bool("$input.event_type == \"\"", ctx.clone()));
-        // $input.event_type != "" → true
-        assert!(eval_bool("$input.event_type != \"\"", ctx.clone()));
-        // But: not $input.event_type → true (null is falsy)
-        assert!(eval_bool("not $input.event_type", ctx.clone()));
+        assert!(!eval_bool("input.event_type", ctx.clone()));
+        // input.event_type == "" → false (null != empty string)
+        assert!(!eval_bool("input.event_type == \"\"", ctx.clone()));
+        // input.event_type != "" → true
+        assert!(eval_bool("input.event_type != \"\"", ctx.clone()));
+        // But: not input.event_type → true (null is falsy)
+        assert!(eval_bool("not input.event_type", ctx.clone()));
     }
 
     // ---- Comparisons ----
@@ -2919,7 +2942,7 @@ mod tests {
     fn test_string_concat_with_variable() {
         let ctx = json!({"input": {"query": "test"}});
         assert_eq!(
-            eval_with("\"message: \" + $input.query", ctx),
+            eval_with("\"message: \" + input.query", ctx),
             json!("message: test")
         );
     }
@@ -2975,24 +2998,24 @@ mod tests {
     #[test]
     fn test_in_object_keys() {
         let ctx = json!({"data": {"name": "Alice", "age": 30}});
-        assert!(eval_bool("\"name\" in $data", ctx.clone()));
-        assert!(!eval_bool("\"email\" in $data", ctx));
+        assert!(eval_bool("\"name\" in data", ctx.clone()));
+        assert!(!eval_bool("\"email\" in data", ctx));
     }
 
     // ---- Variables ----
 
     #[test]
     fn test_variable_resolution() {
-        // ctx. prefix is stripped by resolver, so $ctx.intent → /intent
+        // bare identifiers resolve to context fields
         let ctx = json!({
             "intent": "greeting",
             "input": {"query": "hello"},
             "output": {"category": "technical"}
         });
-        assert_eq!(eval_with("$ctx.intent", ctx.clone()), json!("greeting"));
-        assert_eq!(eval_with("$input.query", ctx.clone()), json!("hello"));
+        assert_eq!(eval_with("intent", ctx.clone()), json!("greeting"));
+        assert_eq!(eval_with("input.query", ctx.clone()), json!("hello"));
         assert_eq!(
-            eval_with("$output.category", ctx.clone()),
+            eval_with("output.category", ctx.clone()),
             json!("technical")
         );
     }
@@ -3000,8 +3023,8 @@ mod tests {
     #[test]
     fn test_condition_with_variable() {
         let ctx = json!({"intent": "greeting"});
-        assert!(eval_bool("$ctx.intent == \"greeting\"", ctx.clone()));
-        assert!(!eval_bool("$ctx.intent == \"question\"", ctx));
+        assert!(eval_bool("intent == \"greeting\"", ctx.clone()));
+        assert!(!eval_bool("intent == \"question\"", ctx));
     }
 
     // ---- Functions ----
@@ -3053,7 +3076,7 @@ mod tests {
     #[test]
     fn test_keys_values() {
         let ctx = json!({"data": {"a": 1, "b": 2}});
-        let keys = eval_with("keys($data)", ctx.clone());
+        let keys = eval_with("keys(data)", ctx.clone());
         assert!(keys.as_array().unwrap().contains(&json!("a")));
         assert!(keys.as_array().unwrap().contains(&json!("b")));
     }
@@ -3122,16 +3145,16 @@ mod tests {
     #[test]
     fn test_dot_access() {
         let ctx = json!({"data": {"nested": {"value": 42}}});
-        assert_eq!(eval_with("$data.nested.value", ctx), json!(42));
+        assert_eq!(eval_with("data.nested.value", ctx), json!(42));
     }
 
     #[test]
     fn test_bracket_access() {
         let ctx = json!({"items": ["a", "b", "c"]});
-        assert_eq!(eval_with("$items[0]", ctx.clone()), json!("a"));
-        assert_eq!(eval_with("$items[2]", ctx.clone()), json!("c"));
+        assert_eq!(eval_with("items[0]", ctx.clone()), json!("a"));
+        assert_eq!(eval_with("items[2]", ctx.clone()), json!("c"));
         // Negative indexing
-        assert_eq!(eval_with("$items[-1]", ctx), json!("c"));
+        assert_eq!(eval_with("items[-1]", ctx), json!("c"));
     }
 
     // ---- Complex Expressions ----
@@ -3140,7 +3163,7 @@ mod tests {
     fn test_complex_condition() {
         let ctx = json!({"intent": "greeting", "confidence": 0.9});
         assert!(eval_bool(
-            "$ctx.intent == \"greeting\" and $ctx.confidence > 0.8",
+            "intent == \"greeting\" and confidence > 0.8",
             ctx
         ));
     }
@@ -3294,37 +3317,37 @@ mod tests {
 
         // merge
         let ctx = json!({"a": {"x": 1}, "b": {"y": 2, "x": 99}});
-        assert_eq!(eval_with("merge($a, $b)", ctx), json!({"x": 99, "y": 2}));
+        assert_eq!(eval_with("merge(a, b)", ctx), json!({"x": 99, "y": 2}));
 
         // pick
         let ctx = json!({"d": {"a": 1, "b": 2, "c": 3}});
         assert_eq!(
-            eval_with("pick($d, [\"a\", \"c\"])", ctx),
+            eval_with("pick(d, [\"a\", \"c\"])", ctx),
             json!({"a": 1, "c": 3})
         );
 
         // omit
         let ctx = json!({"d": {"a": 1, "b": 2, "c": 3}});
-        assert_eq!(eval_with("omit($d, [\"b\"])", ctx), json!({"a": 1, "c": 3}));
+        assert_eq!(eval_with("omit(d, [\"b\"])", ctx), json!({"a": 1, "c": 3}));
 
         // has
         let ctx = json!({"d": {"name": "alice"}, "arr": [1, 2, 3]});
-        assert_eq!(eval_with("has($d, \"name\")", ctx.clone()), json!(true));
-        assert_eq!(eval_with("has($d, \"age\")", ctx.clone()), json!(false));
-        assert_eq!(eval_with("has($arr, 2)", ctx.clone()), json!(true));
-        assert_eq!(eval_with("has($arr, 5)", ctx.clone()), json!(false));
+        assert_eq!(eval_with("has(d, \"name\")", ctx.clone()), json!(true));
+        assert_eq!(eval_with("has(d, \"age\")", ctx.clone()), json!(false));
+        assert_eq!(eval_with("has(arr, 2)", ctx.clone()), json!(true));
+        assert_eq!(eval_with("has(arr, 5)", ctx.clone()), json!(false));
 
         // get
         let ctx = json!({"d": {"a": 1}});
-        assert_eq!(eval_with("get($d, \"a\")", ctx.clone()), json!(1));
+        assert_eq!(eval_with("get(d, \"a\")", ctx.clone()), json!(1));
         assert_eq!(
-            eval_with("get($d, \"missing\", \"default\")", ctx),
+            eval_with("get(d, \"missing\", \"default\")", ctx),
             json!("default")
         );
 
         // items
         let ctx = json!({"d": {"x": 1, "y": 2}});
-        let items = eval_with("items($d)", ctx);
+        let items = eval_with("items(d)", ctx);
         let arr = items.as_array().unwrap();
         assert_eq!(arr.len(), 2);
 
@@ -3594,7 +3617,7 @@ mod tests {
             {"name": "Alice", "age": 25},
             {"name": "Bob", "age": 35}
         ]});
-        let result = eval_with("sort_by($items, x => x.age)", ctx);
+        let result = eval_with("sort_by(items, x => x.age)", ctx);
         let arr = result.as_array().unwrap();
         assert_eq!(arr[0]["name"], json!("Alice"));
         assert_eq!(arr[1]["name"], json!("Charlie"));
@@ -3608,11 +3631,11 @@ mod tests {
             {"name": "Bob", "age": 35}
         ]});
         assert_eq!(
-            eval_with("find_by($items, x => x.age > 30)", ctx.clone()),
+            eval_with("find_by(items, x => x.age > 30)", ctx.clone()),
             json!({"name": "Bob", "age": 35})
         );
         assert_eq!(
-            eval_with("find_by($items, x => x.age > 100)", ctx),
+            eval_with("find_by(items, x => x.age > 100)", ctx),
             Value::Null
         );
     }
@@ -3624,7 +3647,7 @@ mod tests {
             {"type": "veggie", "name": "carrot"},
             {"type": "fruit", "name": "banana"}
         ]});
-        let result = eval_with("group_by($items, x => x.type)", ctx);
+        let result = eval_with("group_by(items, x => x.type)", ctx);
         let obj = result.as_object().unwrap();
         assert_eq!(obj["fruit"].as_array().unwrap().len(), 2);
         assert_eq!(obj["veggie"].as_array().unwrap().len(), 1);
@@ -3659,11 +3682,11 @@ mod tests {
             {"name": "Charlie", "score": 78}
         ]});
         assert_eq!(
-            eval_with("min_by($items, x => x.score)", ctx.clone()),
+            eval_with("min_by(items, x => x.score)", ctx.clone()),
             json!({"name": "Charlie", "score": 78})
         );
         assert_eq!(
-            eval_with("max_by($items, x => x.score)", ctx),
+            eval_with("max_by(items, x => x.score)", ctx),
             json!({"name": "Bob", "score": 92})
         );
         // Empty list
@@ -3686,7 +3709,7 @@ mod tests {
     fn test_lambda_capture_outer_scope() {
         let ctx = json!({"offset": 10, "items": [1, 2, 3]});
         assert_eq!(
-            eval_with("map($items, x => x + $offset)", ctx),
+            eval_with("map(items, x => x + offset)", ctx),
             json!([11, 12, 13])
         );
     }
@@ -3736,17 +3759,14 @@ mod tests {
     #[test]
     fn test_fstring_basic() {
         let ctx = json!({"name": "Alice", "age": 30});
-        assert_eq!(
-            eval_with(r#"f"Hello {$ctx.name}""#, ctx),
-            json!("Hello Alice")
-        );
+        assert_eq!(eval_with(r#"f"Hello {name}""#, ctx), json!("Hello Alice"));
     }
 
     #[test]
     fn test_fstring_expression() {
         let ctx = json!({"count": 5});
         assert_eq!(
-            eval_with(r#"f"Count: {$ctx.count + 1}""#, ctx),
+            eval_with(r#"f"Count: {count + 1}""#, ctx),
             json!("Count: 6")
         );
     }
@@ -3769,10 +3789,7 @@ mod tests {
     #[test]
     fn test_fstring_multiple_interps() {
         let ctx = json!({"a": "X", "b": "Y"});
-        assert_eq!(
-            eval_with(r#"f"{$ctx.a} and {$ctx.b}""#, ctx),
-            json!("X and Y")
-        );
+        assert_eq!(eval_with(r#"f"{a} and {b}""#, ctx), json!("X and Y"));
     }
 
     #[test]
@@ -3859,7 +3876,7 @@ mod tests {
     #[test]
     fn test_fstring_triple_basic() {
         assert_eq!(
-            eval_with(r#"f"""Hello {$ctx.name}!""""#, json!({"name": "Alice"})),
+            eval_with(r#"f"""Hello {name}!""""#, json!({"name": "Alice"})),
             json!("Hello Alice!")
         );
     }
@@ -3868,7 +3885,7 @@ mod tests {
     fn test_fstring_triple_with_quotes() {
         assert_eq!(
             eval_with(
-                r#"f"""curl -H "Authorization: Bearer {$ctx.key}" https://api.com""""#,
+                r#"f"""curl -H "Authorization: Bearer {key}" https://api.com""""#,
                 json!({"key": "sk-123"})
             ),
             json!(r#"curl -H "Authorization: Bearer sk-123" https://api.com"#)
@@ -3878,7 +3895,7 @@ mod tests {
     #[test]
     fn test_fstring_triple_json_template() {
         let result = eval_with(
-            r#"f"""{{"channel":"{$ctx.channel}","data":{{"content":"{$ctx.content}"}}}}""""#,
+            r#"f"""{{"channel":"{channel}","data":{{"content":"{content}"}}}}""""#,
             json!({"channel": "chat:dm:abc", "content": "hello"}),
         );
         let s = result.as_str().unwrap();
@@ -3888,7 +3905,7 @@ mod tests {
 
     #[test]
     fn test_fstring_triple_multiline() {
-        let input = "f\"\"\"Hello\n{$ctx.name}\nBye\"\"\"";
+        let input = "f\"\"\"Hello\n{name}\nBye\"\"\"";
         assert_eq!(
             eval_with(input, json!({"name": "World"})),
             json!("Hello\nWorld\nBye")

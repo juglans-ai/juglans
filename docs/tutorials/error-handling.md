@@ -1,6 +1,6 @@
 # Tutorial 5: Error Handling
 
-This chapter covers how to handle failures gracefully in workflows: **on error edges** make error paths explicit, and the **$error variable** lets you access error details in fallback nodes.
+This chapter covers how to handle failures gracefully in workflows: **on error edges** make error paths explicit, and the **error variable** lets you access error details in fallback nodes.
 
 ## Without Error Handling
 
@@ -8,7 +8,7 @@ First, consider a workflow that will fail — reading a nonexistent file:
 
 ```juglans
 [read]: read_file(file_path="/nonexistent/file.txt")
-[show]: print(message="Content: " + $output)
+[show]: print(message="Content: " + output)
 [read] -> [show]
 ```
 
@@ -55,13 +55,13 @@ Rules:
 
 ### Success Path vs Error Path
 
-Use `set_context` to mark which path was taken:
+Use assignment syntax to mark which path was taken:
 
 ```juglans
 [step]: read_file(file_path="/nonexistent/file.txt")
-[ok]: set_context(status="success")
-[err]: set_context(status="failed")
-[report]: print(message="Status: " + $ctx.status)
+[ok]: status = "success"
+[err]: status = "failed"
+[report]: print(message="Status: " + status)
 
 [step] -> [ok]
 [step] on error -> [err]
@@ -69,7 +69,7 @@ Use `set_context` to mark which path was taken:
 [err] -> [report]
 ```
 
-At runtime, `[step]` will fail, so `[err]` executes, `$ctx.status` is set to `"failed"`, and the final output is:
+At runtime, `[step]` will fail, so `[err]` executes, `status` is set to `"failed"`, and the final output is:
 
 ```text
 Status: failed
@@ -77,20 +77,20 @@ Status: failed
 
 If you change `file_path` to an existing file, `[ok]` executes and outputs `Status: success`. Two paths, one exit — this is the fundamental pattern for error handling.
 
-## The $error Variable
+## The error Variable
 
-When `on error` triggers, the engine automatically sets the `$error` variable with two fields:
+When `on error` triggers, the engine automatically sets the `error` variable with two fields:
 
 | Field | Type | Content |
 |------|------|------|
-| `$error.node` | string | The ID of the node that errored |
-| `$error.message` | string | The error message |
+| `error.node` | string | The ID of the node that errored |
+| `error.message` | string | The error message |
 
 Read it in a fallback node:
 
 ```juglans
 [read]: read_file(file_path="/nonexistent/file.txt")
-[handle]: print(message="Error in [" + $error.node + "]: " + $error.message)
+[handle]: print(message="Error in [" + error.node + "]: " + error.message)
 
 [read] on error -> [handle]
 ```
@@ -101,18 +101,18 @@ Output example:
 Error in [read]: No such file or directory
 ```
 
-### $node_id.error
+### node_id.error
 
-In addition to the global `$error`, each errored node's error message is also stored in `$node_id.error`:
+In addition to the global `error`, each errored node's error message is also stored in `node_id.error`:
 
 ```juglans
 [read]: read_file(file_path="/nonexistent/file.txt")
-[handle]: print(message="read node error: " + $read.error)
+[handle]: print(message="read node error: " + read.error)
 
 [read] on error -> [handle]
 ```
 
-`$error` is global and always points to the most recently errored node. `$node_id.error` is node-specific and more precise in multi-node error handling scenarios.
+`error` is global and always points to the most recently errored node. `node_id.error` is node-specific and more precise in multi-node error handling scenarios.
 
 ## Multi-Level Error Handling
 
@@ -122,8 +122,8 @@ Different nodes can have different fallbacks:
 [load_config]: read_file(file_path="/etc/app/config.json")
 [load_data]: read_file(file_path="/tmp/data.csv")
 [process]: print(message="Processing data...")
-[config_fallback]: set_context(config="default")
-[data_fallback]: set_context(data="empty")
+[config_fallback]: config = "default"
+[data_fallback]: data = "empty"
 [done]: print(message="Workflow complete")
 
 [load_config] -> [load_data]
@@ -150,7 +150,7 @@ Each "potentially failing" node has its own fallback, without interfering with o
 `on error` can be combined with conditional edges:
 
 ```juglans
-[init]: set_context(mode="strict")
+[init]: mode = "strict"
 [work]: read_file(file_path="/tmp/important.txt")
 [ok]: print(message="File loaded")
 [warn]: print(message="File missing, but mode is lenient")
@@ -171,7 +171,7 @@ Here, two `on error` edges are defined for the same node. When `[work]` fails, t
 If you need to differentiate error handling strategies based on context, a better approach is to have the fallback node handle the decision internally:
 
 ```juglans
-[init]: set_context(mode="strict")
+[init]: mode = "strict"
 [work]: read_file(file_path="/tmp/important.txt")
 [ok]: print(message="File loaded")
 [error_router]: print(message="Handling error...")
@@ -183,7 +183,7 @@ If you need to differentiate error handling strategies based on context, a bette
 [work] -> [ok]
 [work] on error -> [error_router]
 
-[error_router] if $ctx.mode == "strict" -> [abort]
+[error_router] if mode == "strict" -> [abort]
 [error_router] -> [warn]
 
 [ok] -> [done]
@@ -191,34 +191,28 @@ If you need to differentiate error handling strategies based on context, a bette
 [abort] -> [done]
 ```
 
-`on error` jumps to `[error_router]`, which then uses conditional branching based on `$ctx.mode` — error handling and routing logic each have their own responsibility.
+`on error` jumps to `[error_router]`, which then uses conditional branching based on `mode` — error handling and routing logic each have their own responsibility.
 
 ## Comprehensive Example
 
 A complete workflow with a normal path and multiple error handlers:
 
 ```juglans
-[start]: set_context(errors=0)
+[start]: errors = 0
 
 # Step 1: Load configuration
 [load_config]: read_file(file_path="/etc/app/config.json")
-[config_ok]: set_context(config_loaded=true)
-[config_err]: set_context(
-  config_loaded=false,
-  errors=$ctx.errors + 1
-)
+[config_ok]: config_loaded = true
+[config_err]: config_loaded = false, errors = errors + 1
 
 # Step 2: Load data
 [load_data]: read_file(file_path="/tmp/dataset.csv")
-[data_ok]: set_context(data_loaded=true)
-[data_err]: set_context(
-  data_loaded=false,
-  errors=$ctx.errors + 1
-)
+[data_ok]: data_loaded = true
+[data_err]: data_loaded = false, errors = errors + 1
 
 # Step 3: Summary
 [report]: print(
-  message="Pipeline done. Errors: " + str($ctx.errors)
+  message="Pipeline done. Errors: " + str(errors)
 )
 
 # Normal path
@@ -249,8 +243,8 @@ This workflow demonstrates a common "best effort" pattern:
 ## Summary
 
 - `[node] on error -> [fallback]` -- When a node errors, jump to the fallback instead of terminating the workflow
-- `$error.node` and `$error.message` -- Global error variables containing the most recent error's node ID and error message
-- `$node_id.error` -- Node-level error message, suitable for multi-node error handling
+- `error.node` and `error.message` -- Global error variables containing the most recent error's node ID and error message
+- `node_id.error` -- Node-level error message, suitable for multi-node error handling
 - Each potentially failing node can have its own independent fallback
 - `on error` can be combined with conditional edges and switch routing
 - Common pattern: fallback nodes set default values or record errors, then rejoin the normal flow

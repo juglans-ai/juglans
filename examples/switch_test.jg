@@ -1,5 +1,5 @@
 # Classifier node that sets the intent
-[classify]: set_context(path="intent", value="question")
+[classify]: intent = "question"
 
 # Handler nodes
 [handle_question]: notify(message="Handling a question!")
@@ -7,7 +7,7 @@
 [handle_other]: notify(message="Handling something else!")
 
 # Switch routing based on intent
-[classify] -> switch $intent {
+[classify] -> switch intent {
     "question": [handle_question]
     "task": [handle_task]
     default: [handle_other]

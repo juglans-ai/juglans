@@ -38,7 +38,7 @@ Create a minimal chat workflow to verify the connection:
 
 ```juglans
 [test]: chat(agent="assistant", message="Say hello in one word.")
-[done]: print(message="Connection OK. Response: " + $output)
+[done]: print(message="Connection OK. Response: " + output)
 
 [test] -> [done]
 ```
@@ -81,8 +81,8 @@ Use it in a Workflow:
 ```juglans
 agents: ["./agents/*.jgagent"]
 
-[ask]: chat(agent="local-agent", message=$input.query)
-[done]: print(message=$output)
+[ask]: chat(agent="local-agent", message=input.query)
+[done]: print(message=output)
 
 [ask] -> [done]
 ```
@@ -136,8 +136,8 @@ Mix both in the same Workflow:
 agents: ["./agents/*.jgagent"]
 
 [start]: print(msg="begin")
-[local_chat]: chat(agent="my-agent", message=$input.query)
-[remote_chat]: chat(agent="juglans/premium-agent", message=$output)
+[local_chat]: chat(agent="my-agent", message=input.query)
+[remote_chat]: chat(agent="juglans/premium-agent", message=output)
 [end]: print(msg="done")
 
 [start] -> [local_chat] -> [remote_chat] -> [end]

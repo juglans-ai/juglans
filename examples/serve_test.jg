@@ -3,12 +3,12 @@
 
 # Handler nodes
 [hello]: response(status=200, body={"message": "Hello from Juglans!"})
-[echo]: response(status=200, body={"method": "GET", "query": $input.query, "path": $input.path})
-[echo_post]: response(status=200, body={"method": "POST", "body": $input.body, "path": $input.path})
-[not_found]: response(status=404, body={"error": "Not found", "path": $input.path, "method": $input.method})
+[echo]: response(status=200, body={"method": "GET", "query": input.query, "path": input.path})
+[echo_post]: response(status=200, body={"method": "POST", "body": input.body, "path": input.path})
+[not_found]: response(status=404, body={"error": "Not found", "path": input.path, "method": input.method})
 
 # Routing
-[request] -> switch $input.route {
+[request] -> switch input.route {
   "GET /api/hello": [hello]
   "GET /api/echo": [echo]
   "POST /api/echo": [echo_post]

@@ -23,7 +23,8 @@ pub enum Expr {
     FString(Vec<FStringPart>),
 
     // References
-    /// Variable reference: `$ctx.field.nested` — resolved at eval time via context
+    /// Legacy variable reference (no longer produced by parser — kept for internal compatibility)
+    #[allow(dead_code)]
     Variable(String),
     /// Bare identifier: `name` — looked up in scope (template variables, loop vars)
     Identifier(String),

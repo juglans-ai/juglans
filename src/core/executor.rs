@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info, warn};
 
 use crate::builtins::BuiltinRegistry;
-use crate::core::context::WorkflowContext;
+use crate::core::context::{WorkflowContext, WorkflowEvent};
 use crate::core::expr_eval::{self, ExprEvaluator};
 use crate::core::graph::{self, NodeType, WorkflowGraph};
 use crate::core::instance_arena::{MethodScope, TypedSlot};
@@ -283,6 +283,20 @@ impl WorkflowExecutor {
             // else: fall through to expression evaluator below
         }
 
+        // Node reference syntax: [identifier] → preserve as literal string.
+        // Used by on_tool=[handler], on_token=[handler], on_result=[handler].
+        // Without this, [stream_chunk] would evaluate as array [null] via expr evaluator.
+        if clean_param.starts_with('[') && clean_param.ends_with(']') && clean_param.len() > 2 {
+            let inner = clean_param[1..clean_param.len() - 1].trim();
+            let is_node_ref = !inner.is_empty()
+                && inner.starts_with(|c: char| c.is_alphabetic() || c == '_')
+                && inner.chars().all(|c: char| c.is_alphanumeric() || c == '_')
+                && !matches!(inner, "true" | "false" | "null");
+            if is_node_ref {
+                return Ok(Value::String(clean_param.to_string()));
+            }
+        }
+
         // Quoted -> string literal, return directly without going through expression evaluator.
         // Prevents "display_only" from being resolved as a variable to Null, "trade-extractor" being parsed as trade - extractor = 0
         if clean_param.starts_with('"') && clean_param.ends_with('"') {
@@ -435,7 +449,15 @@ impl WorkflowExecutor {
                 }
 
                 // Check if this is a function node call
-                if workflow.functions.contains_key(&action.name) {
+                // Look in current workflow first, then fallback to root workflow
+                let func_workflow = if workflow.functions.contains_key(&action.name) {
+                    Some(workflow.clone())
+                } else {
+                    context
+                        .get_root_workflow()
+                        .filter(|rw| rw.functions.contains_key(&action.name))
+                };
+                if let Some(func_wf) = func_workflow {
                     // Resolve all function args concurrently
                     let param_futures: Vec<_> = action
                         .params
@@ -472,10 +494,102 @@ impl WorkflowExecutor {
                         .collect();
                     context.emit_node_start(&node.id, &action.name, &display_params);
                     let result = self
-                        .execute_function(action.name.clone(), args, workflow.clone(), context)
+                        .execute_function(action.name.clone(), args, func_wf, context)
                         .await;
                     context.emit_node_complete(&node.id, &action.name, &result);
                     return result;
+                }
+
+                // Check if this is a method call on an instance (instance.method)
+                if let Some((instance_path, method_name)) = action.name.rsplit_once('.') {
+                    if context.lookup_instance(instance_path).is_ok() {
+                        let instance_id = context.lookup_instance(instance_path)?;
+                        let class_def =
+                            context.arena().class_def(instance_id).ok_or_else(|| {
+                                anyhow!("Instance '{}' class_def not found in arena", instance_path)
+                            })?;
+                        let class_name =
+                            context.arena().class_name(instance_id).unwrap_or_default();
+                        let method_def = class_def.methods.get(method_name).ok_or_else(|| {
+                            anyhow!("Class '{}' has no method '{}'", class_name, method_name)
+                        })?;
+
+                        // Resolve params
+                        let param_futures: Vec<_> = action
+                            .params
+                            .iter()
+                            .map(|(key, val_template)| {
+                                let key = key.clone();
+                                let val_template = val_template.clone();
+                                let executor = self.clone();
+                                let ctx = context.clone();
+                                async move {
+                                    let val =
+                                        executor.process_parameter(&val_template, &ctx).await?;
+                                    Ok::<(String, Value), anyhow::Error>((key, val))
+                                }
+                            })
+                            .collect();
+                        let resolved = futures::future::join_all(param_futures).await;
+                        let mut args = HashMap::new();
+                        for result in resolved {
+                            let (key, val) = result?;
+                            args.insert(key, val);
+                        }
+
+                        // Push method scope
+                        use crate::core::instance_arena::{MethodScope, TypedSlot};
+                        let field_cache = context
+                            .arena()
+                            .snapshot_fields(instance_id)
+                            .unwrap_or_default();
+                        let scope = MethodScope {
+                            instance_id,
+                            class_def: Arc::clone(&class_def),
+                            instance_path: instance_path.to_string(),
+                            dirty: HashMap::new(),
+                            field_cache,
+                            method_params: method_def.params.clone(),
+                            param_values: Vec::new(),
+                        };
+                        context.push_method_scope(scope)?;
+
+                        // Bind method parameters (supports both named and positional argN)
+                        let mut param_slots = Vec::with_capacity(method_def.params.len());
+                        let mut pos_idx = 0usize;
+                        for param_name in &method_def.params {
+                            if param_name == "self" {
+                                param_slots.push(TypedSlot::Null);
+                                continue;
+                            }
+                            let val = if let Some(v) = args.get(param_name) {
+                                Some(v.clone())
+                            } else {
+                                // Fallback: try positional argN
+                                let key = format!("arg{}", pos_idx);
+                                args.get(&key).cloned()
+                            };
+                            pos_idx += 1;
+                            if let Some(v) = val {
+                                param_slots.push(TypedSlot::from_value(v.clone()));
+                                context.set(param_name.clone(), v)?;
+                            } else {
+                                param_slots.push(TypedSlot::Null);
+                            }
+                        }
+                        context.set_method_param_values(param_slots)?;
+
+                        // Execute method body
+                        let body_arc = Arc::clone(&method_def.body);
+                        self.clone().execute_graph(body_arc, context).await?;
+
+                        // Pop scope, flush dirty fields
+                        if let Some(scope) = context.pop_method_scope()? {
+                            context.flush_dirty_to_arena(&scope);
+                        }
+
+                        return Ok(Some(json!({"__arena_ref__": instance_id.0})));
+                    }
                 }
 
                 // Resolve all task params concurrently
@@ -594,6 +708,12 @@ impl WorkflowExecutor {
                 let result: Result<Option<Value>> = Err(anyhow!("[{}] {}", kind, message));
                 context.emit_node_complete(&node.id, "return_err", &result);
                 result
+            }
+            NodeType::Yield(expr) => {
+                debug!("│   Yield: {}", expr);
+                let value = self.process_parameter(expr, context).await?;
+                context.emit(WorkflowEvent::Yield(value.clone()));
+                Ok(Some(value))
             }
             NodeType::AssignCall { var, action } => {
                 debug!("│   AssignCall: {} = {}(...)", var, action.name);
@@ -1426,6 +1546,8 @@ impl WorkflowExecutor {
         Box::pin(async move {
             // Inject current workflow into context (used by on_tool=[node] handler)
             context.set_current_workflow(workflow.clone());
+            // Pin root workflow on first call (never overwritten by sub-graph execution)
+            context.set_root_workflow(workflow.clone());
 
             // Inject class definition registry into context and expr_eval (for instance field index lookup)
             if !workflow.classes.is_empty() {

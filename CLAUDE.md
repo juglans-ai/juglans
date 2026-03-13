@@ -28,7 +28,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
    - JuglansRuntime (Jug0Client or custom implementation)
 5. Execute DAG:
    - Traverse graph (petgraph)
-   - Resolve variables ($input, $output, $ctx, $reply)
+   - Resolve variables (input, output, reply, etc.)
    - Call tools (builtin, MCP, or Jug0 API)
    - Update WorkflowContext
 ```
@@ -55,7 +55,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **src/builtins/**
 - `ai.rs` - chat() (with `state` parameter, client tool bridge, terminal tool detection), p() (prompt render), memory_search(), history() tools
-- `system.rs` - notify(), set_context(), reply(), timer(), feishu_webhook() tools
+- `system.rs` - notify(), reply(), timer(), feishu_webhook() tools (set_context is internal-only, users write assignment syntax)
 - `devtools.rs` - Developer tools: read_file(), write_file(), edit_file(), glob(), grep(), bash() (also aliased as "sh")
 - `http.rs` - serve() (HTTP entry point marker), response() (HTTP response builder) for web server backend
 - `network.rs` - fetch(), fetch_url() tools
@@ -75,7 +75,7 @@ GraphParser::parse() → WorkflowGraph (DAG)
 WorkflowExecutor::run()
    ↓
 For each node:
-  1. Resolve parameters ($input.field, $ctx.var)
+  1. Resolve parameters (input.field, user_var, etc.)
   2. execute_node()
      - Builtin tools (chat, p, notify, devtools)
      - Python tools
@@ -89,14 +89,16 @@ Output final context
 
 ### Variable Resolution
 
-Juglans uses path-based variable access:
+Juglans uses bare identifiers for variable access (no `$` prefix needed):
 
-- `$input.field` - Input data passed via --input
-- `$output` - Last node's output
-- `$ctx.variable` - Custom context variables (set via set() tool)
-- `$reply.output` / `$reply.status` - Agent response metadata
+- `input.field` - Input data passed via --input
+- `output` - Last node's output
+- `variable` - Custom context variables (set via assignment syntax: `variable = value`)
+- `reply.output` / `reply.status` - Agent response metadata
 
-Variables are resolved by `WorkflowContext::resolve_path()` using JSON pointer-style access.
+Reserved words: `input`, `output`, `reply`, `error`, `config`.
+
+Variables are resolved by `WorkflowContext::resolve_path()` using JSON pointer-style access. Legacy `$ctx.var` / `$input.field` syntax is still supported internally but not recommended.
 
 ## Common Development Commands
 
@@ -186,25 +188,25 @@ The CLI searches for config in: `./juglans.toml` → `~/.config/juglans/juglans.
 ### Workflow Execution
 
 - DAG traversal in topological order
-- **Flow imports**: `flows: { alias: "path" }` merges subworkflow nodes with namespace prefixes at compile time (`resolver.rs`). Variables referencing child nodes are auto-prefixed; `$ctx`/`$input`/`$output` are unchanged. Supports recursive imports and circular import detection.
-- Conditional edges: `[node] if $ctx.value == "x" -> [next]`
-- Cross-workflow edges: `[node] if $ctx.x -> [alias.child_node]` (target nodes from imported flows)
-- Switch routing: `[node] -> switch $var { "a": [x], default: [y] }` (exclusive branches)
-- Error handling edges: `[node] on error -> [fallback]` (sets global `$error` variable)
+- **Flow imports**: `flows: { alias: "path" }` merges subworkflow nodes with namespace prefixes at compile time (`resolver.rs`). Variables referencing child nodes are auto-prefixed. Supports recursive imports and circular import detection.
+- Conditional edges: `[node] if value == "x" -> [next]`
+- Cross-workflow edges: `[node] if x -> [alias.child_node]` (target nodes from imported flows)
+- Switch routing: `[node] -> switch output.type { "a": [x], default: [y] }` (exclusive branches)
+- Error handling edges: `[node] on error -> [fallback]` (sets global `error` variable)
 - Loop support: `foreach` and `while` blocks for iteration
-- **Function definitions**: `[name(params)]: { steps }` — reusable parameterized node blocks stored in `workflow.functions`, not in main DAG. Executor binds args to context, runs body sub-graph, returns `$output`.
+- **Function definitions**: `[name(params)]: { steps }` — reusable parameterized node blocks stored in `workflow.functions`, not in main DAG. Executor binds args to context, runs body sub-graph, returns `output`.
 
 ### Expression Evaluation
 
 - **Pest-based ExprEvaluator** (`expr.pest` grammar, `expr_ast.rs` AST, `expr_eval.rs` evaluator) replaces Rhai
 - Python-like expression language: arithmetic, comparison, logical (`and`/`or`/`not`), membership (`in`/`not in`), pipe/filter chains
-- Variable resolution via `$var.path.field` with JSON pointer-style access
+- Variable resolution via bare identifiers (`var.path.field`) with JSON pointer-style access; legacy `$var` syntax still supported
 - 30+ built-in functions: `len`, `str`, `int`, `float`, `upper`, `lower`, `round`, `join`, `split`, `replace`, `contains`, `keys`, `values`, `default`, `range`, etc.
 - Python-like truthiness: `false`, `0`, `""`, `[]`, `{}`, `null` are falsy
 
 ### Tool System
 
-1. **Builtin tools** - Direct Rust implementations (chat, p, notify, fetch, reply, serve, response)
+1. **Builtin tools** - Direct Rust implementations (chat, p, notify, fetch, reply, serve, response). Assignment syntax (`key = value`) compiles to internal `set_context` tool.
 2. **Devtools** - Claude Code-style developer tools (read_file, write_file, edit_file, glob, grep, bash); auto-registered as `"devtools"` slug in ToolRegistry for LLM function calling
 3. **Python tools** - Transparent Python ecosystem calls via subprocess worker
 4. **MCP tools** - External processes via stdio/SSE (filesystem, web-browser)
@@ -223,7 +225,7 @@ python: ["pandas", "sklearn.ensemble", "./utils.py"]
 
 # Transparent function calls
 [load]: pandas.read_csv("data.csv")
-[stats]: $load.describe()
+[stats]: load.describe()
 [model]: sklearn.ensemble.RandomForestClassifier()
 ```
 
@@ -244,7 +246,7 @@ python: ["pandas", "sklearn.ensemble", "./utils.py"]
 Multi-branch routing that executes only ONE matching branch:
 
 ```yaml
-[classify] -> switch $output.intent {
+[classify] -> switch output.intent {
     "question": [answer]
     "task": [execute]
     default: [fallback]

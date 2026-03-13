@@ -10,7 +10,7 @@ The simplest AI call — one node, one message, one reply:
 agents: ["./agents/*.jgagent"]
 
 [ask]: chat(agent="assistant", message="What is 2+2?")
-[show]: print(message=$output)
+[show]: print(message=output)
 
 [ask] -> [show]
 ```
@@ -19,7 +19,7 @@ Line-by-line explanation:
 
 1. `agents: ["./agents/*.jgagent"]` — A metadata declaration that tells the engine to load all `.jgagent` configuration files from the `./agents/` directory. Only after loading an agent can `chat()` find it.
 2. `[ask]: chat(agent="assistant", message="What is 2+2?")` — Calls the `chat()` tool, sending the message `"What is 2+2?"` to the agent with slug `"assistant"`. The engine sends the message to the corresponding model and waits for a reply.
-3. `[show]: print(message=$output)` — The AI's reply is stored in `$output`, and `print` outputs it to the console.
+3. `[show]: print(message=output)` — The AI's reply is stored in `output`, and `print` outputs it to the console.
 4. `[ask] -> [show]` — First call the AI, then print the result.
 
 `chat()` is the most important built-in tool in Juglans. Its minimal usage requires only two parameters:
@@ -73,15 +73,15 @@ my-project/
 
 The paths in `agents:` metadata are relative to the directory where the `.jg` file is located. `["./agents/*.jgagent"]` matches all `.jgagent` files under `agents/`.
 
-## 6.3 Dynamic Messages — Constructing with $input
+## 6.3 Dynamic Messages — Constructing with input
 
 Hardcoded messages are only suitable for testing. In real scenarios, messages come from external input:
 
 ```juglans
 agents: ["./agents/*.jgagent"]
 
-[ask]: chat(agent="assistant", message=$input.question)
-[result]: print(message=$output)
+[ask]: chat(agent="assistant", message=input.question)
+[result]: print(message=output)
 
 [ask] -> [result]
 ```
@@ -92,7 +92,7 @@ Run:
 juglans chat.jg --input '{"question": "Explain recursion in one sentence."}'
 ```
 
-`$input.question` is replaced at execution time with `"Explain recursion in one sentence."`, which the AI receives and responds to.
+`input.question` is replaced at execution time with `"Explain recursion in one sentence."`, which the AI receives and responds to.
 
 ### Concatenating Context
 
@@ -101,9 +101,9 @@ Use `+` to concatenate strings, providing the AI with more context:
 ```juglans
 agents: ["./agents/*.jgagent"]
 
-[init]: set_context(lang=$input.lang)
-[ask]: chat(agent="assistant", message="Answer in " + $ctx.lang + ": " + $input.question)
-[show]: print(message=$output)
+[init]: lang = input.lang
+[ask]: chat(agent="assistant", message="Answer in " + lang + ": " + input.question)
+[show]: print(message=output)
 
 [init] -> [ask] -> [show]
 ```
@@ -122,34 +122,34 @@ Chain multiple `chat()` nodes together, with the previous node's output feeding 
 agents: ["./agents/*.jgagent"]
 
 [draft]: chat(agent="assistant", message="Write a short poem about the sea.")
-[review]: chat(agent="assistant", message="Review this poem and suggest improvements: " + $output)
-[final]: print(message=$output)
+[review]: chat(agent="assistant", message="Review this poem and suggest improvements: " + output)
+[final]: print(message=output)
 
 [draft] -> [review] -> [final]
 ```
 
 Execution flow:
 
-1. `[draft]` — The AI writes a short poem about the sea; the result is stored in `$output`.
-2. `[review]` — Reads `$output` (the poem from the previous step) and asks the AI to review and improve it. The AI's improvement suggestions overwrite `$output`.
+1. `[draft]` — The AI writes a short poem about the sea; the result is stored in `output`.
+2. `[review]` — Reads `output` (the poem from the previous step) and asks the AI to review and improve it. The AI's improvement suggestions overwrite `output`.
 3. `[final]` — Prints the final review result.
 
 ### Saving Intermediate Results
 
-If you still need the original poem later, save it with `$ctx`:
+If you still need the original poem later, save it to a variable:
 
 ```juglans
 agents: ["./agents/*.jgagent"]
 
 [draft]: chat(agent="assistant", message="Write a haiku about mountains.")
-[save]: set_context(poem=$output)
-[review]: chat(agent="assistant", message="Critique this haiku: " + $ctx.poem)
-[show]: print(message="Original: " + $ctx.poem + " | Review: " + $output)
+[save]: poem = output
+[review]: chat(agent="assistant", message="Critique this haiku: " + poem)
+[show]: print(message="Original: " + poem + " | Review: " + output)
 
 [draft] -> [save] -> [review] -> [show]
 ```
 
-`$ctx.poem` persists throughout the entire workflow and will not be overwritten by subsequent `$output` values.
+`poem` persists throughout the entire workflow and will not be overwritten by subsequent `output` values.
 
 ### Using Different Agents
 
@@ -158,9 +158,9 @@ Each node in the chain can use a different agent, leveraging their respective st
 ```juglans
 agents: ["./agents/*.jgagent"]
 
-[translate]: chat(agent="translator", message="Translate to English: " + $input.text)
-[summarize]: chat(agent="summarizer", message="Summarize in one sentence: " + $output)
-[result]: print(message=$output)
+[translate]: chat(agent="translator", message="Translate to English: " + input.text)
+[summarize]: chat(agent="summarizer", message="Summarize in one sentence: " + output)
+[result]: print(message=output)
 
 [translate] -> [summarize] -> [result]
 ```
@@ -174,8 +174,8 @@ By default, `chat()` returns free-form text. Adding the `format="json"` paramete
 ```juglans
 agents: ["./agents/*.jgagent"]
 
-[analyze]: chat(agent="assistant", message="Analyze the sentiment: " + $input.text, format="json")
-[show]: print(message=$output)
+[analyze]: chat(agent="assistant", message="Analyze the sentiment: " + input.text, format="json")
+[show]: print(message=output)
 
 [analyze] -> [show]
 ```
@@ -193,7 +193,7 @@ Example AI JSON response:
 What `format="json"` does:
 
 - Adds a JSON output constraint (response_format) to the model
-- The return value is a JSON object, and internal fields can be accessed via paths like `$output.sentiment`
+- The return value is a JSON object, and internal fields can be accessed via paths like `output.sentiment`
 
 ### JSON Output + Conditional Routing
 
@@ -202,19 +202,19 @@ The most powerful use of JSON output is combining it with conditional routing, l
 ```juglans
 agents: ["./agents/*.jgagent"]
 
-[classify]: chat(agent="assistant", message="Classify this as positive or negative: " + $input.text, format="json")
+[classify]: chat(agent="assistant", message="Classify this as positive or negative: " + input.text, format="json")
 [pos]: print(message="Positive feedback detected!")
 [neg]: print(message="Negative feedback — escalating.")
 [done]: print(message="Classification complete.")
 
-[classify] if $output.sentiment == "positive" -> [pos]
-[classify] if $output.sentiment == "negative" -> [neg]
+[classify] if output.sentiment == "positive" -> [pos]
+[classify] if output.sentiment == "negative" -> [neg]
 [classify] -> [done]
 [pos] -> [done]
 [neg] -> [done]
 ```
 
-The AI returns `{"sentiment": "positive"}`, and the workflow automatically routes to `[pos]` or `[neg]` based on `$output.sentiment`.
+The AI returns `{"sentiment": "positive"}`, and the workflow automatically routes to `[pos]` or `[neg]` based on `output.sentiment`.
 
 ## 6.6 Configuration Notes
 
@@ -244,15 +244,15 @@ Without this configuration, `chat()` will return a connection error. See the [Ju
 | AI call | `chat(agent="slug", message=...)` | Send a message to an agent and get a reply |
 | Agent configuration | `.jgagent` file | Define model, temperature, and system prompt |
 | Loading agents | `agents: ["./agents/*.jgagent"]` | Import agent files into a workflow |
-| Dynamic messages | `message=$input.question` | Construct message content using variables |
+| Dynamic messages | `message=input.question` | Construct message content using variables |
 | Multi-turn chaining | `[a] -> [b]` with multiple chat nodes in sequence | Previous output serves as the next input |
 | JSON output | `format="json"` | Force structured output; can be combined with conditional routing |
 
 Key rules:
 
 1. Before using `chat()`, you must load agent files via `agents:` metadata.
-2. The return value of `chat()` is stored in `$output`, which the next node can read directly.
-3. `format="json"` makes the AI return a JSON object whose fields can be accessed via `$output.field`.
+2. The return value of `chat()` is stored in `output`, which the next node can read directly.
+3. `format="json"` makes the AI return a JSON object whose fields can be accessed via `output.field`.
 4. Multiple `chat()` nodes can use the same or different agents.
 
 ## Next Chapter

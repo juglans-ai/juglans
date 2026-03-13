@@ -10,19 +10,19 @@ Complete reference for the Juglans Expression Language (JEL). Covers variables, 
 
 | Variable | Source | Writable | Scope | Example |
 |----------|--------|----------|-------|---------|
-| `$input` | CLI `--input` JSON or API body | No | Entire workflow | `$input.name`, `$input.items.0` |
-| `$output` | Return value of the last executed node | No | Overwritten each step | `$output`, `$output.text` |
-| `$ctx` | `set_context()` | Yes | Entire workflow | `$ctx.count`, `$ctx.user.name` |
-| `$reply` | AI response metadata | No | After `chat()` | `$reply.content`, `$reply.tokens` |
-| `$error` | Set when `on error` triggers | No | Error path | `$error.message`, `$error.node` |
+| `input` | CLI `--input` JSON or API body | No | Entire workflow | `input.name`, `input.items.0` |
+| `output` | Return value of the last executed node | No | Overwritten each step | `output`, `output.text` |
+| Context vars | Assignment syntax | Yes | Entire workflow | `count`, `user.name` |
+| `reply` | AI response metadata | No | After `chat()` | `reply.content`, `reply.tokens` |
+| `error` | Set when `on error` triggers | No | Error path | `error.message`, `error.node` |
 | `$node_id.output` | Specific node's output | No | Entire workflow | `$classify.output` |
 
-### $input
+### input
 
 Data passed when the workflow starts. Read-only.
 
 ```juglans
-[greet]: print(message="Hello, " + $input.name)
+[greet]: print(message="Hello, " + input.name)
 [done]: print(message="Done")
 [greet] -> [done]
 ```
@@ -40,21 +40,21 @@ juglans workflow.jg --input '{"name": "Alice", "items": [1, 2, 3]}'
 Access nested fields with dot notation. Arrays use numeric indices:
 
 ```text
-$input              # Entire object
-$input.name         # "Alice"
-$input.items.0      # 1 (first element)
-$input.user.address.city   # Deep nesting
+input              # Entire object
+input.name         # "Alice"
+input.items.0      # 1 (first element)
+input.user.address.city   # Deep nesting
 ```
 
 Missing fields resolve to `null` (no error).
 
-### $output
+### output
 
 Return value of the most recently executed node. Overwritten after each step.
 
 ```juglans
 [step1]: print(message="hello")
-[step2]: print(message="step1 said: " + $output)
+[step2]: print(message="step1 said: " + output)
 [step1] -> [step2]
 ```
 
@@ -65,53 +65,53 @@ Access a specific node's output by its ID. Persists for the entire workflow -- u
 ```juglans
 [a]: print(message="first")
 [b]: print(message="second")
-[c]: print(message=$a.output + " and " + $b.output)
+[c]: print(message=a.output + " and " + b.output)
 [a] -> [b] -> [c]
 ```
 
-### $ctx
+### Context Variables
 
-User-defined shared storage. Write with `set_context()`, read with `$ctx.key`.
+User-defined shared storage. Write with assignment syntax, read as bare identifiers.
 
 ```juglans
-[init]: set_context(count=0, name="Alice")
-[inc]: set_context(count=$ctx.count + 1)
-[show]: print(message=$ctx.name + ": " + str($ctx.count))
+[init]: count = 0, name = "Alice"
+[inc]: count = count + 1
+[show]: print(message=name + ": " + str(count))
 [init] -> [inc] -> [show]
 ```
 
 Context persists across all nodes in the workflow.
 
-### $reply
+### reply
 
 Metadata from the most recent AI response (after `chat()`).
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `$reply.content` | string | Reply content |
-| `$reply.tokens` | number | Tokens used |
-| `$reply.model` | string | Model used |
-| `$reply.finish_reason` | string | Finish reason |
-| `$reply.chat_id` | string | Conversation session ID |
+| `reply.content` | string | Reply content |
+| `reply.tokens` | number | Tokens used |
+| `reply.model` | string | Model used |
+| `reply.finish_reason` | string | Finish reason |
+| `reply.chat_id` | string | Conversation session ID |
 
 ```juglans
-[ask]: chat(agent="assistant", message=$input.query)
-[log]: print(message="Tokens: " + str($reply.tokens))
+[ask]: chat(agent="assistant", message=input.query)
+[log]: print(message="Tokens: " + str(reply.tokens))
 [ask] -> [log]
 ```
 
-### $error
+### error
 
 Available on `on error` paths. Contains information about the failure.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `$error.message` | string | Error message |
-| `$error.node` | string | Node ID that failed |
+| `error.message` | string | Error message |
+| `error.node` | string | Node ID that failed |
 
 ```juglans
-[risky]: fetch_url(url=$input.url)
-[handler]: print(message="Failed at " + $error.node + ": " + $error.message)
+[risky]: fetch_url(url=input.url)
+[handler]: print(message="Failed at " + error.node + ": " + error.message)
 [risky] on error -> [handler]
 ```
 
@@ -124,7 +124,7 @@ $auth.verify.output       # Output of the verify node in the auth subworkflow
 $trading.extract.output   # Output of extract in the trading subworkflow
 ```
 
-Global variables (`$ctx`, `$input`, `$output`) are not prefixed.
+Global variables (`input`, `output`, context variables) are not prefixed.
 
 ### Loop Context Variables
 
@@ -137,8 +137,8 @@ Available inside `foreach` and `while` blocks:
 | `loop.last` | boolean | Last iteration? |
 
 ```juglans
-[process]: foreach($item in $input.items) {
-  [log]: print(message="Item " + str(loop.index + 1) + ": " + $item)
+[process]: foreach(item in input.items) {
+  [log]: print(message="Item " + str(loop.index + 1) + ": " + item)
 }
 ```
 
@@ -150,24 +150,20 @@ Available inside `foreach` and `while` blocks:
 
 | Operator | Description | Example |
 |----------|-------------|---------|
-| `+` | Addition / string concatenation | `$ctx.a + 1`, `"hi" + " " + "there"` |
-| `-` | Subtraction | `$ctx.a - $ctx.b` |
-| `*` | Multiplication | `$ctx.price * $ctx.quantity` |
-| `/` | Division | `$ctx.total / $ctx.count` |
-| `%` | Modulo | `$ctx.index % 2` |
+| `+` | Addition / string concatenation | `a + 1`, `"hi" + " " + "there"` |
+| `-` | Subtraction | `a - b` |
+| `*` | Multiplication | `price * quantity` |
+| `/` | Division | `total / count` |
+| `%` | Modulo | `index % 2` |
 
 ```juglans
-[calc]: set_context(
-  sum=$ctx.a + $ctx.b,
-  diff=$ctx.a - $ctx.b,
-  product=$ctx.a * $ctx.b
-)
+[calc]: sum = a + b, diff = a - b, product = a * b
 ```
 
 The `+` operator also concatenates strings:
 
 ```juglans
-[greet]: print(message="Hello, " + $input.name + "!")
+[greet]: print(message="Hello, " + input.name + "!")
 [done]: print(message="ok")
 [greet] -> [done]
 ```
@@ -187,8 +183,8 @@ The `+` operator also concatenates strings:
 [check]: print(message="checking")
 [high]: print(message="high")
 [low]: print(message="low")
-[check] if $ctx.score >= 80 -> [high]
-[check] if $ctx.score < 80 -> [low]
+[check] if score >= 80 -> [high]
+[check] if score < 80 -> [low]
 ```
 
 ### Logical
@@ -203,8 +199,8 @@ The `+` operator also concatenates strings:
 [check]: print(message="checking")
 [allow]: print(message="allowed")
 [deny]: print(message="denied")
-[check] if $ctx.logged_in && $ctx.is_admin -> [allow]
-[check] if !$ctx.logged_in -> [deny]
+[check] if logged_in && is_admin -> [allow]
+[check] if !logged_in -> [deny]
 ```
 
 ### Membership
@@ -221,7 +217,7 @@ Works with strings (substring check), arrays (element check), and objects (key c
 Use `+` to join strings. Non-string values must be converted with `str()` first:
 
 ```juglans
-[show]: print(message="Count: " + str($ctx.count) + " items")
+[show]: print(message="Count: " + str(count) + " items")
 [done]: print(message="ok")
 [show] -> [done]
 ```
@@ -242,7 +238,7 @@ Use parentheses to override precedence:
 ```juglans
 [check]: print(message="checking")
 [target]: print(message="target")
-[check] if ($ctx.a > 0 && $ctx.b > 0) || $ctx.force -> [target]
+[check] if (a > 0 && b > 0) || force -> [target]
 ```
 
 ---
@@ -259,12 +255,7 @@ Use parentheses to override precedence:
 | `bool(x)` | `bool(value) -> bool` | Convert using truthiness rules |
 
 ```juglans
-[conv]: set_context(
-  s=str(42),
-  n=int("100"),
-  f=float("3.14"),
-  b=bool(1)
-)
+[conv]: s = str(42), n = int("100"), f = float("3.14"), b = bool(1)
 ```
 
 ### Type Checking
@@ -280,7 +271,7 @@ Use parentheses to override precedence:
 | `is_object(x)` | `is_object(value) -> bool` | True if value is a dict |
 
 ```juglans
-[check]: print(message="Type is: " + type($ctx.value))
+[check]: print(message="Type is: " + type(value))
 [done]: print(message="ok")
 [check] -> [done]
 ```
@@ -310,22 +301,11 @@ Use parentheses to override precedence:
 | `reverse(s)` | `reverse(str) -> str` | Reverse a string |
 
 ```juglans
-[demo]: set_context(
-  up=upper("hello"),
-  lo=lower("WORLD"),
-  t=trim("  spaced  "),
-  r=replace("foo bar foo", "foo", "baz"),
-  parts=split("a,b,c", ","),
-  joined=join(["x", "y", "z"], "-")
-)
+[demo]: up = upper("hello"), lo = lower("WORLD"), t = trim("  spaced  "), r = replace("foo bar foo", "foo", "baz"), parts = split("a,b,c", ","), joined = join(["x", "y", "z"], "-")
 ```
 
 ```juglans
-[pad]: set_context(
-  left=lpad("42", 5, "0"),
-  right=rpad("hi", 10, "."),
-  sub=slice("hello world", 0, 5)
-)
+[pad]: left = lpad("42", 5, "0"), right = rpad("hi", 10, "."), sub = slice("hello world", 0, 5)
 ```
 
 ### Collection Functions
@@ -355,22 +335,13 @@ Use parentheses to override precedence:
 | `any(arr)` | `any(list) -> bool` | True if any element is truthy |
 
 ```juglans
-[init]: set_context(items=[3, 1, 2])
-[ops]: set_context(
-  length=len($ctx.items),
-  sorted=sort($ctx.items),
-  added=append($ctx.items, 4),
-  total=sum($ctx.items)
-)
+[init]: items = [3, 1, 2]
+[ops]: length = len(items), sorted = sort(items), added = append(items, 4), total = sum(items)
 [init] -> [ops]
 ```
 
 ```juglans
-[range_demo]: set_context(
-  five=range(5),
-  evens=range(0, 10, 2),
-  rev=reverse(range(5))
-)
+[range_demo]: five = range(5), evens = range(0, 10, 2), rev = reverse(range(5))
 ```
 
 ### Math Functions
@@ -391,13 +362,7 @@ Use parentheses to override precedence:
 | `randint(min, max)` | `randint(int, int) -> int` | Random integer in [min, max] |
 
 ```juglans
-[math]: set_context(
-  r=round(3.14159, 2),
-  a=abs(-42),
-  lo=min(10, 20, 5),
-  hi=max(10, 20, 5),
-  clamped=clamp(150, 0, 100)
-)
+[math]: r = round(3.14159, 2), a = abs(-42), lo = min(10, 20, 5), hi = max(10, 20, 5), clamped = clamp(150, 0, 100)
 ```
 
 ### JSON / Data Functions
@@ -413,11 +378,7 @@ Use parentheses to override precedence:
 | `from_entries(pairs)` | `from_entries(list) -> dict` | Convert `[[key, value], ...]` to object |
 
 ```juglans
-[data]: set_context(
-  encoded=json({"name": "Alice", "age": 30}),
-  merged=merge({"a": 1}, {"b": 2}),
-  picked=pick({"a": 1, "b": 2, "c": 3}, ["a", "c"])
-)
+[data]: encoded = json({"name": "Alice", "age": 30}), merged = merge({"a": 1}, {"b": 2}), picked = pick({"a": 1, "b": 2, "c": 3}, ["a", "c"])
 ```
 
 ### Date/Time Functions
@@ -431,11 +392,7 @@ Use parentheses to override precedence:
 | `parse_date(s, fmt)` | `parse_date(str, str) -> str` | Parse a date string into ISO 8601 |
 
 ```juglans
-[time]: set_context(
-  current=now(),
-  ts=timestamp(),
-  formatted=format_date(now(), "%Y-%m-%d")
-)
+[time]: current = now(), ts = timestamp(), formatted = format_date(now(), "%Y-%m-%d")
 ```
 
 ### Encoding Functions
@@ -450,11 +407,7 @@ Use parentheses to override precedence:
 | `sha256(s)` | `sha256(str) -> str` | SHA-256 hash (hex) |
 
 ```juglans
-[encode]: set_context(
-  b64=base64_encode("hello world"),
-  url=url_encode("a=1&b=2"),
-  hash=sha256("secret")
-)
+[encode]: b64 = base64_encode("hello world"), url = url_encode("a=1&b=2"), hash = sha256("secret")
 ```
 
 ### Regex Functions
@@ -467,11 +420,7 @@ Use parentheses to override precedence:
 | `regex_replace(s, pattern, rep)` | `regex_replace(str, str, str) -> str` | Replace all matches |
 
 ```juglans
-[rx]: set_context(
-  is_email=regex_match("a@b.com", "^[^@]+@[^@]+$"),
-  digits=regex_find_all("abc123def456", "[0-9]+"),
-  cleaned=regex_replace("Hello   World", "\\s+", " ")
-)
+[rx]: is_email = regex_match("a@b.com", "^[^@]+@[^@]+$"), digits = regex_find_all("abc123def456", "[0-9]+"), cleaned = regex_replace("Hello   World", "\\s+", " ")
 ```
 
 ### Path Functions
@@ -484,12 +433,7 @@ Use parentheses to override precedence:
 | `join_path(a, b, ...)` | `join_path(str, str, ...) -> str` | Join path segments |
 
 ```juglans
-[paths]: set_context(
-  name=basename("/home/user/data.csv"),
-  dir=dirname("/home/user/data.csv"),
-  ext=extname("/home/user/data.csv"),
-  full=join_path("/home", "user", "data.csv")
-)
+[paths]: name = basename("/home/user/data.csv"), dir = dirname("/home/user/data.csv"), ext = extname("/home/user/data.csv"), full = join_path("/home", "user", "data.csv")
 ```
 
 ### Other Functions
@@ -507,11 +451,7 @@ Use parentheses to override precedence:
 | `oct(n)` | `oct(int) -> str` | Integer to octal string (`"0o52"`) |
 
 ```juglans
-[misc]: set_context(
-  name=default($input.name, "anonymous"),
-  msg=format("Hello {}, you have {} items", "Alice", 5),
-  id=uuid()
-)
+[misc]: name = default(input.name, "anonymous"), msg = format("Hello {}, you have {} items", "Alice", 5), id = uuid()
 ```
 
 ### Higher-Order Functions (Lambda Support)
@@ -532,26 +472,17 @@ These functions accept lambda expressions (`x => expr` or `(x, y) => expr`):
 Lambda syntax: `param => body` for single parameter, `(a, b) => body` for multiple.
 
 ```juglans
-[transform]: set_context(
-  doubled=map([1, 2, 3], x => x * 2),
-  evens=filter([1, 2, 3, 4, 5], x => x % 2 == 0),
-  total=reduce([1, 2, 3, 4], (acc, x) => acc + x, 0)
-)
+[transform]: doubled = map([1, 2, 3], x => x * 2), evens = filter([1, 2, 3, 4, 5], x => x % 2 == 0), total = reduce([1, 2, 3, 4], (acc, x) => acc + x, 0)
 ```
 
 ```juglans
-[advanced]: set_context(
-  sorted=sort_by(["banana", "apple", "cherry"], x => len(x)),
-  grouped=group_by([1, 2, 3, 4, 5], x => x % 2)
-)
+[advanced]: sorted = sort_by(["banana", "apple", "cherry"], x => len(x)), grouped = group_by([1, 2, 3, 4, 5], x => x % 2)
 ```
 
 Method call syntax is also supported -- lambdas can be chained:
 
 ```juglans
-[chain]: set_context(
-  result=[1, 2, 3, 4, 5].filter(x => x > 2).map(x => x * 10)
-)
+[chain]: result = [1, 2, 3, 4, 5].filter(x => x > 2).map(x => x * 10)
 ```
 
 ### Pipe Syntax
@@ -575,7 +506,7 @@ Expressions can appear in these positions within a workflow:
 ### Node Parameter Values
 
 ```juglans
-[step]: print(message="Count: " + str(len($ctx.items)))
+[step]: print(message="Count: " + str(len(items)))
 [done]: print(message="ok")
 [step] -> [done]
 ```
@@ -586,8 +517,8 @@ Expressions can appear in these positions within a workflow:
 [check]: print(message="checking")
 [pass]: print(message="pass")
 [fail]: print(message="fail")
-[check] if $ctx.score > 80 && $ctx.verified -> [pass]
-[check] if $ctx.score <= 80 -> [fail]
+[check] if score > 80 && verified -> [pass]
+[check] if score <= 80 -> [fail]
 ```
 
 ### Switch Values
@@ -598,7 +529,7 @@ Expressions can appear in these positions within a workflow:
 [zh]: print(message="chinese")
 [other]: print(message="other")
 
-[route] -> switch $ctx.language {
+[route] -> switch language {
   "en": [en]
   "zh": [zh]
   default: [other]
@@ -608,18 +539,18 @@ Expressions can appear in these positions within a workflow:
 ### While Conditions
 
 ```juglans
-[loop]: while($ctx.count < 10) {
-  [inc]: set_context(count=$ctx.count + 1)
+[loop]: while(count < 10) {
+  [inc]: count = count + 1
 }
 ```
 
-### Assignment Sugar
+### Assignment Syntax
 
-Assignment syntax desugars to `set_context()`:
+Assignment syntax sets context variables directly:
 
 ```juglans
 [init]: count = 0, name = "Alice"
-[show]: print(message=$ctx.name + ": " + str($ctx.count))
+[show]: print(message=name + ": " + str(count))
 [init] -> [show]
 ```
 
@@ -645,7 +576,7 @@ F-strings allow embedding expressions inside string literals:
 
 ```text
 f"Hello {name}, you have {count} items"
-f"Result: {$ctx.score * 100}%"
+f"Result: {score * 100}%"
 ```
 
 Triple-quoted f-strings support multi-line content:
@@ -678,8 +609,8 @@ Everything else is **truthy**.
 [no_data]: print(message="no data")
 
 # Empty list is falsy, non-empty list is truthy
-[check] if $ctx.results -> [has_data]
-[check] if !$ctx.results -> [no_data]
+[check] if results -> [has_data]
+[check] if !results -> [no_data]
 ```
 
 ### Type Coercion
@@ -695,34 +626,22 @@ Everything else is **truthy**.
 ### Data Processing Pipeline
 
 ```juglans
-[init]: set_context(
-  results=[],
-  total=0,
-  processed=0
-)
+[init]: results = [], total = 0, processed = 0
 
-[process]: foreach($item in $input.records) {
-  [validate]: set_context(
-    valid=$item.score >= 0 && $item.score <= 100
-  )
+[process]: foreach(item in input.records) {
+  [validate]: valid = item.score >= 0 && item.score <= 100
 
-  [transform]: set_context(
-    normalized=round($item.score / 100, 2),
-    label=upper(slice($item.name, 0, 3)),
-    processed=$ctx.processed + 1,
-    total=$ctx.total + $item.score,
-    results=append($ctx.results, {
-      "name": $item.name,
-      "score": $item.score,
-      "label": upper(slice($item.name, 0, 3))
+  [transform]: normalized = round(item.score / 100, 2), label = upper(slice(item.name, 0, 3)), processed = processed + 1, total = total + item.score, results = append(results, {
+      "name": item.name,
+      "score": item.score,
+      "label": upper(slice(item.name, 0, 3))
     })
-  )
 
   [validate] -> [transform]
 }
 
 [report]: print(
-  message="Processed " + str($ctx.processed) + " items. Avg: " + str(round($ctx.total / $ctx.processed, 1))
+  message="Processed " + str(processed) + " items. Avg: " + str(round(total / processed, 1))
 )
 
 [init] -> [process] -> [report]
@@ -731,18 +650,15 @@ Everything else is **truthy**.
 ### Dynamic Routing with Expressions
 
 ```juglans
-[evaluate]: set_context(
-  score=$input.score,
-  tier=default($input.tier, "standard")
-)
+[evaluate]: score = input.score, tier = default(input.tier, "standard")
 
 [done]: print(message="Routed to handler")
 [excellent]: print(message="Excellent!")
 [good]: print(message="Good")
 [retry]: print(message="Needs improvement")
 
-[evaluate] if $ctx.score >= 90 && $ctx.tier == "premium" -> [excellent]
-[evaluate] if $ctx.score >= 60 -> [good]
+[evaluate] if score >= 90 && tier == "premium" -> [excellent]
+[evaluate] if score >= 60 -> [good]
 [evaluate] -> [retry]
 
 [excellent] -> [done]
@@ -753,24 +669,12 @@ Everything else is **truthy**.
 ### Collection Transformation
 
 ```juglans
-[setup]: set_context(
-  numbers=[5, 3, 8, 1, 9, 2, 7],
-  words=["hello", "world", "juglans"]
-)
+[setup]: numbers = [5, 3, 8, 1, 9, 2, 7], words = ["hello", "world", "juglans"]
 
-[transform]: set_context(
-  sorted=sort($ctx.numbers),
-  top3=slice(sort($ctx.numbers), 4),
-  total=sum($ctx.numbers),
-  avg=round(sum($ctx.numbers) / len($ctx.numbers), 2),
-  upper_words=map($ctx.words, w => upper(w)),
-  long_words=filter($ctx.words, w => len(w) > 5),
-  lengths=map($ctx.words, w => len(w)),
-  word_str=join($ctx.words, ", ")
-)
+[transform]: sorted = sort(numbers), top3 = slice(sort(numbers), 4), total = sum(numbers), avg = round(sum(numbers) / len(numbers), 2), upper_words = map(words, w => upper(w)), long_words = filter(words, w => len(w) > 5), lengths = map(words, w => len(w)), word_str = join(words, ", ")
 
 [result]: print(
-  message="Sum=" + str($ctx.total) + " Avg=" + str($ctx.avg) + " Words: " + $ctx.word_str
+  message="Sum=" + str(total) + " Avg=" + str(avg) + " Words: " + word_str
 )
 
 [setup] -> [transform] -> [result]

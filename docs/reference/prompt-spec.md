@@ -522,7 +522,7 @@ prompts: ["./prompts/*.jgprompt"]
 
 [render]: p(
   slug="data-analysis",
-  data=$input.data,
+  data=input.data,
   focus="anomalies"
 )
 ```
@@ -533,8 +533,8 @@ prompts: ["./prompts/*.jgprompt"]
 prompts: ["./prompts/*.jgprompt"]
 agents: ["./agents/*.jgagent"]
 
-[render]: p(slug="data-analysis", data=$input.data, focus=$input.focus)
-[respond]: chat(agent="analyst", message=$output)
+[render]: p(slug="data-analysis", data=input.data, focus=input.focus)
+[respond]: chat(agent="analyst", message=output)
 
 [render] -> [respond]
 ```
@@ -549,7 +549,7 @@ agents: ["./agents/*.jgagent"]
 
 [ask]: chat(
   agent="assistant",
-  message=p(slug="greeting", name=$input.user)
+  message=p(slug="greeting", name=input.user)
 )
 ```
 

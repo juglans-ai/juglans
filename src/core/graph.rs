@@ -45,7 +45,8 @@ pub enum NodeType {
         class_name: String,
         args: HashMap<String, String>,
     },
-    /// Method call on an instance: $instance.method(args)
+    /// Method call on an instance (legacy — $ syntax removed, kept for runtime compat)
+    #[allow(dead_code)]
     MethodCall {
         instance_path: String,
         method_name: String,
@@ -53,6 +54,8 @@ pub enum NodeType {
     },
     /// return err { kind: "...", message: "..." } — explicit typed error (Rust-style)
     ReturnErr(Value),
+    /// yield expression — emit value as SSE event during execution
+    Yield(String),
 }
 
 #[derive(Debug, Clone)]

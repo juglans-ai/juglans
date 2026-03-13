@@ -7,8 +7,8 @@
 }
 
 [CreateUserRequest.validate(self)]: {
-  valid = $self.name != ""
-  err_msg = default($self.name == "", "name is required", "")
+  valid = self.name != ""
+  err_msg = default(self.name == "", "name is required", "")
 }
 
 [UserResponse]: {
@@ -19,25 +19,25 @@
   status: str = "ok"
 }
 
-[UserResponse.to_json(self)]: result = {"id": $self.id, "name": $self.name, "age": $self.age, "role": $self.role, "status": $self.status}
+[UserResponse.to_json(self)]: result = {"id": self.id, "name": self.name, "age": self.age, "role": self.role, "status": self.status}
 
 # ── HTTP 路由 ────────────────────────────────
 
 [http]: serve()
 
 [create_user]: new CreateUserRequest(
-  name=$input.body.name,
-  age=$input.body.age,
-  role=$input.body.role
+  name=input.body.name,
+  age=input.body.age,
+  role=input.body.role
 )
 
-[check]: $create_user.validate()
-[ok]: new UserResponse(id="u_001", name=$create_user.name, age=$create_user.age, role=$create_user.role)
-[send]: response(status=200, body=$ok)
+[check]: create_user.validate()
+[ok]: new UserResponse(id="u_001", name=create_user.name, age=create_user.age, role=create_user.role)
+[send]: response(status=200, body=ok)
 
 [err]: response(status=400, body={"error": "validation failed"})
 
 [http] -> [create_user] -> [check]
-[check] if $ctx.valid == true -> [ok]
-[check] if $ctx.valid != true -> [err]
+[check] if valid == true -> [ok]
+[check] if valid != true -> [err]
 [ok] -> [send]

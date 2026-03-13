@@ -56,6 +56,8 @@ impl Dialog {
                 "claude-haiku-4-5-20251001".to_string(),
                 "gpt-4o".to_string(),
                 "gpt-4o-mini".to_string(),
+                "grok-3".to_string(),
+                "grok-3-mini".to_string(),
             ],
             selected: 0,
         }

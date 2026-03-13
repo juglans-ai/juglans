@@ -85,15 +85,15 @@ curl http://localhost:3001/mcp/filesystem
 
 ### 6. Variable resolution failed
 
-**Error:** `Failed to resolve variable: $ctx.result`
+**Error:** `Failed to resolve variable: result`
 
-**Cause:** The variable was not set before being referenced. Context variables must be set via `set_context()` before use.
+**Cause:** The variable was not set before being referenced. Context variables must be set via assignment syntax before use.
 
 **Solution:** Ensure the node that sets the variable runs before the one that reads it:
 
 ```juglans
-[init]: set_context(result="data")
-[use]: chat(agent="assistant", message=$ctx.result)
+[init]: result = "data"
+[use]: chat(agent="assistant", message=result)
 
 [init] -> [use]
 ```

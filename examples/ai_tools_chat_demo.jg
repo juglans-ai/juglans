@@ -15,25 +15,25 @@ libs: ["../std/ai.jg"]
 }
 
 # Convert to schemas — writes back to instance's .schema field
-[_1]: $t_time.to_schema()
-[_2]: $t_math.to_schema()
+[_1]: t_time.to_schema()
+[_2]: t_math.to_schema()
 
 # Group tools
-[my_tools]: ai.toolbox(tools=[$t_time.schema, $t_math.schema])
+[my_tools]: ai.toolbox(tools=[t_time.schema, t_math.schema])
 
 # Chat with tools — the model should invoke get_current_time
 [ask]: chat(
   model="byteplus/seed-2-0-lite-260228",
   system_prompt="You are a helpful assistant. Use the provided tools to answer questions.",
   message="What time is it right now?",
-  tools=$my_tools.output,
+  tools=my_tools.output,
   on_tool=[handle_tool]
 )
 
-# Tool handler node — receives $input.tool_call
+# Tool handler node — receives input.tool_call
 [handle_tool]: result = "2026-03-11T12:00:00Z (mocked UTC time)"
 
 # Show result
-[done]: notify(message=$ask.output)
+[done]: notify(message=ask.output)
 
 [t_time] -> [_1] -> [t_math] -> [_2] -> [my_tools] -> [ask] -> [done]

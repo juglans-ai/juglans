@@ -53,7 +53,7 @@ juglans hello.jg
 ```yaml
 # chat.jg
 [greet]: chat(message="Say hello in 3 languages")
-[format]: chat(message="Format as a numbered list: $output")
+[format]: chat(message="Format as a numbered list: " + output)
 [greet] -> [format]
 ```
 
@@ -64,16 +64,16 @@ juglans hello.jg
 entry: [classify]
 exit: [reply]
 
-[classify]: chat(message=$input.message, format="json")
-[save]: set_context(intent=$classify.output.intent)
+[classify]: chat(message=input.message, format="json")
+[save]: intent = $classify.output.intent
 
-[handle_question]: chat(message="Answer: " + $input.message)
-[handle_task]: chat(message="Execute: " + $input.message)
-[reply]: print(value=$output)
+[handle_question]: chat(message="Answer: " + input.message)
+[handle_task]: chat(message="Execute: " + input.message)
+[reply]: print(value=output)
 
 [classify] -> [save]
-[save] if $ctx.intent == "question" -> [handle_question]
-[save] if $ctx.intent == "task" -> [handle_task]
+[save] if intent == "question" -> [handle_question]
+[save] if intent == "task" -> [handle_task]
 [save] -> [handle_question]
 
 [handle_question] -> [reply]
