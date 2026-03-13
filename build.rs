@@ -17,11 +17,16 @@ fn main() {
                 if path.extension().map(|e| e == "jg").unwrap_or(false) {
                     let stem = path.file_stem().unwrap().to_str().unwrap();
                     let abs = fs::canonicalize(&path).unwrap();
+                    // Use forward slashes for include_str! paths — Windows backslashes
+                    // are interpreted as escape sequences in Rust string literals.
+                    let abs_str = abs.to_str().unwrap().replace('\\', "/");
+                    // Strip \\?\ UNC prefix that canonicalize adds on Windows
+                    let abs_str = abs_str.strip_prefix("//?/").unwrap_or(&abs_str);
                     writeln!(
                         f,
                         "        \"{}\" => Some(include_str!(\"{}\")),",
                         stem,
-                        abs.display()
+                        abs_str
                     )
                     .unwrap();
                 }
