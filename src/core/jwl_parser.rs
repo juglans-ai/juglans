@@ -1099,39 +1099,98 @@ impl<'a> JwlParser<'a> {
         let mut body = WorkflowGraph::default();
 
         if matches!(self.peek_kind(), TokenKind::LBrace) {
-            // Multi-step: { step; step; ... }
             self.expect(&TokenKind::LBrace)?;
             self.skip_newlines();
-            let mut step_index = 0;
-            let mut last_idx: Option<petgraph::graph::NodeIndex> = None;
 
-            while !matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
-                let step_id = format!("__{}", step_index);
-                let context_id = format!("{}.__{}", name, step_index);
-                let node_type = self.parse_func_step(&context_id)?;
-                let node = Node {
-                    id: step_id.clone(),
-                    node_type,
-                };
-                let idx = body.graph.add_node(node);
-                body.node_map.insert(step_id.clone(), idx);
-
-                if let Some(prev_idx) = last_idx {
-                    body.graph.add_edge(prev_idx, idx, Edge::default());
-                } else {
-                    body.entry_node = step_id.clone();
+            if matches!(self.peek_kind(), TokenKind::LBracket) {
+                // DAG mode: { [name]: action(); [a] -> [b]; ... }
+                // Supports named nodes, conditional edges, switch — full workflow syntax.
+                while !matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
+                    self.skip_newlines();
+                    if matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
+                        break;
+                    }
+                    match self.peek_kind() {
+                        TokenKind::LBracket => {
+                            if self.is_edge_def() {
+                                self.parse_edge_def(&mut body)?;
+                            } else {
+                                self.parse_node_def(&mut body)?;
+                            }
+                        }
+                        TokenKind::Ident(_) => {
+                            // Bare assignment: var = expr (auto-named node)
+                            let step_id = format!("__{}", body.node_map.len());
+                            let node_type = self.parse_assignment_block()?;
+                            let node = Node {
+                                id: step_id.clone(),
+                                node_type,
+                            };
+                            let idx = body.graph.add_node(node);
+                            body.node_map.insert(step_id, idx);
+                        }
+                        _ => {
+                            let tok = self.peek().clone();
+                            return Err(self.error_at(
+                                tok.span,
+                                format!(
+                                    "Unexpected token in function body: {}",
+                                    tok.kind.describe()
+                                ),
+                            ));
+                        }
+                    }
                 }
+                self.expect(&TokenKind::RBrace)?;
 
-                last_idx = Some(idx);
-                step_index += 1;
-
-                self.skip_newlines();
-                if matches!(self.peek_kind(), TokenKind::Semicolon) {
-                    self.advance();
+                // Auto-detect entry node: first node with no incoming edges
+                if body.entry_node.is_empty() {
+                    use petgraph::Direction;
+                    for idx in body.graph.node_indices() {
+                        if body
+                            .graph
+                            .neighbors_directed(idx, Direction::Incoming)
+                            .next()
+                            .is_none()
+                        {
+                            body.entry_node = body.graph[idx].id.clone();
+                            break;
+                        }
+                    }
                 }
-                self.skip_newlines();
+            } else {
+                // Linear mode: { step; step; ... } (existing behavior)
+                let mut step_index = 0;
+                let mut last_idx: Option<petgraph::graph::NodeIndex> = None;
+
+                while !matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
+                    let step_id = format!("__{}", step_index);
+                    let context_id = format!("{}.__{}", name, step_index);
+                    let node_type = self.parse_func_step(&context_id)?;
+                    let node = Node {
+                        id: step_id.clone(),
+                        node_type,
+                    };
+                    let idx = body.graph.add_node(node);
+                    body.node_map.insert(step_id.clone(), idx);
+
+                    if let Some(prev_idx) = last_idx {
+                        body.graph.add_edge(prev_idx, idx, Edge::default());
+                    } else {
+                        body.entry_node = step_id.clone();
+                    }
+
+                    last_idx = Some(idx);
+                    step_index += 1;
+
+                    self.skip_newlines();
+                    if matches!(self.peek_kind(), TokenKind::Semicolon) {
+                        self.advance();
+                    }
+                    self.skip_newlines();
+                }
+                self.expect(&TokenKind::RBrace)?;
             }
-            self.expect(&TokenKind::RBrace)?;
         } else if self.lookahead_is_task_call() || matches!(self.peek_kind(), TokenKind::Ident(_)) {
             // Single-step
             let step_id = "__0".to_string();

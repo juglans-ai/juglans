@@ -73,6 +73,8 @@ impl BuiltinRegistry {
 
         reg!(network::FetchUrl);
         reg!(network::Fetch);
+        reg!(http_client::HttpRequest);
+        reg!(oauth::OAuthToken);
         reg!(system::Timer);
         reg!(system::Notify);
         reg!(system::Print);
@@ -96,6 +98,7 @@ impl BuiltinRegistry {
         tool_map.insert("sh".to_string(), Arc::new(Box::new(devtools::Bash)));
         reg!(ai::Prompt::new(prompts.clone(), runtime.clone()));
         reg!(ai::MemorySearch::new(runtime.clone()));
+        reg!(ai::WebSearch::new(runtime.clone()));
         reg!(ai::History::new(runtime.clone()));
         reg!(ai::VectorCreateSpace::new(runtime.clone()));
         reg!(ai::VectorUpsert::new(runtime.clone()));
@@ -332,6 +335,8 @@ pub mod database;
 pub mod device;
 pub mod devtools;
 pub mod http;
+pub mod http_client;
 pub mod network;
+pub mod oauth;
 pub mod system;
 pub mod testing;

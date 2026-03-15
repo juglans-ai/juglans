@@ -183,17 +183,52 @@ When set to `"."`, `@/agents/foo.jgagent` resolves to `<project_root>/agents/foo
 
 ---
 
+## env_file
+
+Specify `.env` files to load (pydantic-settings style). Files are loaded in order; later files override earlier ones. Default: `[".env"]`.
+
+```toml
+env_file = [".env", ".env.local", ".env.deploy"]
+```
+
+After loading, all variables are available via the `env()` expression function:
+
+```juglans
+[step]: api_key = env("API_KEY")
+```
+
+---
+
+## `${VAR}` Interpolation
+
+All string values in `juglans.toml` support `${VAR_NAME}` syntax. Variables are resolved from the process environment (including `.env` files loaded via `env_file`).
+
+```toml
+env_file = [".env"]
+
+[account]
+api_key = "${JUG0_API_KEY}"
+
+[jug0]
+base_url = "${API_BASE}"
+```
+
+If a variable is not set, it is replaced with an empty string.
+
+---
+
 ## [env]
 
-Custom environment variables available during workflow execution.
+Custom environment variables available during workflow execution. Supports `${VAR}` interpolation.
 
 ```toml
 [env]
 DATABASE_URL = "postgresql://localhost/mydb"
-API_ENDPOINT = "https://api.example.com"
+CLIENT_ID = "${CLIENT_ID}"
+CLIENT_SECRET = "${CLIENT_SECRET}"
 ```
 
-Accessible in workflows via `$env.DATABASE_URL`.
+Accessible in workflows via `config.env.DATABASE_URL` or directly via `env("DATABASE_URL")`.
 
 ---
 

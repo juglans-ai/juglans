@@ -1043,6 +1043,14 @@ fn resolve_field(
             // Normal object
             map.get(field).cloned().unwrap_or(Value::Null)
         }
+        Value::Array(arr) => {
+            // Numeric index: array.0, array.1, etc.
+            if let Ok(idx) = field.parse::<usize>() {
+                arr.get(idx).cloned().unwrap_or(Value::Null)
+            } else {
+                Value::Null
+            }
+        }
         Value::String(s) => {
             // JSON-encoded string: try parsing and navigating
             if let Ok(parsed) = serde_json::from_str::<Value>(s) {

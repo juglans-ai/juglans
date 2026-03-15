@@ -1,0 +1,43 @@
+libs: ["http"]
+
+# 1. Basic GET
+[get_test]: http.get(url="https://httpbin.org/get", params='{"name": "juglans", "version": "2"}')
+[show_get]: print(message="GET status: " + str(output.status_code) + " | is_success: " + str(output.is_success))
+
+# 2. POST JSON
+[post_test]: http.post(url="https://httpbin.org/post", json='{"message": "hello from juglans"}')
+[show_post]: print(message="POST status: " + str(output.status_code) + " | body args: " + str(output.json.json))
+
+# 3. POST form data
+[form_test]: http.post(url="https://httpbin.org/post", data='{"username": "admin", "password": "secret"}')
+[show_form]: print(message="FORM status: " + str(output.status_code) + " | form: " + str(output.json.form))
+
+# 4. Custom headers
+[header_test]: http.get(url="https://httpbin.org/headers", headers='{"X-Custom": "juglans-test", "Accept": "application/json"}')
+[show_headers]: print(message="HEADERS: " + str(output.json.headers))
+
+# 5. Bearer auth
+[auth_test]: http.get(url="https://httpbin.org/bearer", auth="Bearer my-test-token")
+[show_auth]: print(message="AUTH status: " + str(output.status_code) + " | authenticated: " + str(output.json.authenticated))
+
+# 6. Query params
+[params_test]: http.get(url="https://httpbin.org/get", params='{"page": 1, "limit": 10, "q": "rust"}')
+[show_params]: print(message="PARAMS in URL: " + str(output.json.args))
+
+# 7. HEAD request
+[head_test]: http.head(url="https://httpbin.org/get")
+[show_head]: print(message="HEAD status: " + str(output.status_code) + " | content_type: " + output.content_type)
+
+# 8. Redirect control
+[redirect_test]: http.get(url="https://httpbin.org/redirect/1", follow_redirects=false)
+[show_redirect]: print(message="REDIRECT (no follow) status: " + str(output.status_code))
+
+# 9. http_request direct
+[direct_test]: http_request(url="https://httpbin.org/anything", method="PATCH", json='{"patched": true}')
+[show_direct]: print(message="DIRECT PATCH status: " + str(output.status_code) + " | method: " + output.json.method)
+
+# 10. Elapsed time
+[timed]: http.get(url="https://httpbin.org/delay/1")
+[show_time]: print(message="ELAPSED: " + str(output.elapsed) + "s")
+
+[get_test] -> [show_get] -> [post_test] -> [show_post] -> [form_test] -> [show_form] -> [header_test] -> [show_headers] -> [auth_test] -> [show_auth] -> [params_test] -> [show_params] -> [head_test] -> [show_head] -> [redirect_test] -> [show_redirect] -> [direct_test] -> [show_direct] -> [timed] -> [show_time]

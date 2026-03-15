@@ -365,6 +365,163 @@ If `response()` is never called, the web server returns status `200` with `outpu
 
 ---
 
+### http_request()
+
+Full-featured HTTP client (httpx-style). Supports all HTTP methods, query params, JSON/form/multipart body, auth, timeout, cookies, and redirect control.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `url` | string | Yes | - | Request URL |
+| `method` | string | No | `"GET"` | HTTP method: GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS |
+| `params` | object | No | - | Query parameters (appended to URL) |
+| `headers` | object | No | - | Custom request headers |
+| `json` | object/string | No | - | JSON body (auto-sets `Content-Type: application/json`) |
+| `data` | object | No | - | Form data (URL-encoded) |
+| `files` | object | No | - | Multipart file upload: `{field: path}` |
+| `content` | string | No | - | Raw body content |
+| `timeout` | number | No | - | Request timeout in seconds |
+| `auth` | string | No | - | `"Bearer token"` or `"user:pass"` |
+| `follow_redirects` | boolean | No | `true` | Follow HTTP redirects |
+| `cookies` | object | No | - | Cookies as `{name: value}` |
+
+Body priority: `json` > `data` > `files` > `content`.
+
+**Output:**
+
+```json
+{
+  "status_code": 200,
+  "headers": {"content-type": "application/json"},
+  "json": {"id": 1, "name": "Alice"},
+  "text": "{\"id\":1,\"name\":\"Alice\"}",
+  "url": "https://api.example.com/users",
+  "is_success": true,
+  "elapsed": 0.234,
+  "content_type": "application/json"
+}
+```
+
+**Example:**
+
+```juglans
+[get]: http_request(url="https://httpbin.org/get", params='{"page": 1}')
+```
+
+```juglans
+[post]: http_request(url="https://httpbin.org/post", method="POST", json='{"name": "Alice"}', timeout=30)
+```
+
+---
+
+### http.jg Library
+
+httpx-style convenience wrapper around `http_request()`. Import with `libs: ["http"]`.
+
+**Available functions:** `http.get()`, `http.post()`, `http.put()`, `http.patch()`, `http.delete()`, `http.head()`, `http.options()`
+
+Each function sets `method` automatically and passes all other parameters to `http_request()`.
+
+**Example:**
+
+```juglans
+libs: ["http"]
+
+[users]: http.get(url="https://api.example.com/users", params='{"page": 1}')
+```
+
+```juglans
+libs: ["http"]
+
+[create]: http.post(url="https://api.example.com/users", json='{"name": "Alice"}', auth="Bearer sk-xxx")
+```
+
+```juglans
+libs: ["http"]
+
+[upload]: http.post(url="https://example.com/upload", files='{"document": "/path/to/file.pdf"}')
+```
+
+---
+
+## OAuth Tools
+
+### oauth_token()
+
+OAuth2 token exchange. Supports all standard grant types and built-in providers (GitHub, Google).
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `grant_type` | string | Yes* | - | `client_credentials`, `password`, `refresh_token`, `authorization_code` |
+| `token_url` | string | Yes* | - | Token endpoint URL |
+| `provider` | string | No | - | Built-in provider: `github`, `google` (auto-sets token_url + headers) |
+| `client_id` | string | No | - | Client ID |
+| `client_secret` | string | No | - | Client secret |
+| `scope` | string | No | - | Permission scope |
+| `username` | string | No | - | Username (password grant) |
+| `password` | string | No | - | Password (password grant) |
+| `refresh_token` | string | No | - | Refresh token (refresh_token grant) |
+| `code` | string | No | - | Authorization code (authorization_code grant) |
+| `redirect_uri` | string | No | - | Redirect URI (authorization_code grant) |
+| `extra_params` | object | No | - | Additional form params merged into request |
+
+*When `provider` is set, `grant_type` defaults to `authorization_code` and `token_url` is auto-configured.
+
+**Built-in Providers:**
+
+| Provider | Token URL | Notes |
+|----------|-----------|-------|
+| `github` | `https://github.com/login/oauth/access_token` | Auto-adds `Accept: application/json` |
+| `google` | `https://oauth2.googleapis.com/token` | Standard OAuth2 |
+
+**Output:**
+
+```json
+{
+  "access_token": "eyJhbG...",
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "refresh_token": "dGhpcyB...",
+  "scope": "read write",
+  "raw": {}
+}
+```
+
+**Example:**
+
+```juglans
+[token]: oauth_token(grant_type="client_credentials", token_url="https://auth.example.com/token", client_id=env("ID"), client_secret=env("SECRET"))
+```
+
+---
+
+### oauth.jg Library
+
+OAuth2 convenience wrapper. Import with `libs: ["oauth"]`.
+
+**Generic functions:** `oauth.client_credentials()`, `oauth.password()`, `oauth.refresh()`, `oauth.authorization_code()`
+
+**Provider functions:** `oauth.github()`, `oauth.github_refresh()`, `oauth.google()`, `oauth.google_refresh()`
+
+**Example:**
+
+```juglans
+libs: ["oauth", "http"]
+
+[token]: oauth.github(client_id=env("GH_ID"), client_secret=env("GH_SECRET"), code=input.code)
+[repos]: http.get(url="https://api.github.com/user/repos", auth="Bearer " + token.access_token)
+[token] -> [repos]
+```
+
+```juglans
+libs: ["oauth", "http"]
+
+[token]: oauth.client_credentials(token_url="https://auth.example.com/token", client_id=env("ID"), client_secret=env("SECRET"), scope="read")
+[data]: http.get(url="https://api.example.com/data", auth="Bearer " + token.access_token)
+[token] -> [data]
+```
+
+---
+
 ## Developer Tools (Devtools)
 
 A Claude Code-style set of code operation tools. Can be called directly in `.jg` files or used by LLMs via `tools: ["devtools"]` in `.jgagent`.

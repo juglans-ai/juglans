@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::expr_ast::{BinOp, Expr, FStringPart, UnaryOp};
-use super::graph::ClassDef;
+use super::graph::{ClassDef, FunctionDef, NodeType, WorkflowGraph};
 use super::instance_arena::TypedSlot;
 
 // ============================================================
@@ -22,11 +22,19 @@ use super::instance_arena::TypedSlot;
 /// Type alias for class definition registry
 type ClassRegistry = HashMap<String, Arc<ClassDef>>;
 
+/// A workflow function with a simple body (output = expr), callable from expressions.
+struct ExprFunction {
+    params: Vec<String>,
+    body_expr: String,
+}
+
 pub struct ExprEvaluator {
     /// Class definition registry for instance field index lookup
     class_registry: RwLock<Option<Arc<ClassRegistry>>>,
     /// AST cache: expression string -> parsed AST (eliminates redundant Pest PEG parsing at runtime)
     ast_cache: RwLock<HashMap<Arc<str>, Arc<Expr>>>,
+    /// Workflow function registry: simple functions (output = expr) callable from expressions
+    fn_registry: RwLock<HashMap<String, ExprFunction>>,
 }
 
 impl Default for ExprEvaluator {
@@ -40,12 +48,44 @@ impl ExprEvaluator {
         Self {
             class_registry: RwLock::new(None),
             ast_cache: RwLock::new(HashMap::new()),
+            fn_registry: RwLock::new(HashMap::new()),
         }
     }
 
     /// Set class definition registry (called when workflow execution starts)
     pub fn set_class_registry(&self, classes: Arc<ClassRegistry>) {
         *self.class_registry.write() = Some(classes);
+    }
+
+    /// Register workflow functions that have simple bodies (output = expr).
+    /// These become callable from expressions, bridging workflow functions and expression evaluation.
+    pub fn register_expr_functions(&self, functions: &HashMap<String, FunctionDef>) {
+        let mut reg = self.fn_registry.write();
+        for (name, func_def) in functions {
+            if let Some(expr_str) = Self::extract_simple_body(&func_def.body) {
+                reg.insert(
+                    name.clone(),
+                    ExprFunction {
+                        params: func_def.params.clone(),
+                        body_expr: expr_str,
+                    },
+                );
+            }
+        }
+    }
+
+    /// Extract expression string from a simple function body (single set_context node with "output" key).
+    fn extract_simple_body(body: &WorkflowGraph) -> Option<String> {
+        if body.graph.node_count() != 1 {
+            return None;
+        }
+        let node = &body.graph[body.graph.node_indices().next()?];
+        if let NodeType::Task(action) = &node.node_type {
+            if action.name == "set_context" {
+                return action.params.get("output").cloned();
+            }
+        }
+        None
     }
 
     /// Parse expression and cache AST (reused after first parse, eliminates Pest PEG re-parsing overhead)
@@ -662,7 +702,10 @@ impl ExprEvaluator {
                 } else {
                     let arg_vals: Result<Vec<Value>> =
                         args.iter().map(|a| self.eval_expr(a, resolver)).collect();
-                    call_builtin(name, &arg_vals?)
+                    let arg_vals = arg_vals?;
+                    call_builtin(name, &arg_vals).or_else(|_| {
+                        self.try_expr_function(name, &arg_vals, resolver)
+                    })
                 }
             }
 
@@ -682,7 +725,15 @@ impl ExprEvaluator {
                     for a in args {
                         all_args.push(self.eval_expr(a, resolver)?);
                     }
-                    call_builtin(method, &all_args)
+                    call_builtin(method, &all_args).or_else(|_| {
+                        // Fallback: try namespaced workflow function (e.g., ai.get_tools → "ai.get_tools")
+                        if let Expr::Identifier(ns) = object.as_ref() {
+                            let full_name = format!("{}.{}", ns, method);
+                            self.try_expr_function(&full_name, &all_args[1..], resolver)
+                        } else {
+                            Err(anyhow!("Unknown method: {}", method))
+                        }
+                    })
                 }
             }
 
@@ -811,9 +862,9 @@ impl ExprEvaluator {
     fn access_field_with_registry(&self, obj: &Value, field: &str) -> Value {
         match obj {
             Value::Object(map) => {
-                // Safety net: arena proxy objects should not reach DotAccess evaluation
-                // (normally $self.field is parsed as Variable("self.field") → resolve_path)
-                if map.contains_key("__arena_ref__") {
+                // Safety net: pure arena proxy (no materialized fields) should not reach DotAccess
+                // Materialized instances (__arena_ref__ + __class__ + __fields__) are allowed through
+                if map.contains_key("__arena_ref__") && !map.contains_key("__class__") {
                     return Value::Null;
                 }
                 // Fast path: class instance with __class__ + __fields__
@@ -873,6 +924,53 @@ impl ExprEvaluator {
             }
             _ => Value::Null,
         }
+    }
+
+    // ============================================================
+    // Workflow Function Bridge (fn_registry)
+    // ============================================================
+
+    /// Try to evaluate a workflow function registered as an expression function.
+    /// Simple functions (body = `output = expr`) are evaluated inline with bound parameters.
+    fn try_expr_function(
+        &self,
+        name: &str,
+        args: &[Value],
+        resolver: &dyn Fn(&str) -> Option<Value>,
+    ) -> Result<Value> {
+        let (params, body_expr) = {
+            let reg = self.fn_registry.read();
+            let func = reg
+                .get(name)
+                .ok_or_else(|| anyhow!("Unknown function: {}", name))?;
+            if args.len() != func.params.len() {
+                return Err(anyhow!(
+                    "{}() expects {} arg(s), got {}",
+                    name,
+                    func.params.len(),
+                    args.len()
+                ));
+            }
+            (func.params.clone(), func.body_expr.clone())
+        }; // lock released here
+
+        // Bind parameters
+        let bound: HashMap<&str, &Value> = params
+            .iter()
+            .zip(args.iter())
+            .map(|(k, v)| (k.as_str(), v))
+            .collect();
+
+        let fn_resolver = |path: &str| -> Option<Value> {
+            let first = path.split('.').next().unwrap_or(path);
+            if let Some(&val) = bound.get(first) {
+                if first == path {
+                    return Some(val.clone());
+                }
+            }
+            resolver(path)
+        };
+        self.eval(&body_expr, &fn_resolver)
     }
 
     // ============================================================

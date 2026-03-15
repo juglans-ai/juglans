@@ -291,8 +291,8 @@ All variable types use the same dot-notation path syntax:
 name                    # Entire value
 name.field              # Object field
 name.nested.field       # Nested object field
-name.array.0            # Array element (0-based index)
-name.array.0.field      # Field of array element
+name.array[0]           # Array element (0-based index)
+name.array[0].field     # Field of array element
 ```
 
 ### Behavior in Different Positions
