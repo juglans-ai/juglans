@@ -46,13 +46,14 @@ impl Serve {
 /// Route extracted from decorator nodes in the workflow graph
 #[derive(Clone, Debug)]
 pub struct InlineRoute {
+    // fields are pub for web_server access
     pub method: String,
     pub path: String,
     pub handler: String,
 }
 
 /// Scan workflow graph for _deco_N nodes and extract route table
-fn extract_routes_from_graph(workflow: &crate::core::graph::WorkflowGraph) -> Vec<InlineRoute> {
+pub fn extract_routes_from_graph(workflow: &crate::core::graph::WorkflowGraph) -> Vec<InlineRoute> {
     let mut routes = Vec::new();
     for (node_id, &node_idx) in &workflow.node_map {
         if !node_id.starts_with("_deco_") {

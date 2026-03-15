@@ -1,0 +1,45 @@
+# oauth.jg — OAuth2 token library
+# Usage: libs: ["oauth"]
+#
+# Examples:
+#   [token]: oauth.client_credentials(token_url="...", client_id=env("ID"), client_secret=env("SECRET"))
+#   [token]: oauth.github(client_id=env("GH_ID"), client_secret=env("GH_SECRET"), code=input.code)
+#   [token]: oauth.google(client_id=env("G_ID"), client_secret=env("G_SECRET"), code=input.code, redirect_uri="...")
+
+# ── Generic Grant Types ──
+
+[client_credentials(token_url, client_id, client_secret, scope, extra_params)]: {
+  oauth_token(grant_type="client_credentials", token_url=token_url, client_id=client_id, client_secret=client_secret, scope=scope, extra_params=extra_params)
+}
+
+[password(token_url, client_id, client_secret, username, password, scope, extra_params)]: {
+  oauth_token(grant_type="password", token_url=token_url, client_id=client_id, client_secret=client_secret, username=username, password=password, scope=scope, extra_params=extra_params)
+}
+
+[refresh(token_url, client_id, client_secret, refresh_token, scope, extra_params)]: {
+  oauth_token(grant_type="refresh_token", token_url=token_url, client_id=client_id, client_secret=client_secret, refresh_token=refresh_token, scope=scope, extra_params=extra_params)
+}
+
+[authorization_code(token_url, client_id, client_secret, code, redirect_uri, scope, extra_params)]: {
+  oauth_token(grant_type="authorization_code", token_url=token_url, client_id=client_id, client_secret=client_secret, code=code, redirect_uri=redirect_uri, scope=scope, extra_params=extra_params)
+}
+
+# ── GitHub Provider ──
+
+[github(client_id, client_secret, code, redirect_uri, scope)]: {
+  oauth_token(provider="github", client_id=client_id, client_secret=client_secret, code=code, redirect_uri=redirect_uri, scope=scope)
+}
+
+[github_refresh(client_id, client_secret, refresh_token)]: {
+  oauth_token(provider="github", grant_type="refresh_token", client_id=client_id, client_secret=client_secret, refresh_token=refresh_token)
+}
+
+# ── Google Provider ──
+
+[google(client_id, client_secret, code, redirect_uri, scope)]: {
+  oauth_token(provider="google", client_id=client_id, client_secret=client_secret, code=code, redirect_uri=redirect_uri, scope=scope)
+}
+
+[google_refresh(client_id, client_secret, refresh_token)]: {
+  oauth_token(provider="google", grant_type="refresh_token", client_id=client_id, client_secret=client_secret, refresh_token=refresh_token)
+}

@@ -15,6 +15,7 @@
 * [AI Chat](tutorials/ai-chat.md)
 * [Prompt Templates](tutorials/prompts.md)
 * [Workflow Composition](tutorials/composition.md)
+* [HTTP Client](tutorials/http-client.md)
 * [Full Project: AI Assistant](tutorials/full-project.md)
 
 ## How-to Guides

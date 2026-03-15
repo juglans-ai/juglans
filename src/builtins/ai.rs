@@ -1150,6 +1150,40 @@ impl Tool for MemorySearch {
     }
 }
 
+// ─── Web Search Builtin ─────────────────────────────────
+
+pub struct WebSearch {
+    runtime: Arc<dyn JuglansRuntime>,
+}
+
+impl WebSearch {
+    pub fn new(runtime: Arc<dyn JuglansRuntime>) -> Self {
+        Self { runtime }
+    }
+}
+
+#[async_trait]
+impl Tool for WebSearch {
+    fn name(&self) -> &str {
+        "web_search"
+    }
+
+    async fn execute(
+        &self,
+        params: &HashMap<String, String>,
+        _context: &WorkflowContext,
+    ) -> Result<Option<Value>> {
+        let query = params
+            .get("query")
+            .ok_or_else(|| anyhow!("web_search: 'query' parameter is required."))?;
+
+        info!("🔍 Executing Web Search: '{}'", query);
+
+        let result = self.runtime.web_search(query).await?;
+        Ok(Some(result))
+    }
+}
+
 // ─── Vector Builtins ─────────────────────────────────────
 
 pub struct VectorCreateSpace {

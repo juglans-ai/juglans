@@ -3,15 +3,14 @@
 # Usage:
 #   libs: ["std/ai.jg"]
 #
-#   [search]: ai.tool {
-#     name="web_search",
-#     description="Search the web",
-#     params={"query": {"type": "string", "description": "Search query"}}
-#   }
+#   [t1]: ai.tool { name="search", description="Search", params={"q": {"type": "string"}} }
+#   [t2]: ai.tool { name="weather", description="Weather", params={"city": {"type": "string"}} }
 #
-#   [_]: search.to_schema()
-#   [tools]: ai.toolbox(tools=[search.schema])
-#   [ask]: chat(message="...", tools=tools.output, on_tool=[handler])
+#   # Inline — no to_schema() or toolbox() needed:
+#   [ask]: chat(message="...", tools=ai.get_tools([t1, t2]))
+#
+#   # Or mix with toolbox:
+#   [ask]: chat(message="...", tools=ai.get_tools([t1]) + box.output)
 
 # Tool definition struct.
 [tool]: {
@@ -39,3 +38,7 @@
 
 # Group multiple tool schemas into an array for chat(tools=...).
 [toolbox(tools)]: output = tools
+
+# Convert tool instances to OpenAI schemas in one step (replaces to_schema + toolbox).
+# Usage: chat(tools=ai.get_tools([t1, t2]))
+[get_tools(tools)]: output = map(tools, t => {"type": "function", "function": {"name": t.name, "description": t.description, "parameters": {"type": "object", "properties": t.params, "required": default(t.required, keys(t.params))}}})

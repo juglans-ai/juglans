@@ -387,6 +387,8 @@ impl WorkflowValidator {
             // Network tools
             "fetch_url",
             "fetch",
+            "http_request",
+            "oauth_token",
             // System tools
             "timer",
             "notify",
@@ -854,12 +856,12 @@ impl WorkflowValidator {
                     let actual_params: HashSet<&str> =
                         action.params.keys().map(|s| s.as_str()).collect();
 
-                    // Check param count
-                    if actual_params.len() != expected_params.len() {
+                    // Check param count — too many is an error; fewer is allowed (optional params)
+                    if actual_params.len() > expected_params.len() {
                         result.add_error(
                             "E017",
                             &format!(
-                                "Function '{}' expects {} parameter(s) ({}) but got {}",
+                                "Function '{}' expects at most {} parameter(s) ({}) but got {}",
                                 action.name,
                                 expected_params.len(),
                                 func_def.params.join(", "),
@@ -1251,16 +1253,34 @@ mod tests {
     }
 
     #[test]
-    fn test_function_call_wrong_param_count() {
+    fn test_function_call_too_many_params() {
         let content = r#"
-[greet(name, greeting)]: bash(command="echo " + greeting + " " + name)
+[greet(name)]: bash(command="echo " + name)
+[step1]: greet(name="world", extra="oops")
+"#;
+        let graph = GraphParser::parse(content).unwrap();
+        let result = WorkflowValidator::validate(&graph);
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.code == "E017" || e.code == "E018"),
+            "Expected E017/E018 for too many params, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn test_function_call_fewer_params_allowed() {
+        let content = r#"
+[greet(name, greeting)]: bash(command="echo " + name)
 [step1]: greet(name="world")
 "#;
         let graph = GraphParser::parse(content).unwrap();
         let result = WorkflowValidator::validate(&graph);
         assert!(
-            result.errors.iter().any(|e| e.code == "E017"),
-            "Expected E017 for param count mismatch, got: {:?}",
+            !result.errors.iter().any(|e| e.code == "E017"),
+            "Fewer params should be allowed (optional params), got: {:?}",
             result.errors
         );
     }

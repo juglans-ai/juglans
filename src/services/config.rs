@@ -1,5 +1,6 @@
 // src/services/config.rs
 use anyhow::{Context, Result};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -204,6 +205,11 @@ pub struct JuglansConfig {
     #[serde(default)]
     pub server: ServerConfig,
 
+    /// Env files to load (pydantic-settings style), loaded in order, later overrides earlier.
+    /// Default: [".env"]
+    #[serde(default = "default_env_file")]
+    pub env_file: Vec<String>,
+
     #[serde(default)]
     pub env: std::collections::HashMap<String, String>,
 
@@ -224,6 +230,10 @@ pub struct JuglansConfig {
 
     // Package Registry configuration
     pub registry: Option<RegistryConfig>,
+}
+
+fn default_env_file() -> Vec<String> {
+    vec![".env".to_string()]
 }
 
 fn default_jug0_config() -> Jug0Config {
@@ -268,6 +278,7 @@ impl JuglansConfig {
                 }),
                 jug0: default_jug0_config(),
                 server: ServerConfig::default(),
+                env_file: default_env_file(),
                 env: Default::default(),
                 debug: DebugConfig::default(),
                 limits: RuntimeLimits::default(),
@@ -279,6 +290,20 @@ impl JuglansConfig {
 
         let content = fs::read_to_string(path).context("Failed to read juglans.toml")?;
 
+        // Phase 1: Pre-parse to extract env_file list
+        let pre: PreConfig = toml::from_str(&content).unwrap_or_default();
+
+        // Phase 2: Load env files in order (later overrides earlier)
+        for env_path in &pre.env_file {
+            if let Ok(p) = dotenvy::from_filename(env_path) {
+                debug!("✓ Loaded env file: {:?}", p);
+            }
+        }
+
+        // Phase 3: Interpolate ${VAR} patterns with env values
+        let content = interpolate_env_vars(&content);
+
+        // Phase 4: Full parse
         let mut config: JuglansConfig =
             toml::from_str(&content).context("Failed to parse juglans.toml")?;
 
@@ -341,5 +366,69 @@ impl JuglansConfig {
             });
             tg.token = token;
         }
+    }
+}
+
+/// Pre-parse config to extract env_file before full deserialization.
+#[derive(Deserialize, Default)]
+struct PreConfig {
+    #[serde(default = "default_env_file")]
+    env_file: Vec<String>,
+}
+
+/// Replace `${VAR}` patterns in TOML content with environment variable values.
+fn interpolate_env_vars(content: &str) -> String {
+    let re = Regex::new(r"\$\{([^}]+)\}").unwrap();
+    re.replace_all(content, |caps: &regex::Captures| {
+        let var_name = &caps[1];
+        std::env::var(var_name).unwrap_or_default()
+    })
+    .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_interpolate_basic() {
+        std::env::set_var("TEST_INTERP_VAR", "hello");
+        let result = interpolate_env_vars("key = \"${TEST_INTERP_VAR}\"");
+        assert_eq!(result, "key = \"hello\"");
+        std::env::remove_var("TEST_INTERP_VAR");
+    }
+
+    #[test]
+    fn test_interpolate_missing_var() {
+        let result = interpolate_env_vars("key = \"${NONEXISTENT_VAR_XYZ}\"");
+        assert_eq!(result, "key = \"\"");
+    }
+
+    #[test]
+    fn test_interpolate_no_pattern() {
+        let input = "key = \"plain value\"";
+        assert_eq!(interpolate_env_vars(input), input);
+    }
+
+    #[test]
+    fn test_interpolate_multiple() {
+        std::env::set_var("TEST_A", "aaa");
+        std::env::set_var("TEST_B", "bbb");
+        let result = interpolate_env_vars("a = \"${TEST_A}\"\nb = \"${TEST_B}\"");
+        assert_eq!(result, "a = \"aaa\"\nb = \"bbb\"");
+        std::env::remove_var("TEST_A");
+        std::env::remove_var("TEST_B");
+    }
+
+    #[test]
+    fn test_pre_config_default() {
+        let pre: PreConfig = toml::from_str("").unwrap();
+        assert_eq!(pre.env_file, vec![".env".to_string()]);
+    }
+
+    #[test]
+    fn test_pre_config_custom() {
+        let pre: PreConfig = toml::from_str("env_file = [\".env\", \".env.deploy\"]").unwrap();
+        assert_eq!(pre.env_file, vec![".env", ".env.deploy"]);
     }
 }

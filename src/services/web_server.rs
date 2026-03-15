@@ -256,6 +256,16 @@ pub struct MessagePart {
     pub _data: Option<Value>,
     #[serde(rename = "tool_call_id")]
     pub _tool_call_id: Option<String>,
+    /// Sub-parts array (used by chatbox when attachments are present)
+    pub parts: Option<Vec<SubPart>>,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct SubPart {
+    #[serde(rename = "type", default = "default_message_type")]
+    pub part_type: String,
+    pub content: Option<String>,
+    pub data: Option<String>,
 }
 
 fn default_message_type() -> String {
@@ -528,7 +538,14 @@ async fn handle_serve_request(
 
                 while let Ok(Some(field)) = multipart.next_field().await {
                     let field_name = field.name().unwrap_or("unnamed").to_string();
-                    let file_name = field.file_name().map(|f| f.to_string());
+                    let file_name = field
+                        .file_name()
+                        .map(|f| f.to_string())
+                        .filter(|f| !f.is_empty())
+                        .or_else(|| {
+                            // Clipboard paste may send no filename — generate one
+                            Some(format!("paste_{}.bin", Uuid::new_v4().as_simple()))
+                        });
 
                     if let Some(filename) = file_name {
                         // File field -> write to temp directory
@@ -628,13 +645,55 @@ async fn handle_serve_request(
         serve_info.slug
     );
 
-    // Execute workflow
-    if let Err(e) = executor.execute_graph(Arc::new(graph), &ctx).await {
-        error!("❌ [Serve] Execution error: {}", e);
-        return error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Execution error: {}", e),
+    // Check for decorator-based routes (@api.get, @api.post, etc.)
+    let routes = crate::builtins::http::extract_routes_from_graph(&graph);
+    let graph = Arc::new(graph);
+    ctx.set_root_workflow(graph.clone());
+
+    if !routes.is_empty() {
+        // Decorator-based workflow: match request to route, run init + handler
+        let matched = routes
+            .iter()
+            .find(|r| r.method == method.as_str() && r.path == uri.path());
+        let route = match matched {
+            Some(r) => r.clone(),
+            None => {
+                return error_response(StatusCode::NOT_FOUND, "Not found");
+            }
+        };
+
+        info!(
+            "🌐 [Serve] {} {} -> {}()",
+            method.as_str(),
+            uri.path(),
+            route.handler
         );
+
+        // Run init subgraph (db_connect → serve passthrough). _deco_* nodes are
+        // excluded by the executor automatically.
+        let _ = executor.clone().execute_graph(graph.clone(), &ctx).await;
+
+        // Execute the matched handler function
+        let args = std::collections::HashMap::new();
+        if let Err(e) = executor
+            .execute_function(route.handler.clone(), args, graph, &ctx)
+            .await
+        {
+            error!("❌ [Serve] Handler error: {}", e);
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("Execution error: {}", e),
+            );
+        }
+    } else {
+        // No decorator routes — run the whole graph (plain serve() workflow)
+        if let Err(e) = executor.execute_graph(graph, &ctx).await {
+            error!("❌ [Serve] Execution error: {}", e);
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("Execution error: {}", e),
+            );
+        }
     }
 
     // Read response
@@ -1359,7 +1418,34 @@ async fn handle_chat(
         // Get the last user/text message
         msgs.iter()
             .rfind(|m| m.role.as_deref() == Some("user") || m.part_type == "text")
-            .and_then(|m| m.content.clone())
+            .map(|m| {
+                // If message has parts array (chatbox attachment format), extract from there
+                if let Some(ref parts) = m.parts {
+                    let mut texts = Vec::new();
+                    let mut images = Vec::new();
+                    for p in parts {
+                        match p.part_type.as_str() {
+                            "text" => {
+                                if let Some(ref c) = p.content {
+                                    texts.push(c.clone());
+                                }
+                            }
+                            "image" => {
+                                if let Some(ref d) = p.data {
+                                    images.push(d.clone());
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    for img in &images {
+                        texts.push(format!("[Attached image: {}]", img));
+                    }
+                    texts.join("\n")
+                } else {
+                    m.content.clone().unwrap_or_default()
+                }
+            })
             .unwrap_or_default()
     } else {
         String::new()

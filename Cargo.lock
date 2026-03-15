@@ -2299,7 +2299,7 @@ dependencies = [
 
 [[package]]
 name = "juglans"
-version = "0.2.9"
+version = "0.2.10"
 dependencies = [
  "anyhow",
  "arboard",
@@ -2313,6 +2313,7 @@ dependencies = [
  "cron",
  "crossterm 0.28.1",
  "dashmap 6.1.0",
+ "dotenvy",
  "enigo",
  "eventsource-stream",
  "flate2",

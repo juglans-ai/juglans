@@ -1080,6 +1080,11 @@ impl WorkflowExecutor {
                     return false;
                 }
 
+                // Skip _deco_* nodes (decorator route registrations)
+                if workflow.graph[**idx].id.starts_with("_deco_") {
+                    return false;
+                }
+
                 // Check if all predecessors have completed
                 let all_predecessors_done = workflow
                     .graph
@@ -1556,13 +1561,25 @@ impl WorkflowExecutor {
                     .set_class_registry(Arc::new(workflow.classes.clone()));
             }
 
+            // Register simple workflow functions as expression functions (fn_registry bridge)
+            if !workflow.functions.is_empty() {
+                self.expr_eval.register_expr_functions(&workflow.functions);
+            }
+
             // Exclude test_* ROOT nodes (in_degree=0) from normal execution count.
             // test_* nodes connected to the main flow (in_degree>0) are regular nodes.
-            let test_node_count = workflow
+            // Also exclude _deco_* nodes (decorator registration nodes handled by serve()).
+            let excluded_node_count = workflow
                 .graph
                 .node_indices()
                 .filter(|&idx| {
-                    graph::is_test_node_id(&workflow.graph[idx].id)
+                    let id = &workflow.graph[idx].id;
+                    // _deco_* nodes are always excluded (decorator route registrations)
+                    if id.starts_with("_deco_") {
+                        return true;
+                    }
+                    // test_* ROOT nodes (in_degree=0) are excluded
+                    graph::is_test_node_id(id)
                         && workflow
                             .graph
                             .edges_directed(idx, Direction::Incoming)
@@ -1570,7 +1587,7 @@ impl WorkflowExecutor {
                             == 0
                 })
                 .count();
-            let total_nodes = workflow.graph.node_count() - test_node_count;
+            let total_nodes = workflow.graph.node_count() - excluded_node_count;
             if total_nodes == 0 {
                 return Ok(());
             }
@@ -1595,7 +1612,8 @@ impl WorkflowExecutor {
                 guard
                     .iter()
                     .filter(|(idx, &degree)| {
-                        degree == 0 && !graph::is_test_node_id(&workflow.graph[**idx].id)
+                        let id = &workflow.graph[**idx].id;
+                        degree == 0 && !graph::is_test_node_id(id) && !id.starts_with("_deco_")
                     })
                     .map(|(&idx, _)| idx)
                     .collect()

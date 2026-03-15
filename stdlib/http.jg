@@ -1,0 +1,35 @@
+# http.jg — httpx-style HTTP client library
+# Usage: libs: ["http"]
+#
+# Examples:
+#   [r]: http.get(url="https://api.example.com/users", params='{"page": 1}')
+#   [r]: http.post(url="https://api.example.com/users", json='{"name": "Alice"}')
+#   [r]: http.get(url="https://api.example.com/data", auth="Bearer sk-xxx", timeout=30)
+
+[get(url, params, headers, auth, timeout, cookies, follow_redirects)]: {
+  http_request(url=url, method="GET", params=params, headers=headers, auth=auth, timeout=timeout, cookies=cookies, follow_redirects=follow_redirects)
+}
+
+[post(url, json, data, files, content, params, headers, auth, timeout, cookies, follow_redirects)]: {
+  http_request(url=url, method="POST", json=json, data=data, files=files, content=content, params=params, headers=headers, auth=auth, timeout=timeout, cookies=cookies, follow_redirects=follow_redirects)
+}
+
+[put(url, json, data, content, params, headers, auth, timeout, cookies, follow_redirects)]: {
+  http_request(url=url, method="PUT", json=json, data=data, content=content, params=params, headers=headers, auth=auth, timeout=timeout, cookies=cookies, follow_redirects=follow_redirects)
+}
+
+[patch(url, json, data, content, params, headers, auth, timeout, cookies, follow_redirects)]: {
+  http_request(url=url, method="PATCH", json=json, data=data, content=content, params=params, headers=headers, auth=auth, timeout=timeout, cookies=cookies, follow_redirects=follow_redirects)
+}
+
+[delete(url, params, headers, auth, timeout, cookies, follow_redirects)]: {
+  http_request(url=url, method="DELETE", params=params, headers=headers, auth=auth, timeout=timeout, cookies=cookies, follow_redirects=follow_redirects)
+}
+
+[head(url, params, headers, auth, timeout, follow_redirects)]: {
+  http_request(url=url, method="HEAD", params=params, headers=headers, auth=auth, timeout=timeout, follow_redirects=follow_redirects)
+}
+
+[options(url, headers, auth, timeout)]: {
+  http_request(url=url, method="OPTIONS", headers=headers, auth=auth, timeout=timeout)
+}

@@ -92,6 +92,11 @@ pub trait JuglansRuntime: Send + Sync {
     /// Delete specific vectors by ID from a space
     async fn vector_delete(&self, space: &str, ids: Vec<String>) -> Result<Value>;
 
+    /// Web search via jug0 Tavily proxy
+    async fn web_search(&self, _query: &str) -> Result<Value> {
+        Err(anyhow::anyhow!("web_search not supported in this runtime"))
+    }
+
     /// Set execution token for jug0-forwarded requests (default: no-op)
     fn set_execution_token(&self, _token: Option<String>) {}
 

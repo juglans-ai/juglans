@@ -755,6 +755,22 @@ impl JuglansRuntime for Jug0Client {
         Ok(results)
     }
 
+    async fn web_search(&self, query: &str) -> Result<Value> {
+        let url = format!("{}/api/search", self.base_url);
+        let res = self
+            .build_auth_request(reqwest::Method::POST, &url)
+            .json(&json!({"query": query}))
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            return Err(anyhow!("Jug0 web_search error: {}", res.status()));
+        }
+
+        let body: Value = res.json().await?;
+        Ok(body)
+    }
+
     async fn fetch_chat_history(&self, chat_id: &str, include_all: bool) -> Result<Vec<Value>> {
         let mut url = format!("{}/api/chats/{}/history", self.base_url, chat_id);
         if include_all {
