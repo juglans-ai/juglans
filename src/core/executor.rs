@@ -22,7 +22,6 @@ use crate::core::graph::{self, NodeType, WorkflowGraph};
 use crate::core::instance_arena::{MethodScope, TypedSlot};
 use crate::core::parser::GraphParser;
 use crate::runtime::python::PythonRuntime;
-use crate::services::agent_loader::AgentRegistry;
 use crate::services::config::{DebugConfig, JuglansConfig};
 use crate::services::interface::JuglansRuntime;
 use crate::services::prompt_loader::PromptRegistry;
@@ -61,25 +60,17 @@ pub struct WorkflowExecutor {
 impl WorkflowExecutor {
     pub async fn new(
         prompt_registry: Arc<PromptRegistry>,
-        agent_registry: Arc<AgentRegistry>,
         runtime: Arc<dyn JuglansRuntime>,
     ) -> Self {
-        Self::new_with_debug(
-            prompt_registry,
-            agent_registry,
-            runtime,
-            DebugConfig::default(),
-        )
-        .await
+        Self::new_with_debug(prompt_registry, runtime, DebugConfig::default()).await
     }
 
     pub async fn new_with_debug(
         prompt_registry: Arc<PromptRegistry>,
-        agent_registry: Arc<AgentRegistry>,
         runtime: Arc<dyn JuglansRuntime>,
         debug_config: DebugConfig,
     ) -> Self {
-        let registry_arc = BuiltinRegistry::new(prompt_registry, agent_registry, runtime);
+        let registry_arc = BuiltinRegistry::new(prompt_registry, runtime);
 
         // Auto-register devtools schema to ToolRegistry (slug: "devtools")
         let mut tool_registry = ToolRegistry::new();
@@ -1008,7 +999,7 @@ impl WorkflowExecutor {
         self: Arc<Self>,
         workflow: Arc<WorkflowGraph>,
         config: &JuglansConfig,
-    ) -> Result<()> {
+    ) -> Result<WorkflowContext> {
         self.run_with_input(workflow, config, None).await
     }
 
@@ -1017,7 +1008,7 @@ impl WorkflowExecutor {
         workflow: Arc<WorkflowGraph>,
         config: &JuglansConfig,
         input: Option<Value>,
-    ) -> Result<()> {
+    ) -> Result<WorkflowContext> {
         info!(
             "🚀 Starting Execution: {} (v{})",
             workflow.name, workflow.version
@@ -1044,7 +1035,7 @@ impl WorkflowExecutor {
         info!("\n--- Execution Log ---");
         self.execute_graph(workflow, &context).await?;
         info!("🎉 Workflow finished successfully.");
-        Ok(())
+        Ok(context)
     }
 
     /// Clean up unreachable nodes: check and skip nodes whose predecessors have all completed

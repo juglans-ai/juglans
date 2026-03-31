@@ -26,70 +26,28 @@ Architecture diagram:
 ai-assistant/
 ├── juglans.toml
 ├── main.jg
-├── agents/
-│   ├── classifier.jgagent
-│   ├── qa.jgagent
-│   └── summarizer.jgagent
 └── prompts/
-    ├── classify.jgprompt
-    └── format.jgprompt
+    ├── classify.jgx
+    └── format.jgx
 ```
 
-## 9.3 Creating Agent Files
+Agents are defined as inline JSON map nodes directly in `main.jg` -- no separate agent files needed.
 
-### classifier.jgagent -- Intent Classifier
+## 9.3 Defining Agents (Inline)
 
-```jgagent
-slug: "classifier"
-name: "Intent Classifier"
-model: "deepseek-chat"
-temperature: 0.0
-system_prompt: |
-  You are an intent classifier. Analyze the user's message and classify it.
+Agents are defined directly in `main.jg` as inline JSON map nodes. We will define three agents:
 
-  Categories:
-  - question: User is asking for information or explanation
-  - task: User wants something done (create, edit, send, etc.)
-  - chat: General conversation, greetings, small talk
+- **classifier** -- `temperature: 0.0` because classification tasks require deterministic output
+- **qa** -- `temperature: 0.3` because technical Q&A favors accuracy
+- **summarizer** -- `temperature: 0.5` for balanced summarization
 
-  Respond with ONLY a JSON object:
-  {"intent": "question" | "task" | "chat", "confidence": 0.0-1.0}
-```
-
-`temperature: 0.0` -- classification tasks require deterministic output, no randomness.
-
-### qa.jgagent -- QA Expert
-
-```jgagent
-slug: "qa"
-name: "QA Expert"
-model: "deepseek-chat"
-temperature: 0.3
-system_prompt: |
-  You are a knowledgeable QA expert. Answer questions accurately.
-  If you don't know something, say so honestly.
-  Be concise and helpful.
-```
-
-`temperature: 0.3` -- technical Q&A favors accuracy, so creativity is turned down.
-
-### summarizer.jgagent -- Summary Generator
-
-```jgagent
-slug: "summarizer"
-name: "Summarizer"
-model: "deepseek-chat"
-temperature: 0.5
-system_prompt: |
-  You are a summarization assistant. Condense information into brief, clear summaries.
-  Keep the key points. Remove redundancy.
-```
+These definitions appear in section 9.5 as part of the complete workflow.
 
 ## 9.4 Creating Prompt Files
 
-### classify.jgprompt -- Classification Prompt Template
+### classify.jgx -- Classification Prompt Template
 
-```jgprompt
+```jgx
 ---
 slug: "classify"
 name: "Classification Prompt"
@@ -103,9 +61,9 @@ User message: {{ message }}
 Return ONLY a JSON object with "intent" and "confidence" fields.
 ```
 
-### format.jgprompt -- Output Formatting Template
+### format.jgx -- Output Formatting Template
 
-```jgprompt
+```jgx
 ---
 slug: "format"
 name: "Response Formatter"
@@ -126,15 +84,27 @@ inputs:
 Create `main.jg`:
 
 ```juglans
-agents: ["./agents/*.jgagent"]
-prompts: ["./prompts/*.jgprompt"]
+prompts: ["./prompts/*.jgx"]
+
+# Agent definitions
+[classifier]: {
+  "model": "deepseek-chat",
+  "temperature": 0.0,
+  "system_prompt": "You are an intent classifier. Analyze the user's message and classify it.\n\nCategories:\n- question: User is asking for information or explanation\n- task: User wants something done (create, edit, send, etc.)\n- chat: General conversation, greetings, small talk\n\nRespond with ONLY a JSON object:\n{\"intent\": \"question\" | \"task\" | \"chat\", \"confidence\": 0.0-1.0}"
+}
+
+[qa]: {
+  "model": "deepseek-chat",
+  "temperature": 0.3,
+  "system_prompt": "You are a knowledgeable QA expert. Answer questions accurately.\nIf you don't know something, say so honestly.\nBe concise and helpful."
+}
 
 # Step 1: Receive input and save to context
 [receive]: user_message = input.message
 
 # Step 2: Use the classifier agent to determine intent, requiring JSON output
 [classify]: chat(
-  agent="classifier",
+  agent=classifier,
   message=user_message,
   format="json"
 )
@@ -143,9 +113,9 @@ prompts: ["./prompts/*.jgprompt"]
 [save_intent]: intent = output.intent
 
 # Step 4: Handler nodes -- three branches
-[handle_qa]: chat(agent="qa", message=user_message)
-[handle_task]: chat(agent="qa", message="Help the user complete this task: " + user_message)
-[handle_chat]: chat(agent="qa", message="Respond casually to: " + user_message)
+[handle_qa]: chat(agent=qa, message=user_message)
+[handle_task]: chat(agent=qa, message="Help the user complete this task: " + user_message)
+[handle_chat]: chat(agent=qa, message="Respond casually to: " + user_message)
 
 # Step 5: Fallback node
 [fallback]: print(message="Unknown intent, routing to QA")
@@ -160,6 +130,8 @@ prompts: ["./prompts/*.jgprompt"]
 # --- Edge definitions ---
 
 # Main flow
+[classifier] -> [receive]
+[qa] -> [receive]
 [receive] -> [classify]
 [classify] -> [save_intent]
 
@@ -189,10 +161,11 @@ prompts: ["./prompts/*.jgprompt"]
 
 Section-by-section explanation:
 
-**Metadata** (lines 1-2)
+**Metadata and agents** (top section)
 
-- `agents:` and `prompts:` load resource files so that `chat()` and `p()` can find the corresponding agents and templates.
-- The entry node is automatically determined by topological sort (the node with in-degree 0, which is `[receive]`).
+- `prompts:` loads prompt template files so that `p()` can find them.
+- `[classifier]` and `[qa]` are inline agent map nodes defining model configuration.
+- The entry nodes are determined by topological sort (nodes with in-degree 0).
 
 **Node definitions**
 
@@ -274,11 +247,13 @@ This project is a starting point. Here are several directions for enhancement:
 Create dedicated agents for each intent type (instead of reusing the qa agent for everything), so each agent's system_prompt is more targeted:
 
 ```juglans
-agents: ["./agents/*.jgagent"]
+[qa]: { "model": "deepseek-chat", "system_prompt": "You are a QA expert." }
+[task_executor]: { "model": "deepseek-chat", "system_prompt": "You help users complete tasks." }
+[chat_companion]: { "model": "deepseek-chat", "system_prompt": "You are a friendly conversationalist." }
 
-[handle_qa]: chat(agent="qa", message=user_message)
-[handle_task]: chat(agent="task-executor", message=user_message)
-[handle_chat]: chat(agent="chat-companion", message=user_message)
+[handle_qa]: chat(agent=qa, message=user_message)
+[handle_task]: chat(agent=task_executor, message=user_message)
+[handle_chat]: chat(agent=chat_companion, message=user_message)
 [format]: print(message=output)
 
 [handle_qa] -> [format]
@@ -291,14 +266,19 @@ agents: ["./agents/*.jgagent"]
 Use `p()` to render a prompt, then pass the result to `chat()`:
 
 ```juglans
-prompts: ["./prompts/*.jgprompt"]
-agents: ["./agents/*.jgagent"]
+prompts: ["./prompts/*.jgx"]
+
+[classifier]: {
+  "model": "deepseek-chat",
+  "temperature": 0.0,
+  "system_prompt": "Classify user intent. Return JSON."
+}
 
 [build_prompt]: p(slug="classify", message=input.message)
-[classify]: chat(agent="classifier", message=output, format="json")
+[classify]: chat(agent=classifier, message=output, format="json")
 [show]: print(message=output)
 
-[build_prompt] -> [classify] -> [show]
+[classifier] -> [build_prompt] -> [classify] -> [show]
 ```
 
 **Adding a Summarization Step**
@@ -306,13 +286,16 @@ agents: ["./agents/*.jgagent"]
 Have the summarizer agent refine the answer before output:
 
 ```juglans
-agents: ["./agents/*.jgagent"]
+[qa]: { "model": "deepseek-chat", "temperature": 0.3, "system_prompt": "You are a QA expert." }
+[summarizer]: { "model": "deepseek-chat", "temperature": 0.5, "system_prompt": "Condense information into brief summaries." }
 
-[answer]: chat(agent="qa", message=input.message)
+[answer]: chat(agent=qa, message=input.message)
 [save]: raw_answer = output
-[summarize]: chat(agent="summarizer", message="Summarize: " + raw_answer)
+[summarize]: chat(agent=summarizer, message="Summarize: " + raw_answer)
 [done]: print(message=output)
 
+[qa] -> [answer]
+[summarizer] -> [summarize]
 [answer] -> [save] -> [summarize] -> [done]
 ```
 
@@ -341,8 +324,8 @@ Nine chapters, each focused on a core topic:
 | Tutorial 3 | Branching & Routing | `if` conditional edges, `switch` multi-way routing, branch convergence |
 | Tutorial 4 | Loops | `foreach`, `while`, accumulating context in loops |
 | Tutorial 5 | Error Handling | `on error`, `error`, fallback patterns |
-| Tutorial 6 | AI Chat | `chat()`, `.jgagent`, `format="json"`, multi-turn conversations |
-| Tutorial 7 | Prompt Templates | `.jgprompt`, `p()`, Jinja templates, combining prompts with chat |
+| Tutorial 6 | AI Chat | `chat()`, inline agent maps, `format="json"`, multi-turn conversations |
+| Tutorial 7 | Prompt Templates | `.jgx`, `p()`, Jinja templates, combining prompts with chat |
 | Tutorial 8 | Workflow Composition | `flows:` import, namespaced nodes, cross-file routing |
 | Tutorial 9 | Full Project | Putting it all together: multiple agents, prompts, switch, on error |
 

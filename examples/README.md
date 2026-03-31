@@ -7,8 +7,8 @@
 ```
 examples/
 ├── prompts/          # Prompt 模板示例
-│   ├── greeting.jgprompt
-│   ├── analysis.jgprompt
+│   ├── greeting.jgx
+│   ├── analysis.jgx
 │   └── README.md
 ├── agents/           # Agent 配置示例
 │   ├── assistant.jgagent
@@ -26,7 +26,7 @@ examples/
 ### 1. 渲染 Prompt
 ```bash
 cd examples/prompts
-juglans greeting.jgprompt --input '{"name": "Alice"}'
+juglans greeting.jgx --input '{"name": "Alice"}'
 ```
 
 ### 2. 与 Agent 对话
@@ -44,7 +44,7 @@ juglans simple-chat.jg --input '{"message": "Hello!"}'
 ## 📚 学习路径
 
 ### 初级 - 基础概念
-1. **Prompt 模板** (`prompts/greeting.jgprompt`)
+1. **Prompt 模板** (`prompts/greeting.jgx`)
    - 变量插值
    - 条件渲染
    - 默认值
@@ -89,7 +89,7 @@ juglans workflows/router.jg -v --input '{"query": "test"}'
 juglans agents/analyst.jgagent --info
 
 # 推送到服务器
-juglans push prompts/greeting.jgprompt
+juglans push prompts/greeting.jgx
 ```
 
 ## 📖 相关文档

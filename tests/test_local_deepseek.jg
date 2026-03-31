@@ -1,0 +1,11 @@
+# Test: LocalRuntime with DeepSeek provider
+# Run: DEEPSEEK_API_KEY=xxx juglans test tests/test_local_deepseek.jg
+
+[deepseek]: {
+  "model": "deepseek-chat",
+  "system_prompt": "You are a helpful assistant.",
+  "temperature": 0.7
+}
+
+[test_deepseek_hello]: response = chat(agent=deepseek, message="Reply with exactly: hello juglans")
+[deepseek] -> [test_deepseek_hello]

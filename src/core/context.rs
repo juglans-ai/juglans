@@ -4,7 +4,7 @@ use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 #[cfg(not(target_arch = "wasm32"))]
@@ -53,7 +53,7 @@ pub enum TraceStatus {
 pub struct ToolStartEvent {
     pub node_id: String,
     pub tool: String,
-    pub params: HashMap<String, String>,
+    pub params: Value,
 }
 
 /// Tool execution complete event (structured)
@@ -100,7 +100,7 @@ pub enum WorkflowEvent {
     ToolCall {
         call_id: String,
         tools: Vec<Value>,
-        result_tx: oneshot::Sender<Vec<ToolResultPayload>>,
+        result_tx: oneshot::Sender<(Vec<ToolResultPayload>, Option<Vec<Value>>)>,
     },
     /// Tool execution start event (AI sub-tool calls)
     ToolStart(ToolStartEvent),
@@ -130,8 +130,8 @@ pub struct WorkflowContext {
     current_workflow: Arc<RwLock<Option<Arc<WorkflowGraph>>>>,
     /// Root (top-level) workflow — set once at first execute_graph, never overwritten
     root_workflow: Arc<RwLock<Option<Arc<WorkflowGraph>>>>,
-    /// Whether to push tool execution events to frontend (default false)
-    stream_tool_events: Arc<AtomicBool>,
+    /// Tool event verbosity level: 0=silent, 1=info, 2=verbose
+    tool_event_level: Arc<AtomicU8>,
     /// Whether to push node execution events to frontend (default false)
     stream_node_events: Arc<AtomicBool>,
     /// Tool execution trace (records all tool call results for assert queries)
@@ -144,6 +144,9 @@ pub struct WorkflowContext {
     instance_arena: InstanceArena,
     /// Method execution scope stack (nested method calls)
     method_scopes: Arc<RwLock<Vec<MethodScope>>>,
+    /// Typed variable shadow store: scalar variables stored as TypedSlot
+    /// for zero-JSON-overhead reads. Dual-written alongside the JSON tree.
+    typed_store: Arc<RwLock<HashMap<String, TypedSlot>>>,
 }
 
 impl Default for WorkflowContext {
@@ -163,13 +166,14 @@ impl WorkflowContext {
             max_depth: 10,
             current_workflow: Arc::new(RwLock::new(None)),
             root_workflow: Arc::new(RwLock::new(None)),
-            stream_tool_events: Arc::new(AtomicBool::new(false)),
+            tool_event_level: Arc::new(AtomicU8::new(0)),
             stream_node_events: Arc::new(AtomicBool::new(false)),
             tool_trace: Arc::new(Mutex::new(Vec::new())),
             pending_tool_starts: Arc::new(Mutex::new(HashMap::new())),
             class_registry: Arc::new(RwLock::new(HashMap::new())),
             instance_arena: InstanceArena::new(),
             method_scopes: Arc::new(RwLock::new(Vec::new())),
+            typed_store: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -188,13 +192,14 @@ impl WorkflowContext {
             max_depth: 10,
             current_workflow: Arc::new(RwLock::new(None)),
             root_workflow: Arc::new(RwLock::new(None)),
-            stream_tool_events: Arc::new(AtomicBool::new(false)),
+            tool_event_level: Arc::new(AtomicU8::new(0)),
             stream_node_events: Arc::new(AtomicBool::new(false)),
             tool_trace: Arc::new(Mutex::new(Vec::new())),
             pending_tool_starts: Arc::new(Mutex::new(HashMap::new())),
             class_registry: Arc::new(RwLock::new(HashMap::new())),
             instance_arena: InstanceArena::new(),
             method_scopes: Arc::new(RwLock::new(Vec::new())),
+            typed_store: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -209,13 +214,14 @@ impl WorkflowContext {
             max_depth: self.max_depth,
             current_workflow: self.current_workflow.clone(),
             root_workflow: self.root_workflow.clone(),
-            stream_tool_events: self.stream_tool_events.clone(),
+            tool_event_level: self.tool_event_level.clone(),
             stream_node_events: self.stream_node_events.clone(),
             tool_trace: self.tool_trace.clone(),
             pending_tool_starts: self.pending_tool_starts.clone(),
             class_registry: self.class_registry.clone(),
             instance_arena: self.instance_arena.clone(),
             method_scopes: Arc::new(RwLock::new(Vec::new())),
+            typed_store: Arc::new(RwLock::new(self.typed_store.read().clone())),
         }
     }
 
@@ -300,7 +306,7 @@ impl WorkflowContext {
         call_id: String,
         tools: Vec<Value>,
         timeout_secs: u64,
-    ) -> Result<Vec<ToolResultPayload>> {
+    ) -> Result<(Vec<ToolResultPayload>, Option<Vec<Value>>)> {
         let (result_tx, result_rx) = oneshot::channel();
         self.emit(WorkflowEvent::ToolCall {
             call_id: call_id.clone(),
@@ -477,9 +483,9 @@ impl WorkflowContext {
         self.root_workflow.read().clone()
     }
 
-    /// Set whether to push tool execution events
-    pub fn set_stream_tool_events(&self, enabled: bool) {
-        self.stream_tool_events.store(enabled, Ordering::Relaxed);
+    /// Set tool event verbosity level: 0=silent, 1=info, 2=verbose
+    pub fn set_tool_event_level(&self, level: u8) {
+        self.tool_event_level.store(level, Ordering::Relaxed);
     }
 
     /// Set whether to push node execution events
@@ -488,25 +494,35 @@ impl WorkflowContext {
     }
 
     /// Emit tool_start event (also records to trace)
-    pub fn emit_tool_start(&self, node_id: &str, tool: &str, params: &HashMap<String, String>) {
+    pub fn emit_tool_start(&self, node_id: &str, tool: &str, params_json: &str) {
+        // Parse params for trace recording
+        let params_map: HashMap<String, String> =
+            serde_json::from_str(params_json).unwrap_or_default();
+
         // Record start time in pending (keyed by node_id)
         #[cfg(not(target_arch = "wasm32"))]
         self.pending_tool_starts.lock().insert(
             node_id.to_string(),
-            (tool.to_string(), params.clone(), Instant::now()),
+            (tool.to_string(), params_map, Instant::now()),
         );
         #[cfg(target_arch = "wasm32")]
         self.pending_tool_starts
             .lock()
-            .insert(node_id.to_string(), (tool.to_string(), params.clone()));
+            .insert(node_id.to_string(), (tool.to_string(), params_map));
 
-        if !self.stream_tool_events.load(Ordering::Relaxed) {
+        let level = self.tool_event_level.load(Ordering::Relaxed);
+        if level == 0 {
             return;
         }
+        let event_params = if level >= 2 {
+            serde_json::from_str::<Value>(params_json).unwrap_or(json!({}))
+        } else {
+            json!({})
+        };
         self.emit(WorkflowEvent::ToolStart(ToolStartEvent {
             node_id: node_id.to_string(),
             tool: tool.to_string(),
-            params: params.clone(),
+            params: event_params,
         }));
     }
 
@@ -542,26 +558,34 @@ impl WorkflowContext {
 
         self.tool_trace.lock().push(entry);
 
-        // Stream event to frontend if enabled
-        if !self.stream_tool_events.load(Ordering::Relaxed) {
+        // Stream event to frontend based on level
+        let level = self.tool_event_level.load(Ordering::Relaxed);
+        if level == 0 {
             return;
         }
-        match result {
-            Ok(val) => self.emit(WorkflowEvent::ToolComplete(ToolCompleteEvent {
-                node_id: node_id.to_string(),
-                tool: tool.to_string(),
-                status: "success".to_string(),
-                result: val.clone(),
-                error: None,
-            })),
-            Err(e) => self.emit(WorkflowEvent::ToolComplete(ToolCompleteEvent {
-                node_id: node_id.to_string(),
-                tool: tool.to_string(),
-                status: "error".to_string(),
-                result: None,
-                error: Some(e.to_string()),
-            })),
-        }
+        let (status, evt_result, evt_error) = match result {
+            Ok(val) => (
+                "success".to_string(),
+                if level >= 2 { val.clone() } else { None },
+                None,
+            ),
+            Err(e) => (
+                "error".to_string(),
+                None,
+                if level >= 2 {
+                    Some(e.to_string())
+                } else {
+                    None
+                },
+            ),
+        };
+        self.emit(WorkflowEvent::ToolComplete(ToolCompleteEvent {
+            node_id: node_id.to_string(),
+            tool: tool.to_string(),
+            status,
+            result: evt_result,
+            error: evt_error,
+        }));
     }
 
     /// Emit node_start event (workflow node starts execution, also records to trace)
@@ -687,11 +711,77 @@ impl WorkflowContext {
                     scope.dirty.insert(path, value);
                     return Ok(());
                 }
+                // Method scope active but path is not a field — store in dirty for later access
+                scope.dirty.insert(path, value);
+                return Ok(());
+            }
+        }
+
+        // Dual-write to typed store: scalars are shadowed for zero-JSON reads
+        match &value {
+            Value::Number(_) | Value::Bool(_) | Value::String(_) | Value::Null => {
+                self.typed_store
+                    .write()
+                    .insert(path.clone(), TypedSlot::from_value(value.clone()));
+            }
+            _ => {
+                // Complex type (array/object): remove stale scalar entry if any
+                self.typed_store.write().remove(&path);
             }
         }
 
         let mut data = self.data.write();
 
+        let parts: Vec<&str> = path.split('.').collect();
+        let (last_key, parent_parts) = parts
+            .split_last()
+            .ok_or_else(|| anyhow!("Cannot set a value with an empty path"))?;
+
+        let mut current = &mut *data;
+        for part in parent_parts {
+            current = current
+                .as_object_mut()
+                .ok_or_else(|| anyhow!(format!("Path part '{}' is not an object", part)))?
+                .entry(part.to_string())
+                .or_insert_with(|| json!({}));
+        }
+
+        if let Some(obj) = current.as_object_mut() {
+            obj.insert(last_key.to_string(), value);
+        } else {
+            return Err(anyhow!("Final path segment is not an object"));
+        }
+
+        Ok(())
+    }
+
+    /// Set a value from an existing TypedSlot, avoiding redundant from_value() classification.
+    /// Writes to both typed_store and JSON tree for backward compatibility.
+    #[allow(dead_code)]
+    pub fn set_typed(&self, path: String, slot: TypedSlot) -> Result<()> {
+        let value = slot.to_value();
+
+        // Method scope handling (same as set())
+        if !path.contains('.') {
+            let mut scopes = self.method_scopes.write();
+            if let Some(scope) = scopes.last_mut() {
+                if let Some(&idx) = scope.class_def.field_index.get(&path) {
+                    if idx < scope.field_cache.len() {
+                        scope.field_cache[idx] = slot;
+                    }
+                    scope.dirty.insert(path, value);
+                    return Ok(());
+                }
+                scope.dirty.insert(path, value);
+                return Ok(());
+            }
+        }
+
+        // Write to typed store directly (no classification needed — caller already has TypedSlot)
+        self.typed_store.write().insert(path.clone(), slot);
+
+        // Write JSON tree (backward compat)
+        let mut data = self.data.write();
         let parts: Vec<&str> = path.split('.').collect();
         let (last_key, parent_parts) = parts
             .split_last()
@@ -779,40 +869,40 @@ impl WorkflowContext {
         Ok(Some(current))
     }
 
-    /// TypedSlot fast path: fields within method scope return TypedSlot directly.
-    /// Only handles simple paths (single-segment field names, $self.field); others fall back to None.
+    /// TypedSlot fast path: resolve variable as TypedSlot, avoiding JSON overhead.
+    /// Phase 1: method scope fields. Phase 2 (new): typed_store for all scalar variables.
     pub fn resolve_path_typed(&self, path: &str) -> Option<TypedSlot> {
-        let scopes = self.method_scopes.read();
-        let scope = scopes.last()?;
+        // 1. Method scope check (original logic, but no early `?` return on missing scope)
+        {
+            let scopes = self.method_scopes.read();
+            if let Some(scope) = scopes.last() {
+                if !path.contains('.') {
+                    if let Some(val) = scope.dirty.get(path) {
+                        return Some(TypedSlot::from_value(val.clone()));
+                    }
+                    if let Some(&idx) = scope.class_def.field_index.get(path) {
+                        return scope.field_cache.get(idx).cloned();
+                    }
+                } else {
+                    // $self.field -> return TypedSlot directly
+                    let mut segments = path.splitn(2, '.');
+                    let first = segments.next().unwrap();
+                    let rest = segments.next().unwrap_or("");
 
-        if !path.contains('.') {
-            // Convert dirty values to TypedSlot
-            if let Some(val) = scope.dirty.get(path) {
-                return Some(TypedSlot::from_value(val.clone()));
+                    if first == "self" && !rest.contains('.') && !rest.is_empty() {
+                        if let Some(val) = scope.dirty.get(rest) {
+                            return Some(TypedSlot::from_value(val.clone()));
+                        }
+                        if let Some(&idx) = scope.class_def.field_index.get(rest) {
+                            return scope.field_cache.get(idx).cloned();
+                        }
+                    }
+                }
             }
-            // field_cache returns TypedSlot directly (zero allocation for Int/Float/Bool)
-            if let Some(&idx) = scope.class_def.field_index.get(path) {
-                return scope.field_cache.get(idx).cloned();
-            }
-            return None;
         }
 
-        // $self.field -> return TypedSlot directly
-        let mut segments = path.splitn(2, '.');
-        let first = segments.next().unwrap();
-        let rest = segments.next().unwrap_or("");
-
-        if first == "self" && !rest.contains('.') && !rest.is_empty() {
-            if let Some(val) = scope.dirty.get(rest) {
-                return Some(TypedSlot::from_value(val.clone()));
-            }
-            if let Some(&idx) = scope.class_def.field_index.get(rest) {
-                return scope.field_cache.get(idx).cloned();
-            }
-        }
-
-        // Multi-segment path or non-method field -> fall back
-        None
+        // 2. Typed store: scalar variables shadowed for zero-JSON reads (works for all scopes)
+        self.typed_store.read().get(path).cloned()
     }
 
     /// Resolve path within method scope (lock-free field_cache read + dirty-first priority)
@@ -846,27 +936,21 @@ impl WorkflowContext {
             return self.resolve_self_field(scope, rest);
         }
 
-        // $field.nested (deep path starting with a field name)
-        if scope.class_def.field_index.contains_key(first) {
-            let field_val = if let Some(val) = scope.dirty.get(first) {
-                val.clone()
-            } else if let Some(&idx) = scope.class_def.field_index.get(first) {
-                // Lock-free: read from field_cache
-                scope
-                    .field_cache
-                    .get(idx)
-                    .map(|s| s.to_value())
-                    .unwrap_or(Value::Null)
-            } else {
-                return None;
-            };
-            // Continue navigating rest
+        // $field.nested or $local_var.nested (dirty or class field)
+        let root_val = if let Some(val) = scope.dirty.get(first) {
+            Some(val.clone())
+        } else if let Some(&idx) = scope.class_def.field_index.get(first) {
+            scope.field_cache.get(idx).map(|s| s.to_value())
+        } else {
+            None
+        };
+        if let Some(root) = root_val {
             let registry_guard = self.class_registry.read();
             let registry = Some(&*registry_guard);
             if !rest.contains('.') {
-                return Some(resolve_field(&field_val, rest, registry));
+                return Some(resolve_field(&root, rest, registry));
             }
-            let mut current = field_val;
+            let mut current = root;
             for part in rest.split('.') {
                 current = resolve_field(&current, part, registry);
                 if current.is_null() {

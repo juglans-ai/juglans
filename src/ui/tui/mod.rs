@@ -24,12 +24,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-use crate::core::agent_parser::AgentParser;
 use crate::core::context::WorkflowContext;
 use crate::core::executor::WorkflowExecutor;
 use crate::core::parser::GraphParser;
 use crate::core::resolver;
-use crate::services::agent_loader::AgentRegistry;
 use crate::services::config::JuglansConfig;
 use crate::services::interface::JuglansRuntime;
 use crate::services::jug0::Jug0Client;
@@ -210,14 +208,15 @@ fn resolve_patterns(base_dir: &Path, patterns: &[String], at_base: Option<&Path>
         .collect()
 }
 
-/// Load a .jgagent file and create an AgentState for TUI use
+/// Load a .jg workflow file and create an AgentState for TUI use
 async fn load_agent(path: &Path) -> Result<(AgentState, String)> {
     let source = std::fs::read_to_string(path)
-        .with_context(|| format!("Cannot read agent file: {:?}", path))?;
-    let agent_resource = AgentParser::parse(&source)
-        .with_context(|| format!("Failed to parse agent: {:?}", path))?;
+        .with_context(|| format!("Cannot read workflow file: {:?}", path))?;
 
-    let name = agent_resource.name.clone();
+    let name = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
     let config = JuglansConfig::load()?;
 
     let base_dir = path.parent().unwrap_or(Path::new("."));
@@ -226,63 +225,45 @@ async fn load_agent(path: &Path) -> Result<(AgentState, String)> {
     let at_base: Option<std::path::PathBuf> = config.paths.base.as_ref().map(|b| base_dir.join(b));
 
     let mut prompt_registry = PromptRegistry::new();
-    let mut agent_registry = AgentRegistry::new();
 
-    // Register this agent
-    agent_registry.register(agent_resource.clone(), path.to_path_buf());
+    let mut wf_parsed = GraphParser::parse(&source)?;
+    let wf_dir = base_dir;
 
-    let mut workflow = None;
+    // Resolve lib imports
+    let wf_canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut import_stack = vec![wf_canonical.clone()];
+    resolver::resolve_lib_imports(
+        &mut wf_parsed,
+        wf_dir,
+        &mut import_stack,
+        at_base.as_deref(),
+    )?;
 
-    if let Some(wf_path_str) = &agent_resource.source {
-        let wf_path = base_dir.join(wf_path_str);
-        let wf_source = std::fs::read_to_string(&wf_path)
-            .with_context(|| format!("Linked workflow missing: {:?}", wf_path))?;
+    // Resolve flow imports
+    import_stack = vec![wf_canonical];
+    resolver::resolve_flow_imports(
+        &mut wf_parsed,
+        wf_dir,
+        &mut import_stack,
+        at_base.as_deref(),
+    )?;
 
-        let mut wf_parsed = GraphParser::parse(&wf_source)?;
-        let wf_dir = wf_path.parent().unwrap_or(Path::new("."));
+    // Load prompt/tool patterns
+    let p_paths = resolve_patterns(wf_dir, &wf_parsed.prompt_patterns, at_base.as_deref());
 
-        // Resolve lib imports
-        let wf_canonical = std::fs::canonicalize(&wf_path).unwrap_or_else(|_| wf_path.clone());
-        let mut import_stack = vec![wf_canonical.clone()];
-        resolver::resolve_lib_imports(
-            &mut wf_parsed,
-            wf_dir,
-            &mut import_stack,
-            at_base.as_deref(),
-        )?;
+    prompt_registry.load_from_paths(&p_paths)?;
 
-        // Resolve flow imports
-        import_stack = vec![wf_canonical];
-        resolver::resolve_flow_imports(
-            &mut wf_parsed,
-            wf_dir,
-            &mut import_stack,
-            at_base.as_deref(),
-        )?;
+    // Update tool patterns
+    wf_parsed.tool_patterns =
+        resolve_patterns(wf_dir, &wf_parsed.tool_patterns, at_base.as_deref());
 
-        // Load prompt/agent/tool patterns
-        let p_paths = resolve_patterns(wf_dir, &wf_parsed.prompt_patterns, at_base.as_deref());
-        let a_paths = resolve_patterns(wf_dir, &wf_parsed.agent_patterns, at_base.as_deref());
+    let workflow = Some(Arc::new(wf_parsed));
 
-        prompt_registry.load_from_paths(&p_paths)?;
-        agent_registry.load_from_paths(&a_paths)?;
-
-        // Update tool patterns
-        wf_parsed.tool_patterns =
-            resolve_patterns(wf_dir, &wf_parsed.tool_patterns, at_base.as_deref());
-
-        workflow = Some(Arc::new(wf_parsed));
-    }
-
-    // Build executor (inlined from main::build_executor)
+    // Build executor
     let runtime: Arc<dyn JuglansRuntime> = Arc::new(Jug0Client::new(&config));
-    let mut executor = WorkflowExecutor::new_with_debug(
-        Arc::new(prompt_registry),
-        Arc::new(agent_registry),
-        runtime,
-        config.debug.clone(),
-    )
-    .await;
+    let mut executor =
+        WorkflowExecutor::new_with_debug(Arc::new(prompt_registry), runtime, config.debug.clone())
+            .await;
 
     executor.apply_limits(&config.limits);
 
@@ -303,7 +284,8 @@ async fn load_agent(path: &Path) -> Result<(AgentState, String)> {
         AgentState {
             executor: shared,
             context,
-            agent_resource,
+            model: String::new(),
+            slug: name.clone(),
             workflow,
             event_rx: Some(rx),
             event_tx: tx,

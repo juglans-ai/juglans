@@ -16,7 +16,7 @@
 
 ---
 
-Juglans is a declarative workflow language for building and orchestrating AI agent pipelines. Write `.jg` files to define DAG-based workflows, `.jgagent` for agent configs, and `.jgprompt` for reusable prompt templates.
+Juglans is a declarative workflow language for building and orchestrating AI agent pipelines. Write `.jg` files to define DAG-based workflows, `.jgagent` for agent configs, and `.jgx` for reusable prompt templates.
 
 ## Features
 
@@ -98,7 +98,7 @@ juglans analyst.jgagent --message "Analyze the CSV in ./data/"
 ## CLI
 
 ```bash
-juglans <file>                    # Execute .jg / .jgagent / .jgprompt
+juglans <file>                    # Execute .jg / .jgagent / .jgx
 juglans check [path]              # Validate syntax
 juglans web --port 8080           # Local dev server (SSE)
 juglans deploy                    # Docker deployment

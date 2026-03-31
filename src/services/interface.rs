@@ -10,6 +10,11 @@ use tokio::sync::mpsc::UnboundedSender;
 #[async_trait]
 pub trait ChatToolHandler: Send + Sync {
     async fn handle_tool_call(&self, tool_name: &str, arguments_json: &str) -> Result<String>;
+    /// Take pending dynamic tool definitions injected by frontend via tool-result.
+    /// Returns None if no tools were injected. Clears the pending state after taking.
+    fn take_pending_tools(&self) -> Option<Vec<Value>> {
+        None
+    }
 }
 
 /// Chat request parameters, replacing 9 individual arguments

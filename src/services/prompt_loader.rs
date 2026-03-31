@@ -48,7 +48,10 @@ impl PromptRegistry {
 
     /// Read a single file and register it
     fn load_file(&mut self, path: &Path) -> Result<()> {
-        if path.extension().and_then(|s| s.to_str()) != Some("jgprompt") {
+        if !matches!(
+            path.extension().and_then(|s| s.to_str()),
+            Some("jgx" | "jgprompt")
+        ) {
             return Ok(());
         }
 

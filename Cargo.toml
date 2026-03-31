@@ -1,6 +1,6 @@
 [package]
 name = "juglans"
-version = "0.2.10"
+version = "0.2.11"
 edition = "2021"
 rust-version = "1.80"
 default-run = "juglans"
@@ -84,6 +84,7 @@ arboard = "3"
 tui-textarea = "0.7"
 unicode-width = "0.2"
 sqlx = { version = "0.8.1", features = ["runtime-tokio-rustls", "postgres", "sqlite", "mysql", "any", "json", "chrono", "uuid"] }
+jug0 = { path = "./jug0", default-features = false }
 tower-lsp = "0.20"
 cron = "0.15"
 notify = "7"

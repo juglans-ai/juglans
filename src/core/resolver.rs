@@ -410,16 +410,6 @@ fn merge_subgraph(
                 .push(child_base_dir.join(&expanded).to_string_lossy().to_string());
         }
     }
-    for pattern in &child.agent_patterns {
-        let expanded = expand_at_prefix(pattern, at_base);
-        if Path::new(&expanded).is_absolute() {
-            parent.agent_patterns.push(expanded);
-        } else {
-            parent
-                .agent_patterns
-                .push(child_base_dir.join(&expanded).to_string_lossy().to_string());
-        }
-    }
     for pattern in &child.tool_patterns {
         let expanded = expand_at_prefix(pattern, at_base);
         if Path::new(&expanded).is_absolute() {
@@ -815,8 +805,8 @@ mod tests {
 
         // Starts with @/ -> expand to base + remaining part
         assert_eq!(
-            expand_at_prefix("@/prompts/foo.jgprompt", Some(base)),
-            "/project/src/prompts/foo.jgprompt"
+            expand_at_prefix("@/prompts/foo.jgx", Some(base)),
+            "/project/src/prompts/foo.jgx"
         );
 
         // Does not start with @/ -> return as-is
@@ -831,8 +821,8 @@ mod tests {
 
         // at_base = None -> feature disabled, return as-is
         assert_eq!(
-            expand_at_prefix("@/prompts/foo.jgprompt", None),
-            "@/prompts/foo.jgprompt"
+            expand_at_prefix("@/prompts/foo.jgx", None),
+            "@/prompts/foo.jgx"
         );
     }
 
@@ -840,14 +830,14 @@ mod tests {
     fn test_expand_at_prefixes_batch() {
         let base = Path::new("/project");
         let patterns = vec![
-            "@/prompts/*.jgprompt".to_string(),
-            "./local/file.jgprompt".to_string(),
-            "@/agents/my-agent.jgagent".to_string(),
+            "@/prompts/*.jgx".to_string(),
+            "./local/file.jgx".to_string(),
+            "@/tools/my-tools.json".to_string(),
         ];
         let result = expand_at_prefixes(&patterns, Some(base));
-        assert_eq!(result[0], "/project/prompts/*.jgprompt");
-        assert_eq!(result[1], "./local/file.jgprompt");
-        assert_eq!(result[2], "/project/agents/my-agent.jgagent");
+        assert_eq!(result[0], "/project/prompts/*.jgx");
+        assert_eq!(result[1], "./local/file.jgx");
+        assert_eq!(result[2], "/project/tools/my-tools.json");
     }
 
     #[test]

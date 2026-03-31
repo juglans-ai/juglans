@@ -4,7 +4,7 @@ Core terminology used throughout Juglans documentation.
 
 ---
 
-**Agent** -- An AI persona defined in a `.jgagent` file, specifying model, system prompt, tools, and behavior parameters. Referenced by slug in `chat()` calls.
+**Agent** -- An AI persona defined as an inline JSON map node in a `.jg` file, specifying model, system prompt, tools, and behavior parameters. Referenced by node ID in `chat()` calls (e.g., `chat(agent=my_agent, ...)`). For cross-workflow reuse, agents can be defined in a library file and imported via `libs:`.
 
 **Builtin** -- A tool implemented directly in the Juglans Rust runtime (e.g., `chat`, `fetch`, `notify`), available without any external configuration.
 
@@ -36,15 +36,15 @@ Core terminology used throughout Juglans documentation.
 
 **MCP** -- Model Context Protocol. A standard for connecting external tool servers. Juglans connects to MCP servers via HTTP/JSON-RPC.
 
-**Metadata** -- The header section of a `.jg` file containing resource import declarations. Valid keys: `libs`, `flows`, `prompts`, `agents`, `tools`, `python`.
+**Metadata** -- The header section of a `.jg` file containing resource import declarations. Valid keys: `libs`, `flows`, `prompts`, `tools`, `python`. (The `agents` key is silently ignored for backward compatibility.)
 
 **Node** -- The fundamental unit of a workflow. Each node has an ID (in brackets) and executes a single tool call: `[node_id]: tool(params)`.
 
-**Prompt** -- A Jinja-style template defined in a `.jgprompt` file, rendered with the `p()` builtin. Supports variables, conditionals, and loops.
+**Prompt** -- A Jinja-style template defined in a `.jgx` file, rendered with the `p()` builtin. Supports variables, conditionals, and loops.
 
 **Registry** -- The package registry (`jgr.juglans.ai`) where Juglans packages are published and installed via `juglans publish` / `juglans add`.
 
-**Slug** -- A URL-safe identifier derived from a resource's filename (e.g., `my-agent` from `my-agent.jgagent`). Used to reference agents, prompts, and workflows.
+**Slug** -- A URL-safe identifier for a resource. Used to reference prompts and workflows. For agents, the node ID serves as the identifier.
 
 **Switch** -- Multi-branch routing that executes exactly one matching path: `[node] -> switch var { "a": [x], default: [y] }`.
 

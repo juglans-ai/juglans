@@ -8,7 +8,6 @@ use tracing::debug;
 
 use crate::core::context::WorkflowContext;
 use crate::core::tool_loader::ToolResource;
-use crate::services::agent_loader::AgentRegistry;
 use crate::services::interface::JuglansRuntime;
 use crate::services::prompt_loader::PromptRegistry;
 use crate::services::tool_registry::ToolRegistry;
@@ -54,15 +53,10 @@ pub struct BuiltinRegistry {
     executor: RwLock<Option<std::sync::Weak<crate::core::executor::WorkflowExecutor>>>,
     runtime: Arc<dyn JuglansRuntime>,
     _prompt_registry: Arc<PromptRegistry>,
-    _agent_registry: Arc<AgentRegistry>,
 }
 
 impl BuiltinRegistry {
-    pub fn new(
-        prompts: Arc<PromptRegistry>,
-        agents: Arc<AgentRegistry>,
-        runtime: Arc<dyn JuglansRuntime>,
-    ) -> Arc<Self> {
+    pub fn new(prompts: Arc<PromptRegistry>, runtime: Arc<dyn JuglansRuntime>) -> Arc<Self> {
         let mut tool_map: HashMap<String, Arc<Box<dyn Tool>>> = HashMap::new();
 
         macro_rules! reg {
@@ -81,6 +75,7 @@ impl BuiltinRegistry {
         reg!(system::Reply::new(runtime.clone()));
         reg!(system::SetContext);
         reg!(system::FeishuWebhook);
+        reg!(system::FeishuSend);
         reg!(system::Return);
 
         // HTTP backend
@@ -154,10 +149,9 @@ impl BuiltinRegistry {
             executor: RwLock::new(None),
             runtime: runtime.clone(),
             _prompt_registry: prompts.clone(),
-            _agent_registry: agents.clone(),
         });
 
-        let mut chat_tool = ai::Chat::new(agents, prompts, runtime);
+        let mut chat_tool = ai::Chat::new(prompts, runtime);
         chat_tool.set_registry(Arc::downgrade(&registry_arc));
 
         let mut exec_wf_tool = ai::ExecuteWorkflow::new();
@@ -287,8 +281,7 @@ impl BuiltinRegistry {
             .unwrap_or(std::path::Path::new("."));
 
         // Parse and load resources
-        if !workflow_graph.prompt_patterns.is_empty() || !workflow_graph.agent_patterns.is_empty() {
-
+        if !workflow_graph.prompt_patterns.is_empty() {
             // TODO: Simplified handling; a better resource isolation strategy is needed
             // Consider creating a temporary registry or merging into the current one
         }

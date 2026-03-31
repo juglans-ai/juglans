@@ -134,11 +134,11 @@ juglans src/main.jg --dry-run
 When a workflow is long, create a minimal test file to test the problematic node in isolation:
 
 ```bash
-# Test a single Agent
-juglans src/agents/my-agent.jgagent --message "test input"
-
 # Render a single Prompt
-juglans src/prompts/my-prompt.jgprompt --input '{"name": "Alice"}'
+juglans src/prompts/my-prompt.jgx --input '{"name": "Alice"}'
+
+# Test a minimal workflow with an inline agent
+juglans test-agent.jg --input '{"message": "test input"}'
 ```
 
 ### Check Configuration

@@ -1,54 +1,56 @@
 # Tutorial 6: AI Chat
 
-This chapter covers how to call AI models in workflows: using the `chat()` tool to send messages, creating `.jgagent` configuration files, constructing dynamic messages, chaining multi-turn conversations, and obtaining structured JSON output.
+This chapter covers how to call AI models in workflows: using the `chat()` tool to send messages, defining inline agents, constructing dynamic messages, chaining multi-turn conversations, and obtaining structured JSON output.
 
 ## 6.1 chat() Basics
 
-The simplest AI call — one node, one message, one reply:
+The simplest AI call — one agent, one message, one reply:
 
 ```juglans
-agents: ["./agents/*.jgagent"]
+[assistant]: {
+  "model": "deepseek-chat",
+  "temperature": 0.7,
+  "system_prompt": "You are a helpful assistant."
+}
 
-[ask]: chat(agent="assistant", message="What is 2+2?")
+[ask]: chat(agent=assistant, message="What is 2+2?")
 [show]: print(message=output)
 
-[ask] -> [show]
+[assistant] -> [ask] -> [show]
 ```
 
 Line-by-line explanation:
 
-1. `agents: ["./agents/*.jgagent"]` — A metadata declaration that tells the engine to load all `.jgagent` configuration files from the `./agents/` directory. Only after loading an agent can `chat()` find it.
-2. `[ask]: chat(agent="assistant", message="What is 2+2?")` — Calls the `chat()` tool, sending the message `"What is 2+2?"` to the agent with slug `"assistant"`. The engine sends the message to the corresponding model and waits for a reply.
+1. `[assistant]: { ... }` — Defines an inline agent as a JSON map node. The node ID `assistant` becomes the agent's identifier.
+2. `[ask]: chat(agent=assistant, message="What is 2+2?")` — Calls the `chat()` tool, sending the message `"What is 2+2?"` to the agent referenced by `assistant`. The engine sends the message to the corresponding model and waits for a reply.
 3. `[show]: print(message=output)` — The AI's reply is stored in `output`, and `print` outputs it to the console.
-4. `[ask] -> [show]` — First call the AI, then print the result.
+4. `[assistant] -> [ask] -> [show]` — First initialize the agent, then call the AI, then print the result.
 
 `chat()` is the most important built-in tool in Juglans. Its minimal usage requires only two parameters:
 
 | Parameter | Purpose |
 |------|------|
-| `agent` | The agent's slug, corresponding to the `slug` field in the `.jgagent` file |
+| `agent` | A reference to an inline agent map node |
 | `message` | The message content to send to the AI |
 
-## 6.2 Creating an Agent — .jgagent Files
+## 6.2 Defining an Agent — Inline JSON Map Nodes
 
-The `chat(agent="assistant", ...)` from the previous section references an agent named `assistant`. This agent is defined in a `.jgagent` file.
+The `chat(agent=assistant, ...)` from the previous section references an agent node named `assistant`. Agents are defined as inline JSON map nodes directly in `.jg` files.
 
-Create `agents/assistant.jgagent`:
+The agent from section 6.1:
 
-```jgagent
-slug: "assistant"
-name: "General Assistant"
-model: "deepseek-chat"
-temperature: 0.7
-system_prompt: "You are a helpful assistant."
+```juglans
+[assistant]: {
+  "model": "deepseek-chat",
+  "temperature": 0.7,
+  "system_prompt": "You are a helpful assistant."
+}
 ```
 
 Field-by-field explanation:
 
 | Field | Purpose | Example Value |
 |------|------|--------|
-| `slug` | Unique identifier; referenced by `chat()` | `"assistant"` |
-| `name` | Display name, used in UI and logs | `"General Assistant"` |
 | `model` | The AI model to use | `"deepseek-chat"`, `"gpt-4o"`, `"claude-3-sonnet"` |
 | `temperature` | Randomness control (0 = deterministic, 2 = high randomness) | `0.7` (recommended default) |
 | `system_prompt` | System prompt that defines the agent's role and behavior | `"You are a helpful assistant."` |
@@ -66,24 +68,26 @@ Field-by-field explanation:
 
 ```text
 my-project/
-├── chat.jg
-└── agents/
-    └── assistant.jgagent
+└── chat.jg          # Contains both agent definitions and workflow
 ```
 
-The paths in `agents:` metadata are relative to the directory where the `.jg` file is located. `["./agents/*.jgagent"]` matches all `.jgagent` files under `agents/`.
+Everything lives in one `.jg` file. For reuse across files, put agents in a library and import with `libs:`.
 
 ## 6.3 Dynamic Messages — Constructing with input
 
 Hardcoded messages are only suitable for testing. In real scenarios, messages come from external input:
 
 ```juglans
-agents: ["./agents/*.jgagent"]
+[assistant]: {
+  "model": "deepseek-chat",
+  "temperature": 0.7,
+  "system_prompt": "You are a helpful assistant."
+}
 
-[ask]: chat(agent="assistant", message=input.question)
+[ask]: chat(agent=assistant, message=input.question)
 [result]: print(message=output)
 
-[ask] -> [result]
+[assistant] -> [ask] -> [result]
 ```
 
 Run:
@@ -99,13 +103,17 @@ juglans chat.jg --input '{"question": "Explain recursion in one sentence."}'
 Use `+` to concatenate strings, providing the AI with more context:
 
 ```juglans
-agents: ["./agents/*.jgagent"]
+[assistant]: {
+  "model": "deepseek-chat",
+  "temperature": 0.7,
+  "system_prompt": "You are a helpful assistant."
+}
 
 [init]: lang = input.lang
-[ask]: chat(agent="assistant", message="Answer in " + lang + ": " + input.question)
+[ask]: chat(agent=assistant, message="Answer in " + lang + ": " + input.question)
 [show]: print(message=output)
 
-[init] -> [ask] -> [show]
+[assistant] -> [init] -> [ask] -> [show]
 ```
 
 ```bash
@@ -119,13 +127,17 @@ The AI receives the message `"Answer in Chinese: What is Rust?"` and therefore r
 Chain multiple `chat()` nodes together, with the previous node's output feeding into the next. This is the most common pattern in AI workflows:
 
 ```juglans
-agents: ["./agents/*.jgagent"]
+[assistant]: {
+  "model": "deepseek-chat",
+  "temperature": 0.7,
+  "system_prompt": "You are a helpful assistant."
+}
 
-[draft]: chat(agent="assistant", message="Write a short poem about the sea.")
-[review]: chat(agent="assistant", message="Review this poem and suggest improvements: " + output)
+[draft]: chat(agent=assistant, message="Write a short poem about the sea.")
+[review]: chat(agent=assistant, message="Review this poem and suggest improvements: " + output)
 [final]: print(message=output)
 
-[draft] -> [review] -> [final]
+[assistant] -> [draft] -> [review] -> [final]
 ```
 
 Execution flow:
@@ -139,14 +151,18 @@ Execution flow:
 If you still need the original poem later, save it to a variable:
 
 ```juglans
-agents: ["./agents/*.jgagent"]
+[assistant]: {
+  "model": "deepseek-chat",
+  "temperature": 0.7,
+  "system_prompt": "You are a helpful assistant."
+}
 
-[draft]: chat(agent="assistant", message="Write a haiku about mountains.")
+[draft]: chat(agent=assistant, message="Write a haiku about mountains.")
 [save]: poem = output
-[review]: chat(agent="assistant", message="Critique this haiku: " + poem)
+[review]: chat(agent=assistant, message="Critique this haiku: " + poem)
 [show]: print(message="Original: " + poem + " | Review: " + output)
 
-[draft] -> [save] -> [review] -> [show]
+[assistant] -> [draft] -> [save] -> [review] -> [show]
 ```
 
 `poem` persists throughout the entire workflow and will not be overwritten by subsequent `output` values.
@@ -156,12 +172,22 @@ agents: ["./agents/*.jgagent"]
 Each node in the chain can use a different agent, leveraging their respective strengths:
 
 ```juglans
-agents: ["./agents/*.jgagent"]
+[translator]: {
+  "model": "deepseek-chat",
+  "system_prompt": "You are a professional translator."
+}
 
-[translate]: chat(agent="translator", message="Translate to English: " + input.text)
-[summarize]: chat(agent="summarizer", message="Summarize in one sentence: " + output)
+[summarizer]: {
+  "model": "deepseek-chat",
+  "system_prompt": "You are a summarization expert."
+}
+
+[translate]: chat(agent=translator, message="Translate to English: " + input.text)
+[summarize]: chat(agent=summarizer, message="Summarize in one sentence: " + output)
 [result]: print(message=output)
 
+[translator] -> [translate]
+[summarizer] -> [summarize]
 [translate] -> [summarize] -> [result]
 ```
 
@@ -172,12 +198,16 @@ First translate, then summarize — two agents, each with its own responsibility
 By default, `chat()` returns free-form text. Adding the `format="json"` parameter forces the AI to return structured JSON:
 
 ```juglans
-agents: ["./agents/*.jgagent"]
+[assistant]: {
+  "model": "deepseek-chat",
+  "temperature": 0.7,
+  "system_prompt": "You are a helpful assistant."
+}
 
-[analyze]: chat(agent="assistant", message="Analyze the sentiment: " + input.text, format="json")
+[analyze]: chat(agent=assistant, message="Analyze the sentiment: " + input.text, format="json")
 [show]: print(message=output)
 
-[analyze] -> [show]
+[assistant] -> [analyze] -> [show]
 ```
 
 ```bash
@@ -200,9 +230,13 @@ What `format="json"` does:
 The most powerful use of JSON output is combining it with conditional routing, letting the AI make decisions:
 
 ```juglans
-agents: ["./agents/*.jgagent"]
+[assistant]: {
+  "model": "deepseek-chat",
+  "temperature": 0.7,
+  "system_prompt": "You are a helpful assistant."
+}
 
-[classify]: chat(agent="assistant", message="Classify this as positive or negative: " + input.text, format="json")
+[classify]: chat(agent=assistant, message="Classify this as positive or negative: " + input.text, format="json")
 [pos]: print(message="Positive feedback detected!")
 [neg]: print(message="Negative feedback — escalating.")
 [done]: print(message="Classification complete.")
@@ -241,20 +275,19 @@ Without this configuration, `chat()` will return a connection error. See the [Ju
 
 | Concept | Syntax | Purpose |
 |------|------|------|
-| AI call | `chat(agent="slug", message=...)` | Send a message to an agent and get a reply |
-| Agent configuration | `.jgagent` file | Define model, temperature, and system prompt |
-| Loading agents | `agents: ["./agents/*.jgagent"]` | Import agent files into a workflow |
+| AI call | `chat(agent=my_agent, message=...)` | Send a message to an agent and get a reply |
+| Agent definition | `[name]: { "model": "...", ... }` | Inline JSON map node defining model, temperature, system prompt |
 | Dynamic messages | `message=input.question` | Construct message content using variables |
 | Multi-turn chaining | `[a] -> [b]` with multiple chat nodes in sequence | Previous output serves as the next input |
 | JSON output | `format="json"` | Force structured output; can be combined with conditional routing |
 
 Key rules:
 
-1. Before using `chat()`, you must load agent files via `agents:` metadata.
+1. Before using `chat()`, define the agent as an inline JSON map node in the same `.jg` file (or import via `libs:`).
 2. The return value of `chat()` is stored in `output`, which the next node can read directly.
 3. `format="json"` makes the AI return a JSON object whose fields can be accessed via `output.field`.
 4. Multiple `chat()` nodes can use the same or different agents.
 
 ## Next Chapter
 
-**[Tutorial 7: Prompt Templates](./prompt-templates.md)** — Learn the `.jgprompt` template syntax and the `p()` tool to manage complex prompts with Jinja-style templates.
+**[Tutorial 7: Prompt Templates](./prompt-templates.md)** — Learn the `.jgx` template syntax and the `p()` tool to manage complex prompts with Jinja-style templates.

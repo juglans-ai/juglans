@@ -1,0 +1,59 @@
+# finance_test.jg — Finance stdlib integration test
+# Run: FINANCE_API_URL=http://localhost:3007 juglans examples/finance_test.jg
+
+libs: ["finance"]
+
+# ── 1. ID Builders ──
+
+[t1]: id_stock = finance.stock("AAPL")
+[t1_ok]: print(message="[1] stock: " + id_stock)
+
+[t2]: id_crypto = finance.crypto("BTC")
+[t2_ok]: print(message="[2] crypto: " + id_crypto)
+
+[t3]: id_pair = finance.crypto("ETH", "USD")
+[t3_ok]: print(message="[3] crypto USD: " + id_pair)
+
+[t4]: id_idx = finance.index("SPX")
+[t4_ok]: print(message="[4] index: " + id_idx)
+
+[t5]: id_fx = finance.forex("EURUSD")
+[t5_ok]: print(message="[5] forex: " + id_fx)
+
+[t6]: id_hk = finance.hk_stock("0700")
+[t6_ok]: print(message="[6] hk_stock: " + id_hk)
+
+[t7]: id_cn = finance.cn_stock("600519")
+[t7_ok]: print(message="[7] cn_stock: " + id_cn)
+
+# ── 2. Data Functions ──
+
+[t8]: finance.quote(id="US_STOCK:AAPL@USD_SPOT")
+[t8_ok]: print(message="[8] quote: " + output.symbol + " price=" + str(output.lastPrice) + " vol=" + str(output.volume))
+
+[t9]: finance.history(id="US_STOCK:AAPL@USD_SPOT", interval="1d")
+[t9_ok]: print(message="[9] history: " + str(len(output)) + " bars, first_open=" + str(output[0].open))
+
+[t10]: finance.info(id="US_STOCK:AAPL@USD_SPOT")
+[t10_ok]: print(message="[10] info: name=" + output.name + " ticker=" + output.ticker)
+
+# ── 3. Module Functions ──
+
+[t11]: finance.search(q="AAPL", limit=3)
+[t11_ok]: print(message="[11] search: " + str(len(output)) + " results, first=" + output[0].symbol)
+
+[t12]: finance.batch(ids=["US_STOCK:AAPL@USD_SPOT", "CRYPTO:BTC@USDT_SPOT"])
+[t12_ok]: print(message="[12] batch: " + str(len(output)) + " tickers — " + output[0].symbol + "=" + str(output[0].lastPrice) + ", " + output[1].symbol + "=" + str(output[1].lastPrice))
+
+[t13]: finance.stats()
+[t13_ok]: print(message="[13] stats: US=" + str(output.US_STOCK) + " CRYPTO=" + str(output.CRYPTO))
+
+[t14]: finance.instruments(limit=3, asset_class="CRYPTO")
+[t14_ok]: print(message="[14] instruments: total=" + str(output.total) + " page=" + str(len(output.items)))
+
+[t15]: finance.lookup(id="US_STOCK:AAPL.NASDAQ@USD_SPOT")
+[t15_ok]: print(message="[15] lookup: " + output.symbol + " " + output.name + " (" + output.assetClass + ")")
+
+# ── Flow ──
+
+[t1] -> [t1_ok] -> [t2] -> [t2_ok] -> [t3] -> [t3_ok] -> [t4] -> [t4_ok] -> [t5] -> [t5_ok] -> [t6] -> [t6_ok] -> [t7] -> [t7_ok] -> [t8] -> [t8_ok] -> [t9] -> [t9_ok] -> [t10] -> [t10_ok] -> [t11] -> [t11_ok] -> [t12] -> [t12_ok] -> [t13] -> [t13_ok] -> [t14] -> [t14_ok] -> [t15] -> [t15_ok]

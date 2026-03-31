@@ -1,23 +1,28 @@
 # 导入工具定义文件
 tools: ["./tools/*.json"]
-agents: ["./agents/*.jgagent"]
+
+[assistant]: {
+  "model": "gpt-4o",
+  "system_prompt": "You are a helpful assistant.",
+  "temperature": 0.7
+}
 
 [start]: notify(status="🔧 Tool reference example started")
 
 # 使用单个工具集引用
 [fetch]: chat(
-  agent="assistant",
+  agent=assistant,
   message="Please fetch the content from https://example.com",
   tools="web-tools"
 )
 
 # 使用多个工具集引用
 [analyze]: chat(
-  agent="assistant",
+  agent=assistant,
   message="Analyze this data: $output",
   tools=["web-tools", "data-tools"]
 )
 
 [done]: notify(status="✅ Example completed")
 
-[start] -> [fetch] -> [analyze] -> [done]
+[assistant] -> [start] -> [fetch] -> [analyze] -> [done]

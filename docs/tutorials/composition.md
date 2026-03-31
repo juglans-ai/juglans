@@ -283,7 +283,92 @@ libs: ["./string_utils.jg", "./math_utils.jg"]
 
 Each library's functions reside in their own namespace, preventing conflicts between libraries.
 
-## 8.6 Comprehensive Example
+## 8.6 Struct, impl, and Trait
+
+Beyond functions, Juglans supports Rust-style struct definitions with `impl` blocks and `trait` contracts.
+
+### Struct + impl Block
+
+`impl` blocks group methods for a struct. Methods with `self` are instance methods; methods without `self` are associated functions (static methods):
+
+```text
+[Config]: {
+  host: str = "localhost"
+  port: int = 8080
+}
+
+impl Config {
+  [info(self)]: output = self.host + ":" + str(self.port)
+  [defaults()]: output = "localhost:8080"
+}
+```
+
+Usage:
+
+```text
+[d]: Config.defaults()
+[c]: new Config(host="0.0.0.0", port=3000)
+[i]: c.info()
+[c] -> [i]
+```
+
+### Trait Definitions
+
+Traits define behavior contracts. Methods without a body are required; methods with a body provide a default implementation:
+
+```text
+trait Validatable {
+  [validate(self)]:
+  [is_valid(self)]: output = self.validate().valid == true
+}
+```
+
+### impl Trait for Type
+
+```text
+[User]: {
+  name: str
+  email: str
+}
+
+impl Validatable for User {
+  [validate(self)]: valid = self.name != "" and self.email != ""
+}
+```
+
+The compiler validates that all required methods are provided. Default methods are automatically inherited.
+
+### Traits in Libraries
+
+Traits, structs, and impl blocks defined in library files are imported with namespace prefixes, just like functions:
+
+```text
+# lib/models.jg
+[User]: {
+  name: str
+  email: str
+}
+
+trait Displayable {
+  [format(self)]:
+}
+
+impl Displayable for User {
+  [format(self)]: output = self.name + " <" + self.email + ">"
+}
+```
+
+Import and use:
+
+```text
+libs: ["./lib/models.jg"]
+
+[u]: new models.User(name="Alice", email="alice@example.com")
+[show]: u.format()
+[u] -> [show]
+```
+
+## 8.7 Comprehensive Example
 
 Combining function definitions, flow imports, and library imports together:
 
@@ -337,9 +422,12 @@ Each mechanism has its own use case:
 - **Function definitions** `[name(params)]: body` -- encapsulate reusable logic; call syntax is identical to built-in tools
 - **Single-step functions** `[f(x)]: tool(...)` -- directly bind a single tool call
 - **Multi-step functions** `[f(x)]: { step1; step2 }` -- multiple steps executed sequentially inside curly braces
+- **Struct + impl** `[Type]: { fields }` + `impl Type { methods }` -- Rust-style data + behavior grouping
+- **Traits** `trait Name { methods }` + `impl Trait for Type { ... }` -- behavior contracts without inheritance
+- **Associated functions** -- methods without `self`, called via `Type.function()`
 - **Flow Import** `flows: { alias: "path.jg" }` -- import complete sub-workflows; nodes are automatically namespace-prefixed
 - **Cross-workflow edges** `[local] -> [alias.node]` -- reference sub-workflow nodes in edge definitions
-- **Library Import** `libs: ["path.jg"]` -- import function libraries, called via `namespace.func()`
-- All three mechanisms can be combined, each suited for different scenarios
+- **Library Import** `libs: ["path.jg"]` -- import function libraries, structs, traits, called via `namespace.func()`
+- All mechanisms can be combined, each suited for different scenarios
 
 Next chapter: [Tutorial 9: Full Project](./full-project.md) -- integrate all knowledge from the previous 8 chapters to build a complete AI assistant project from scratch.

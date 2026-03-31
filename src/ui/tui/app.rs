@@ -9,7 +9,6 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use unicode_width::UnicodeWidthChar;
 
-use crate::core::agent_parser::AgentResource;
 use crate::core::context::{WorkflowContext, WorkflowEvent};
 use crate::core::executor::WorkflowExecutor;
 use crate::core::graph::WorkflowGraph;
@@ -32,7 +31,8 @@ pub enum TuiMode {
 pub struct AgentState {
     pub executor: Arc<WorkflowExecutor>,
     pub context: WorkflowContext,
-    pub agent_resource: AgentResource,
+    pub model: String,
+    pub slug: String,
     pub workflow: Option<Arc<WorkflowGraph>>,
     pub event_rx: Option<mpsc::UnboundedReceiver<WorkflowEvent>>,
     pub event_tx: mpsc::UnboundedSender<WorkflowEvent>,
@@ -258,9 +258,6 @@ impl App {
                             Some(Dialog::FilePicker { .. }) => {
                                 self.handle_file_picker_result(result);
                             }
-                            Some(Dialog::AgentPicker { .. }) => {
-                                self.pending_agent_load = Some(PathBuf::from(result.clone()));
-                            }
                             _ => {}
                         }
                     }
@@ -387,21 +384,8 @@ impl App {
                 return;
             }
             (KeyCode::Tab, KeyModifiers::NONE) => {
-                if self.mode == TuiMode::Agent {
-                    let cwd = PathBuf::from(self.resolve_cwd());
-                    let agents = super::dialog::scan_agents(&cwd);
-                    if agents.is_empty() {
-                        self.status_message =
-                            Some(("No .jgagent files found".to_string(), Instant::now()));
-                    } else {
-                        self.active_dialog = Some(Dialog::AgentPicker {
-                            agents,
-                            selected: 0,
-                            scroll_offset: 0,
-                        });
-                    }
-                    return;
-                }
+                // Agent picker removed (no .jgagent support)
+                return;
             }
             _ => {}
         }
@@ -807,12 +791,14 @@ impl App {
             }
             WorkflowEvent::ToolStart(ev) => {
                 self.waiting_for_response = false;
-                let params_str = ev
-                    .params
-                    .iter()
-                    .map(|(k, v)| format!("{}: {}", k, v))
-                    .collect::<Vec<_>>()
-                    .join("\n");
+                let params_str = if let Some(obj) = ev.params.as_object() {
+                    obj.iter()
+                        .map(|(k, v)| format!("{}: {}", k, v))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                } else {
+                    ev.params.to_string()
+                };
                 self.messages.push(ChatMessage::ToolCall {
                     name: ev.tool.clone(),
                     status: ToolStatus::InProgress,
@@ -899,7 +885,7 @@ impl App {
         let model = self
             .agent_state
             .as_ref()
-            .map(|s| s.agent_resource.model.clone())
+            .map(|s| s.model.clone())
             .unwrap_or_default();
         self.messages.push(ChatMessage::Assistant {
             thinking: None,
@@ -920,7 +906,7 @@ impl App {
 
         let executor = agent.executor.clone();
         let context = agent.context.clone();
-        let agent_slug = agent.agent_resource.slug.clone();
+        let agent_slug = agent.slug.clone();
         let workflow = agent.workflow.clone();
 
         // Set input variables

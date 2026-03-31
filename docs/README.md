@@ -5,11 +5,16 @@
 > Others write code to draw graphs. We write graphs as code.
 
 ```juglans
-[classify]: chat(agent="classifier", format="json")
-[answer]: chat(agent="qa", message=input.query)
-[execute]: chat(agent="executor", message=input.task)
+[classifier]: { "model": "gpt-4o", "temperature": 0.0, "system_prompt": "Classify intent. Return JSON." }
+[qa]: { "model": "gpt-4o", "system_prompt": "Answer questions accurately." }
+[executor]: { "model": "gpt-4o", "system_prompt": "Execute tasks step by step." }
+[reviewer]: { "model": "gpt-4o", "system_prompt": "Review and improve responses." }
+
+[classify]: chat(agent=classifier, format="json")
+[answer]: chat(agent=qa, message=input.query)
+[execute]: chat(agent=executor, message=input.task)
 [fallback]: print(message="Unknown intent")
-[review]: chat(agent="reviewer", message=output)
+[review]: chat(agent=reviewer, message=output)
 
 [classify] -> switch output.intent {
     "question": [answer]
@@ -34,13 +39,12 @@ In the era of AI agents, **how agents interact** — who talks to whom, in what 
 | BPMN | Verbose XML; not composable |
 | **Juglans** | **Graph topology is the program** — composable, verifiable, executable |
 
-## Three File Types
+## Two File Types
 
 | Extension | Purpose | Example |
 |-----------|---------|---------|
-| `.jg` | Workflow | Nodes, edges, branching, loops |
-| `.jgagent` | Agent | Model, temperature, system prompt |
-| `.jgprompt` | Prompt Template | Jinja-style variable interpolation |
+| `.jg` | Workflow | Nodes, edges, branching, loops, inline agent definitions |
+| `.jgx` | Prompt Template | Jinja-style variable interpolation |
 
 ## Key Features
 
@@ -102,9 +106,9 @@ juglans hello.jg
 ┌─────────────────────────────────────────────────┐
 │                   Juglans CLI                    │
 ├─────────────────────────────────────────────────┤
-│  .jg Parser    .jgprompt Parser   .jgagent Parser│
-│       │               │                │        │
-│       ▼               ▼                ▼        │
+│  .jg Parser          .jgx Parser            │
+│       │                     │                    │
+│       ▼                     ▼                    │
 │  ┌─────────────────────────────────────────┐    │
 │  │         Workflow Executor (DAG)          │    │
 │  └────────────────────┬────────────────────┘    │

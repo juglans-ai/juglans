@@ -1,0 +1,34 @@
+# Build artifacts
+/target
+
+# Environment files (contain secrets)
+.env
+.env.local
+.env.production
+
+# Certificates
+*.pem
+
+# Uploads directory
+uploads/
+
+# Ops config (deployment secrets)
+ops.toml
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Rust
+**/*.rs.bk
+
+# Database backup (may contain real data)
+db/backup/*.sql
+.env.deploy
+.env.deploy

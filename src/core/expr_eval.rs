@@ -275,7 +275,109 @@ impl ExprEvaluator {
                 "ResolvedField/ResolvedParam requires eval_method_expr"
             )),
 
-            // Complex AST nodes: fall back to Value path
+            // DotAccess: try collecting full dot path and resolving via typed store
+            Expr::DotAccess { object, field } => {
+                if let Some(full_path) = Self::collect_dot_path(object, field) {
+                    if let Some(slot) = resolver(&full_path) {
+                        return Ok(slot);
+                    }
+                }
+                // Fall back to Value path
+                let value_resolver =
+                    |path: &str| -> Option<Value> { resolver(path).map(|s| s.to_value()) };
+                let val =
+                    self.eval_expr(expr, &value_resolver as &dyn Fn(&str) -> Option<Value>)?;
+                Ok(TypedSlot::from_value(val))
+            }
+
+            // FuncCall: handle common pure functions directly in TypedSlot path
+            Expr::FuncCall { name, args } => {
+                match (name.as_str(), args.len()) {
+                    ("len", 1) => {
+                        let val = self.eval_expr_typed(&args[0], resolver)?;
+                        match &val {
+                            TypedSlot::Str(s) => Ok(TypedSlot::Int(s.chars().count() as i64)),
+                            TypedSlot::Json(v) => match v.as_ref() {
+                                Value::Array(a) => Ok(TypedSlot::Int(a.len() as i64)),
+                                Value::Object(o) => Ok(TypedSlot::Int(o.len() as i64)),
+                                Value::String(s) => Ok(TypedSlot::Int(s.chars().count() as i64)),
+                                _ => Err(anyhow!("len() expects str, list, or dict")),
+                            },
+                            _ => Err(anyhow!("len() expects str, list, or dict")),
+                        }
+                    }
+                    ("int", 1) => {
+                        let val = self.eval_expr_typed(&args[0], resolver)?;
+                        match &val {
+                            TypedSlot::Int(_) => Ok(val),
+                            TypedSlot::Float(f) => Ok(TypedSlot::Int(*f as i64)),
+                            TypedSlot::Bool(b) => Ok(TypedSlot::Int(if *b { 1 } else { 0 })),
+                            TypedSlot::Null => Ok(TypedSlot::Int(0)),
+                            TypedSlot::Str(s) => s
+                                .parse::<i64>()
+                                .map(TypedSlot::Int)
+                                .map_err(|_| anyhow!("Cannot convert '{}' to int", s)),
+                            TypedSlot::Json(v) => match v.as_ref() {
+                                Value::Number(n) => Ok(TypedSlot::Int(
+                                    n.as_i64().unwrap_or(n.as_f64().unwrap_or(0.0) as i64),
+                                )),
+                                _ => Err(anyhow!("int() cannot convert this type")),
+                            },
+                        }
+                    }
+                    ("float", 1) => {
+                        let val = self.eval_expr_typed(&args[0], resolver)?;
+                        match &val {
+                            TypedSlot::Float(_) => Ok(val),
+                            TypedSlot::Int(n) => Ok(TypedSlot::Float(*n as f64)),
+                            TypedSlot::Bool(b) => Ok(TypedSlot::Float(if *b { 1.0 } else { 0.0 })),
+                            TypedSlot::Null => Ok(TypedSlot::Float(0.0)),
+                            TypedSlot::Str(s) => s
+                                .parse::<f64>()
+                                .map(TypedSlot::Float)
+                                .map_err(|_| anyhow!("Cannot convert '{}' to float", s)),
+                            TypedSlot::Json(v) => match v.as_ref() {
+                                Value::Number(n) => Ok(TypedSlot::Float(n.as_f64().unwrap_or(0.0))),
+                                _ => Err(anyhow!("float() cannot convert this type")),
+                            },
+                        }
+                    }
+                    ("str", 1) => {
+                        let val = self.eval_expr_typed(&args[0], resolver)?;
+                        let s = match &val {
+                            TypedSlot::Str(_) => return Ok(val),
+                            TypedSlot::Int(n) => n.to_string(),
+                            TypedSlot::Float(f) => {
+                                if *f == f.floor() && f.abs() < 1e15 {
+                                    format!("{:.0}", f)
+                                } else {
+                                    f.to_string()
+                                }
+                            }
+                            TypedSlot::Bool(b) => b.to_string(),
+                            TypedSlot::Null => String::new(),
+                            TypedSlot::Json(v) => {
+                                serde_json::to_string(v.as_ref()).unwrap_or_default()
+                            }
+                        };
+                        Ok(TypedSlot::Str(Arc::from(s.as_str())))
+                    }
+                    ("bool", 1) => {
+                        let val = self.eval_expr_typed(&args[0], resolver)?;
+                        Ok(TypedSlot::Bool(val.is_truthy()))
+                    }
+                    // Not a typed-fast-path function: fall back to Value evaluator
+                    _ => {
+                        let value_resolver =
+                            |path: &str| -> Option<Value> { resolver(path).map(|s| s.to_value()) };
+                        let val = self
+                            .eval_expr(expr, &value_resolver as &dyn Fn(&str) -> Option<Value>)?;
+                        Ok(TypedSlot::from_value(val))
+                    }
+                }
+            }
+
+            // Other complex AST nodes: fall back to Value path
             _ => {
                 let value_resolver =
                     |path: &str| -> Option<Value> { resolver(path).map(|s| s.to_value()) };
@@ -943,9 +1045,9 @@ impl ExprEvaluator {
             let func = reg
                 .get(name)
                 .ok_or_else(|| anyhow!("Unknown function: {}", name))?;
-            if args.len() != func.params.len() {
+            if args.len() > func.params.len() {
                 return Err(anyhow!(
-                    "{}() expects {} arg(s), got {}",
+                    "{}() expects at most {} arg(s), got {}",
                     name,
                     func.params.len(),
                     args.len()
@@ -954,11 +1056,12 @@ impl ExprEvaluator {
             (func.params.clone(), func.body_expr.clone())
         }; // lock released here
 
-        // Bind parameters
+        // Bind parameters (missing positional args become Null for use with default())
+        let null_val = Value::Null;
         let bound: HashMap<&str, &Value> = params
             .iter()
-            .zip(args.iter())
-            .map(|(k, v)| (k.as_str(), v))
+            .enumerate()
+            .map(|(i, k)| (k.as_str(), args.get(i).unwrap_or(&null_val)))
             .collect();
 
         let fn_resolver = |path: &str| -> Option<Value> {

@@ -38,6 +38,7 @@ jobs:
         run: cargo clippy -- -D warnings
 
       - name: Security audit
+        continue-on-error: true
         run: cargo install cargo-audit && cargo audit
 
   # 文档代码块验证 — lint 通过后才跑

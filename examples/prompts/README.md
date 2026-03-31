@@ -4,7 +4,7 @@
 
 ## 文件列表
 
-### greeting.jgprompt
+### greeting.jgx
 简单的问候模板，演示：
 - 基本变量插值 `{{ name }}`
 - 条件渲染 `{% if %}`
@@ -13,13 +13,13 @@
 **使用方法：**
 ```bash
 # 使用默认值渲染
-juglans greeting.jgprompt
+juglans greeting.jgx
 
 # 传入自定义变量
-juglans greeting.jgprompt --input '{"name": "Alice", "language": "Chinese"}'
+juglans greeting.jgx --input '{"name": "Alice", "language": "Chinese"}'
 ```
 
-### analysis.jgprompt
+### analysis.jgx
 数据分析提示模板，演示：
 - 数组变量
 - 循环渲染 `{% for %}`
@@ -27,7 +27,7 @@ juglans greeting.jgprompt --input '{"name": "Alice", "language": "Chinese"}'
 
 **使用方法：**
 ```bash
-juglans analysis.jgprompt --input '{
+juglans analysis.jgx --input '{
   "data": [
     {"name": "Sales", "value": 12345},
     {"name": "Users", "value": 5678}

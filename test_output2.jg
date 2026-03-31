@@ -1,0 +1,3 @@
+[ask]: chat(message=input.message)
+[ask] -> [done]
+[done]: reply(message=ask)

@@ -15,9 +15,7 @@ use petgraph::graph::NodeIndex;
 /// Built after handle_check two-pass scan, passed to validate_with_project
 #[derive(Debug, Default)]
 pub struct ProjectContext {
-    /// All slugs parsed from .jgagent files
-    pub agent_slugs: HashSet<String>,
-    /// All slugs parsed from .jgprompt files
+    /// All slugs parsed from .jgx/.jgprompt files
     pub prompt_slugs: HashSet<String>,
     /// Absolute paths of all .jg/.jgflow files
     pub flow_paths: HashSet<PathBuf>,
@@ -201,9 +199,6 @@ impl WorkflowValidator {
 
         // Cross-file checks (only when ProjectContext is available)
         if let Some(project) = project {
-            // Check 14: Agent slug references
-            Self::check_agent_references(graph, project, &mut result);
-
             // Check 15: Prompt slug references
             Self::check_prompt_references(graph, project, &mut result);
 
@@ -921,34 +916,6 @@ impl WorkflowValidator {
     }
 
     /// Check 14: Validate agent slug references in chat() nodes
-    fn check_agent_references(
-        graph: &WorkflowGraph,
-        project: &ProjectContext,
-        result: &mut ValidationResult,
-    ) {
-        for idx in graph.graph.node_indices() {
-            let node = &graph.graph[idx];
-            if let NodeType::Task(action) = &node.node_type {
-                if action.name == "chat" {
-                    if let Some(agent_val) = action.params.get("agent") {
-                        let slug = agent_val.trim().trim_matches('"');
-                        // Skip variable references
-                        if !slug.starts_with('$') && !project.agent_slugs.contains(slug) {
-                            result.add_warning(
-                                "W012",
-                                &format!(
-                                    "chat(agent=\"{}\") — agent slug '{}' not found in project .jgagent files",
-                                    slug, slug
-                                ),
-                                Some(&node.id),
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     /// Check 15: Validate prompt slug references in p() nodes
     fn check_prompt_references(
         graph: &WorkflowGraph,
@@ -965,7 +932,7 @@ impl WorkflowValidator {
                             result.add_warning(
                                 "W013",
                                 &format!(
-                                    "p(slug=\"{}\") — prompt slug '{}' not found in project .jgprompt files",
+                                    "p(slug=\"{}\") — prompt slug '{}' not found in project .jgx files",
                                     slug, slug
                                 ),
                                 Some(&node.id),
@@ -1072,7 +1039,6 @@ impl WorkflowValidator {
             .prompt_patterns
             .iter()
             .map(|p| (p.as_str(), "prompts"))
-            .chain(graph.agent_patterns.iter().map(|p| (p.as_str(), "agents")))
             .chain(graph.tool_patterns.iter().map(|p| (p.as_str(), "tools")))
             .collect();
 
@@ -1448,37 +1414,6 @@ mod tests {
     // =========================================================================
     // Cross-file Validation (Check 14-17)
     // =========================================================================
-
-    #[test]
-    fn test_agent_reference_found() {
-        let content = r#"
-[start]: chat(agent="my-agent", message="hello")
-"#;
-        let graph = GraphParser::parse(content).unwrap();
-        let mut project = ProjectContext::default();
-        project.agent_slugs.insert("my-agent".to_string());
-        let result = WorkflowValidator::validate_with_project(&graph, &project);
-        assert!(
-            !result.warnings.iter().any(|w| w.code == "W012"),
-            "Agent exists, no W012. Got: {:?}",
-            result.warnings
-        );
-    }
-
-    #[test]
-    fn test_agent_reference_not_found() {
-        let content = r#"
-[start]: chat(agent="missing-agent", message="hello")
-"#;
-        let graph = GraphParser::parse(content).unwrap();
-        let project = ProjectContext::default();
-        let result = WorkflowValidator::validate_with_project(&graph, &project);
-        assert!(
-            result.warnings.iter().any(|w| w.code == "W012"),
-            "Agent missing, W012 expected. Got: {:?}",
-            result.warnings
-        );
-    }
 
     #[test]
     fn test_prompt_reference_not_found() {

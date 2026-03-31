@@ -1,15 +1,15 @@
 # 意图识别 + 智能回复工作流
 # 演示如何使用 prompt 模板、意图分析和条件路由
-# 使用方法：juglans examples/test.jgagent
 
-# 加载本地资源（相对于 workflow 文件的路径）
-prompts: ["./test.jgprompt"]
-agents: ["./agents/test-worker.jgagent"]
+# 加载本地资源
+prompts: ["./test.jgx"]
 
-# 重要设计原则：
-# - workflow 中应该使用 pure agents（不绑定 workflow 的 agent）
-# - 这样可以避免递归调用和依赖混乱
-# - test-worker.jgagent 是一个 pure agent，专门用于 workflow 内部
+# Inline agent definition
+[worker]: {
+  "model": "gpt-4o",
+  "system_prompt": "You are a helpful assistant that follows instructions precisely.",
+  "temperature": 0.7
+}
 
 # ========== 节点定义 ==========
 
@@ -18,7 +18,7 @@ agents: ["./agents/test-worker.jgagent"]
 
 # 2. 意图识别 - 使用 prompt 模板 + agent 分析
 [classify_intent]: chat(
-  agent="test-worker",
+  agent=worker,
   message=p(
     slug="intent-classifier",
     user_message=input.message
@@ -34,25 +34,25 @@ agents: ["./agents/test-worker.jgagent"]
 
 # 5a. 问候类回复
 [handle_greeting]: chat(
-  agent="test-worker",
+  agent=worker,
   message="用户说：" + input.message + "\n请给出友好的问候回复。"
 )
 
 # 5b. 问题类回复
 [handle_question]: chat(
-  agent="test-worker",
+  agent=worker,
   message="用户提问：" + input.message + "\n请给出详细的解答。"
 )
 
 # 5c. 命令类回复
 [handle_command]: chat(
-  agent="test-worker",
+  agent=worker,
   message="用户命令：" + input.message + "\n请确认并说明如何执行。"
 )
 
 # 5d. 闲聊类回复
 [handle_chat]: chat(
-  agent="test-worker",
+  agent=worker,
   message="用户说：" + input.message + "\n请自然地聊天回应。"
 )
 
@@ -65,7 +65,7 @@ agents: ["./agents/test-worker.jgagent"]
 # ========== 流程定义 ==========
 
 # 主流程
-[start] -> [classify_intent] -> [save_intent] -> [route]
+[worker] -> [start] -> [classify_intent] -> [save_intent] -> [route]
 
 # 条件路由（根据意图类型）
 [route] if intent == "greeting" -> [handle_greeting]

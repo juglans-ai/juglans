@@ -12,7 +12,7 @@ Conduct a conversation with an AI agent.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `agent` | string | No | `"default"` | Agent slug |
+| `agent` | string/ref | No | `"default"` | Agent node reference or slug |
 | `message` | string | Yes | - | Message to send |
 | `format` | string | No | `"text"` | Output format: `"text"` or `"json"` |
 | `state` | string | No | `"context_visible"` | Message state control (see below) |
@@ -44,41 +44,54 @@ Composite syntax: `state="input_state:output_state"` controls input and output i
 - Multiple slugs: `tools=["devtools", "web-tools"]`
 - If omitted, falls back to the agent's configured `tools` field
 
-**Example:**
+**Agent parameter:** The `agent` parameter references an inline agent map node defined in the same workflow or imported via `libs:`:
 
 ```juglans
-[ask]: chat(agent="assistant", message="Hello!")
+[assistant]: {
+  "model": "gpt-4o",
+  "system_prompt": "You are a helpful assistant."
+}
+
+[ask]: chat(agent=assistant, message="Hello!")
+[assistant] -> [ask]
+```
+
+For cross-workflow reuse with `libs:`:
+
+```juglans
+libs: ["./agents.jg"]
+
+[ask]: chat(agent=agents.assistant, message="Hello!")
+```
+
+**More examples:**
+
+```juglans
+[classifier]: {
+  "model": "gpt-4o",
+  "temperature": 0.0,
+  "system_prompt": "Classify intent. Return JSON."
+}
+
+[classify]: chat(agent=classifier, message=input.text, format="json")
+[classifier] -> [classify]
 ```
 
 ```juglans
-[classify]: chat(
-  agent="classifier",
-  message=input.text,
-  format="json"
-)
-```
+[analyst]: {
+  "model": "gpt-4o",
+  "system_prompt": "You are a data analyst."
+}
 
-```juglans
-[hidden]: chat(
-  agent="analyst",
-  message=input.data,
-  state="context_hidden"
-)
-```
-
-```juglans
-[reply]: chat(
-  agent="assistant",
-  chat_id=reply.chat_id,
-  message=input.followup
-)
+[hidden]: chat(agent=analyst, message=input.data, state="context_hidden")
+[analyst] -> [hidden]
 ```
 
 ---
 
 ### p()
 
-Render a Prompt template (`.jgprompt` file). Template variables use `{{ name }}` syntax.
+Render a Prompt template (`.jgx` file). Template variables use `{{ name }}` syntax.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
@@ -524,7 +537,7 @@ libs: ["oauth", "http"]
 
 ## Developer Tools (Devtools)
 
-A Claude Code-style set of code operation tools. Can be called directly in `.jg` files or used by LLMs via `tools: ["devtools"]` in `.jgagent`.
+A Claude Code-style set of code operation tools. Can be called directly in `.jg` files or used by LLMs via `"tools": ["devtools"]` in an inline agent map node.
 
 ### read_file()
 
@@ -955,8 +968,18 @@ $item not in list # Negated membership
 ## Complete Workflow Example
 
 ```juglans
-prompts: ["./prompts/*.jgprompt"]
-agents: ["./agents/*.jgagent"]
+prompts: ["./prompts/*.jgx"]
+
+[analyst]: {
+  "model": "gpt-4o",
+  "temperature": 0.3,
+  "system_prompt": "You are a data analyst. Return structured JSON analysis."
+}
+
+[summarizer]: {
+  "model": "gpt-4o",
+  "system_prompt": "You are a summarization assistant."
+}
 
 [init]: results = [], processed = 0
 [start_notify]: notify(status="Starting data processing...")
@@ -965,7 +988,7 @@ agents: ["./agents/*.jgagent"]
 
 [process]: foreach(item in output.items) {
   [render]: p(slug="analyze-item", item=item)
-  [analyze]: chat(agent="analyst", message=output, format="json")
+  [analyze]: chat(agent=analyst, message=output, format="json")
   [collect]: results = append(results, output), processed = processed + 1
   [progress]: notify(status="Processed: " + str(processed))
 
@@ -973,11 +996,13 @@ agents: ["./agents/*.jgagent"]
 }
 
 [summarize]: chat(
-  agent="summarizer",
+  agent=summarizer,
   message="Summarize: " + json(results)
 )
 
 [done]: notify(status="Done! Processed " + str(processed) + " items")
 
+[analyst] -> [init]
+[summarizer] -> [init]
 [init] -> [start_notify] -> [fetch_data] -> [process] -> [summarize] -> [done]
 ```

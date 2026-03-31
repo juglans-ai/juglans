@@ -1,0 +1,31 @@
+# .dockerignore
+
+# 忽略体积最大的 debug 编译目录
+target/debug/
+
+# 忽略 release 目录中不需要的编译缓存和中间文件
+# 这些文件体积很大，但对于 COPY 二进制文件来说不是必需的
+target/release/.fingerprint/
+target/release/build/
+target/release/deps/
+target/release/examples/
+target/release/incremental/
+target/rls/
+
+# 忽略 Rust 编译器生成的其他临时文件
+*.rlib
+*.rmeta
+
+# 忽略 Git 目录
+.git/
+
+# 忽略 IDE 和编辑器配置
+.idea/
+.vscode/
+
+# 忽略 Rust Language Server 数据
+.rls.json
+rust-project.json
+
+# 忽略日志文件
+*.log

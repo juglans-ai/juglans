@@ -30,8 +30,8 @@
 
 ## Reference
 * [Workflow (.jg) Spec](reference/workflow-spec.md)
-* [Agent (.jgagent) Spec](reference/agent-spec.md)
-* [Prompt (.jgprompt) Spec](reference/prompt-spec.md)
+* [Agent Spec](reference/agent-spec.md)
+* [Prompt (.jgx) Spec](reference/prompt-spec.md)
 * [Built-in Tools](reference/builtins.md)
 * [Variables & Expressions](reference/expressions.md)
 * [Context System](reference/context.md)

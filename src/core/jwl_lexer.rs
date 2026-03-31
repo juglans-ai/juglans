@@ -388,6 +388,9 @@ impl<'a> Lexer<'a> {
             "return" => TokenKind::Return,
             "new" => TokenKind::New,
             "yield" => TokenKind::Yield,
+            "impl" => TokenKind::Impl,
+            "trait" => TokenKind::Trait,
+            "for" => TokenKind::For,
             _ => TokenKind::Ident(word.to_string()),
         };
         Ok(kind)

@@ -36,6 +36,9 @@ pub mod testing;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod doctest;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod runner;
+
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
 
@@ -43,7 +46,6 @@ pub mod wasm;
 // Public Exports
 // ============================================================================
 
-pub use core::agent_parser::{AgentParser, AgentResource};
 pub use core::context::WorkflowContext;
 pub use core::graph::WorkflowGraph;
 pub use core::parser::GraphParser;
@@ -61,9 +63,6 @@ pub use services::jug0::{ChatOutput, Jug0Client};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use services::prompt_loader::PromptRegistry;
-
-#[cfg(not(target_arch = "wasm32"))]
-pub use services::agent_loader::AgentRegistry;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use services::config::JuglansConfig;
@@ -111,14 +110,14 @@ impl JuglansEngine {
         Ok(())
     }
 
-    /// Parse a .jgprompt template
+    /// Parse a .jgx template
     pub fn parse_prompt(&self, content: &str) -> Result<JsValue, JsValue> {
         let resource = crate::core::prompt_parser::PromptParser::parse(content)
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
         serde_wasm_bindgen::to_value(&resource).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
-    /// Render a .jgprompt template with context
+    /// Render a .jgx template with context
     pub fn render_prompt(&self, content: &str, context_json: &str) -> Result<String, JsValue> {
         let resource = crate::core::prompt_parser::PromptParser::parse(content)
             .map_err(|e| JsValue::from_str(&format!("Parse Error: {}", e)))?;

@@ -37,10 +37,15 @@ export JUGLANS_JUG0_URL="http://localhost:3000"
 Create a minimal chat workflow to verify the connection:
 
 ```juglans
-[test]: chat(agent="assistant", message="Say hello in one word.")
+[assistant]: {
+  "model": "gpt-4o",
+  "system_prompt": "You are a helpful assistant."
+}
+
+[test]: chat(agent=assistant, message="Say hello in one word.")
 [done]: print(message="Connection OK. Response: " + output)
 
-[test] -> [done]
+[assistant] -> [test] -> [done]
 ```
 
 Run it:
@@ -64,27 +69,22 @@ Juglans supports connecting to local models through the Jug0 backend. Example Ol
 base_url = "http://localhost:3000"
 
 # Set up the Ollama provider in the Jug0 backend configuration,
-# then specify the model in your .jgagent file
+# then specify the model in your inline agent definition
 ```
 
-Create an Agent that uses a local model:
-
-```jgagent
-slug: "local-agent"
-model: "ollama/llama3"
-temperature: 0.7
-system_prompt: "You are a helpful assistant."
-```
-
-Use it in a Workflow:
+Create an inline agent that uses a local model:
 
 ```juglans
-agents: ["./agents/*.jgagent"]
+[local_agent]: {
+  "model": "ollama/llama3",
+  "temperature": 0.7,
+  "system_prompt": "You are a helpful assistant."
+}
 
-[ask]: chat(agent="local-agent", message=input.query)
+[ask]: chat(agent=local_agent, message=input.query)
 [done]: print(message=output)
 
-[ask] -> [done]
+[local_agent] -> [ask] -> [done]
 ```
 
 ## Resource Management
@@ -95,10 +95,10 @@ Juglans resources (Workflows, Agents, Prompts) can be synchronized between local
 
 ```bash
 # Push a single file
-juglans push src/prompts/greeting.jgprompt
+juglans push src/prompts/greeting.jgx
 
 # Force overwrite
-juglans push src/agents/assistant.jgagent --force
+juglans push src/main.jg --force
 
 # Batch push (using workspace configuration)
 juglans push
@@ -126,21 +126,24 @@ juglans delete old-prompt --type prompt
 
 | | Local | Remote |
 |---|---|---|
-| Reference style | slug (e.g., `"my-agent"`) | owner/slug (e.g., `"juglans/assistant"`) |
-| Requires import | Yes (`agents: ["./agents/*.jgagent"]`) | No, reference directly |
+| Reference style | Inline node or `libs:` import | owner/slug (e.g., `"juglans/assistant"`) |
+| Requires import | Define inline or import via `libs:` | No, reference directly |
 | Best for | Development, testing | Production deployment, team sharing |
 
 Mix both in the same Workflow:
 
 ```juglans
-agents: ["./agents/*.jgagent"]
+[my_agent]: {
+  "model": "gpt-4o",
+  "system_prompt": "You are a helpful assistant."
+}
 
 [start]: print(msg="begin")
-[local_chat]: chat(agent="my-agent", message=input.query)
+[local_chat]: chat(agent=my_agent, message=input.query)
 [remote_chat]: chat(agent="juglans/premium-agent", message=output)
 [end]: print(msg="done")
 
-[start] -> [local_chat] -> [remote_chat] -> [end]
+[my_agent] -> [start] -> [local_chat] -> [remote_chat] -> [end]
 ```
 
 ## Troubleshooting
@@ -149,11 +152,11 @@ agents: ["./agents/*.jgagent"]
 |---------|----------|
 | `Connection refused` | Confirm the Jug0 backend is running; check `base_url` |
 | `401 Unauthorized` | Verify the `api_key` is correct |
-| `Agent not found` | Confirm the agent slug is spelled correctly; local agents require an `agents:` import |
+| `Agent not found` | Confirm the agent node is defined inline or imported via `libs:` |
 | `Timeout` | Increase the timeout configuration or check the network connection |
 
 ## Next Steps
 
 - [Jug0 Integration](../integrations/jug0.md) -- Full API reference
-- [Agent Syntax](./agent-syntax.md) -- Detailed agent configuration
+- [Agent Syntax](../reference/agent-spec.md) -- Inline agent configuration
 - [Configuration Reference](../reference/config.md) -- Complete configuration options

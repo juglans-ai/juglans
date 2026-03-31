@@ -27,9 +27,9 @@ api_key = "jug0_sk_..."
 id = "ws_default"
 name = "My Workspace"
 members = ["user_123", "user_789"]
-agents = ["src/agents/**/*.jgagent"]
+agents = []  # deprecated, agents are now inline in .jg files
 workflows = ["src/**/*.jg", "src/workflows/**/*.jgflow"]
-prompts = ["src/prompts/**/*.jgprompt"]
+prompts = ["src/prompts/**/*.jgx"]
 tools = ["src/tools/**/*.json"]
 exclude = ["**/*.backup", "**/test_*"]
 
@@ -179,7 +179,7 @@ Path alias configuration.
 |-------|------|---------|-------------|
 | `base` | string | (disabled) | Base directory for `@` path alias, relative to project root |
 
-When set to `"."`, `@/agents/foo.jgagent` resolves to `<project_root>/agents/foo.jgagent`.
+When set to `"."`, `@/prompts/foo.jgx` resolves to `<project_root>/prompts/foo.jgx`.
 
 ---
 

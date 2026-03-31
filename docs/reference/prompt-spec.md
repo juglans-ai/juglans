@@ -1,10 +1,10 @@
-# .jgprompt Syntax Reference
+# .jgx Syntax Reference
 
-Complete syntax specification for Juglans `.jgprompt` prompt template files.
+Complete syntax specification for Juglans `.jgx` prompt template files.
 
 ## File Format
 
-A `.jgprompt` file has two parts:
+A `.jgx` file has two parts:
 
 1. **Frontmatter** -- YAML-like metadata enclosed by `---` delimiters
 2. **Template body** -- Jinja-style template text with interpolation and control flow
@@ -38,7 +38,7 @@ The frontmatter section is enclosed by two `---` lines. It defines metadata and 
 
 ### Minimal Frontmatter
 
-```jgprompt
+```jgx
 ---
 slug: "hello"
 ---
@@ -47,7 +47,7 @@ Hello, world!
 
 ### Full Frontmatter
 
-```jgprompt
+```jgx
 ---
 slug: "analysis"
 name: "Data Analysis Prompt"
@@ -66,7 +66,7 @@ Analyze {{ topic }} using {{ format }} format.
 
 The `inputs` field defines parameters and their default values. Supported types:
 
-```jgprompt
+```jgx
 ---
 slug: "typed-inputs"
 inputs:
@@ -82,7 +82,7 @@ Hello {{ name }}, count={{ count }}.
 
 **Object syntax for inputs:**
 
-```jgprompt
+```jgx
 ---
 slug: "obj-inputs"
 inputs: {name: "Alice", score: 100}
@@ -98,7 +98,7 @@ Player: {{ name }}, Score: {{ score }}.
 
 Use `{{ expression }}` to insert values:
 
-```jgprompt
+```jgx
 ---
 slug: "interpolation-demo"
 inputs:
@@ -110,7 +110,7 @@ Hello, {{ name }}! You are a {{ role }}.
 
 Nested object access:
 
-```jgprompt
+```jgx
 ---
 slug: "nested-access"
 inputs:
@@ -123,7 +123,7 @@ User: {{ user.name }}, Level: {{ user.level }}.
 
 Interpolation supports expressions, not just variable names:
 
-```jgprompt
+```jgx
 ---
 slug: "expr-demo"
 inputs:
@@ -139,7 +139,7 @@ Total: {{ price * quantity }}.
 
 ### if / endif
 
-```jgprompt
+```jgx
 ---
 slug: "if-demo"
 inputs:
@@ -153,7 +153,7 @@ Regular content here.
 
 ### if / else / endif
 
-```jgprompt
+```jgx
 ---
 slug: "if-else-demo"
 inputs:
@@ -168,7 +168,7 @@ Please log in.
 
 ### if / elif / else / endif
 
-```jgprompt
+```jgx
 ---
 slug: "elif-demo"
 inputs:
@@ -204,7 +204,7 @@ Grade: F
 | `\|\|` | Logical OR |
 | `!` | Logical NOT |
 
-```jgprompt
+```jgx
 ---
 slug: "logical-demo"
 inputs:
@@ -222,7 +222,7 @@ Full access granted.
 
 ### for / endfor
 
-```jgprompt
+```jgx
 ---
 slug: "for-demo"
 inputs:
@@ -238,7 +238,7 @@ Shopping list:
 
 The `else` block renders when the collection is empty:
 
-```jgprompt
+```jgx
 ---
 slug: "for-else-demo"
 inputs:
@@ -254,7 +254,7 @@ No results found.
 
 ### Iterating Over Objects
 
-```jgprompt
+```jgx
 ---
 slug: "for-objects"
 inputs:
@@ -268,7 +268,7 @@ Team:
 
 ### Nested Loops
 
-```jgprompt
+```jgx
 ---
 slug: "nested-loops"
 inputs:
@@ -351,7 +351,7 @@ Apply transformations using the `|` pipe operator inside `{{ }}`:
 
 ### Filter Examples
 
-```jgprompt
+```jgx
 ---
 slug: "filter-demo"
 inputs:
@@ -369,7 +369,7 @@ Default: {{ missing | default("N/A") }}
 
 Chained filters:
 
-```jgprompt
+```jgx
 ---
 slug: "chain-filter"
 inputs:
@@ -412,7 +412,7 @@ Functions can be called inside `{{ }}` expressions:
 
 ### Greeting Prompt
 
-```jgprompt
+```jgx
 ---
 slug: "greeting"
 name: "Greeting Prompt"
@@ -431,7 +431,7 @@ Please respond in {{ language }}.
 
 ### Data Analysis Prompt
 
-```jgprompt
+```jgx
 ---
 slug: "data-analysis"
 name: "Data Analysis Prompt"
@@ -453,7 +453,7 @@ Provide:
 
 ### Few-Shot Prompt
 
-```jgprompt
+```jgx
 ---
 slug: "few-shot"
 name: "Few-Shot Classification"
@@ -476,7 +476,7 @@ Output:
 
 ### Code Generation Prompt
 
-```jgprompt
+```jgx
 ---
 slug: "codegen"
 name: "Code Generator"
@@ -510,7 +510,7 @@ Import prompt files with the `prompts:` metadata, then call with `p()`.
 ### Basic Rendering
 
 ```juglans
-prompts: ["./prompts/*.jgprompt"]
+prompts: ["./prompts/*.jgx"]
 
 [render]: p(slug="greeting", name="Alice")
 ```
@@ -518,7 +518,7 @@ prompts: ["./prompts/*.jgprompt"]
 ### Passing Variables
 
 ```juglans
-prompts: ["./prompts/*.jgprompt"]
+prompts: ["./prompts/*.jgx"]
 
 [render]: p(
   slug="data-analysis",
@@ -530,13 +530,14 @@ prompts: ["./prompts/*.jgprompt"]
 ### Combined with chat()
 
 ```juglans
-prompts: ["./prompts/*.jgprompt"]
-agents: ["./agents/*.jgagent"]
+prompts: ["./prompts/*.jgx"]
+
+[analyst]: { "model": "gpt-4o", "system_prompt": "You are a data analyst." }
 
 [render]: p(slug="data-analysis", data=input.data, focus=input.focus)
-[respond]: chat(agent="analyst", message=output)
+[respond]: chat(agent=analyst, message=output)
 
-[render] -> [respond]
+[analyst] -> [render] -> [respond]
 ```
 
 ### Inline p() in chat()
@@ -544,13 +545,15 @@ agents: ["./agents/*.jgagent"]
 The `p()` call can be used directly as a parameter value:
 
 ```juglans
-prompts: ["./prompts/*.jgprompt"]
-agents: ["./agents/*.jgagent"]
+prompts: ["./prompts/*.jgx"]
+
+[assistant]: { "model": "gpt-4o", "system_prompt": "You are a helpful assistant." }
 
 [ask]: chat(
-  agent="assistant",
+  agent=assistant,
   message=p(slug="greeting", name=input.user)
 )
+[assistant] -> [ask]
 ```
 
 ---
@@ -559,11 +562,11 @@ agents: ["./agents/*.jgagent"]
 
 ```bash
 # Render with default values
-juglans prompt.jgprompt
+juglans prompt.jgx
 
 # Render with custom input
-juglans prompt.jgprompt --input '{"name": "Alice", "score": 95}'
+juglans prompt.jgx --input '{"name": "Alice", "score": 95}'
 
 # Validate syntax
-juglans check prompt.jgprompt
+juglans check prompt.jgx
 ```

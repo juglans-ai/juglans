@@ -35,7 +35,6 @@ use crate::core::parser::GraphParser;
 use crate::core::prompt_parser::PromptParser;
 use crate::core::resolver;
 use crate::core::validator::WorkflowValidator;
-use crate::services::agent_loader::AgentRegistry;
 use crate::services::config::JuglansConfig;
 use crate::services::interface::JuglansRuntime;
 use crate::services::jug0::Jug0Client;
@@ -66,7 +65,7 @@ fn watch_workspace(project_root: PathBuf) {
 
     info!("👀 Watching {:?} for file changes...", project_root);
 
-    let extensions = ["jg", "jgflow", "jgprompt", "jgagent"];
+    let extensions = ["jg", "jgflow", "jgx", "jgprompt"];
 
     for event in rx.into_iter().flatten() {
         if !matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) {
@@ -83,28 +82,9 @@ fn watch_workspace(project_root: PathBuf) {
     }
 }
 
-fn log_file_change(path: &Path, rel: &Path, ext: &str) {
-    use crate::core::agent_parser::AgentParser;
-
+fn log_file_change(_path: &Path, rel: &Path, ext: &str) {
     match ext {
-        "jgagent" => {
-            if let Ok(content) = fs::read_to_string(path) {
-                match AgentParser::parse(&content) {
-                    Ok(agent) => info!(
-                        "🔄 [Hot-reload] {} — agent: {}, model: {}, temp: {}",
-                        rel.display(),
-                        agent.slug,
-                        agent.model,
-                        agent
-                            .temperature
-                            .map(|t| t.to_string())
-                            .unwrap_or("-".into())
-                    ),
-                    Err(e) => warn!("🔄 [Hot-reload] {} — parse error: {}", rel.display(), e),
-                }
-            }
-        }
-        "jgprompt" => {
+        "jgx" | "jgprompt" => {
             info!("🔄 [Hot-reload] {} — prompt updated", rel.display());
         }
         "jg" => {
@@ -118,23 +98,6 @@ fn log_file_change(path: &Path, rel: &Path, ext: &str) {
 }
 
 // --- API Models (Jug0 compatible) ---
-
-#[derive(Serialize)]
-pub struct AgentApiModel {
-    pub id: Uuid,
-    pub slug: String,
-    pub user_id: String,
-    pub name: String,
-    pub description: Option<String>,
-    // Simplified: no system_prompt_id locally, fill with empty or generated value
-    pub system_prompt_id: Option<Uuid>,
-    pub default_model: String,
-    pub temperature: Option<f64>,
-    pub skills: Option<Vec<String>>,
-    // Extra field: Juglans-specific
-    pub source: Option<String>,
-    pub created_at: String,
-}
 
 #[derive(Serialize)]
 pub struct PromptApiModel {
@@ -166,14 +129,11 @@ struct WebState {
     pub port: u16,
     pub jug0_base_url: String,
     /// Pending client tool calls waiting for frontend results
-    pub pending_tool_calls: Arc<Mutex<HashMap<String, oneshot::Sender<Vec<ToolResultPayload>>>>>,
+    #[allow(clippy::type_complexity)]
+    pub pending_tool_calls:
+        Arc<Mutex<HashMap<String, oneshot::Sender<(Vec<ToolResultPayload>, Option<Vec<Value>>)>>>>,
     /// Discovered serve() workflow for HTTP backend
     pub serve_workflow: Option<ServeWorkflowInfo>,
-}
-
-#[derive(Deserialize)]
-pub struct AgentQuery {
-    pub pattern: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -200,7 +160,7 @@ pub struct WorkflowApiModel {
     pub created_at: String,
 }
 
-/// Chat ID input - can be UUID (existing chat) or @handle (start chat with agent)
+/// Chat ID input - can be UUID (existing chat) or @handle (start chat with workflow)
 #[derive(Deserialize, Clone, Debug)]
 #[serde(untagged)]
 pub enum ChatIdInput {
@@ -212,7 +172,7 @@ pub enum ChatIdInput {
 #[derive(Deserialize, Clone)]
 pub struct ChatRequest {
     // jug0 standard fields
-    /// Chat ID: UUID for existing chat, or @handle to start with agent
+    /// Chat ID: UUID for existing chat, or @handle to start with workflow
     pub chat_id: Option<ChatIdInput>,
     pub messages: Option<Vec<MessagePart>>,
     pub agent: Option<AgentConfigInput>,
@@ -230,8 +190,10 @@ pub struct ChatRequest {
     pub state: Option<String>,
     /// User message ID from jug0 (used in workflow mode to retroactively update user message state)
     pub user_message_id: Option<i32>,
-    /// Whether to push internal tool execution events to the SSE stream (default false)
+    /// Whether to push internal tool execution events to the SSE stream (default false, backward compat)
     pub stream_tool_events: Option<bool>,
+    /// Tool event verbosity: "silent", "info", "verbose"
+    pub tool_event: Option<String>,
     /// Whether to push workflow node execution events to the SSE stream (default false)
     pub stream_node_events: Option<bool>,
 }
@@ -459,26 +421,22 @@ async fn handle_serve_request(
     let runtime: Arc<dyn JuglansRuntime> = Arc::new(Jug0Client::new(&config));
 
     let mut prompt_registry = PromptRegistry::new();
-    let _ = prompt_registry.load_from_paths(&[state
-        .project_root
-        .join("**/*.jgprompt")
-        .to_string_lossy()
-        .to_string()]);
+    let _ = prompt_registry.load_from_paths(&[
+        state
+            .project_root
+            .join("**/*.jgx")
+            .to_string_lossy()
+            .to_string(),
+        state
+            .project_root
+            .join("**/*.jgprompt")
+            .to_string_lossy()
+            .to_string(),
+    ]);
 
-    let mut agent_registry = AgentRegistry::new();
-    let _ = agent_registry.load_from_paths(&[state
-        .project_root
-        .join("**/*.jgagent")
-        .to_string_lossy()
-        .to_string()]);
-
-    let mut executor = WorkflowExecutor::new_with_debug(
-        Arc::new(prompt_registry),
-        Arc::new(agent_registry),
-        runtime,
-        config.debug.clone(),
-    )
-    .await;
+    let mut executor =
+        WorkflowExecutor::new_with_debug(Arc::new(prompt_registry), runtime, config.debug.clone())
+            .await;
 
     // Load tool definitions
     {
@@ -813,12 +771,11 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
 
     // Scan prompts
     let mut prompt_registry = PromptRegistry::new();
-    let prompt_pattern = state
-        .project_root
-        .join("**/*.jgprompt")
-        .to_string_lossy()
-        .to_string();
-    let _ = prompt_registry.load_from_paths(&[prompt_pattern]);
+    let prompt_patterns: Vec<String> = ["**/*.jgx", "**/*.jgprompt"]
+        .iter()
+        .map(|p| state.project_root.join(p).to_string_lossy().to_string())
+        .collect();
+    let _ = prompt_registry.load_from_paths(&prompt_patterns);
 
     let mut prompts_html = String::new();
     for slug in prompt_registry.keys() {
@@ -833,33 +790,6 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
     }
     if prompts_html.is_empty() {
         prompts_html = "    (none)\n".to_string();
-    }
-
-    // Scan agents
-    let mut agent_registry = AgentRegistry::new();
-    let agent_pattern = state
-        .project_root
-        .join("**/*.jgagent")
-        .to_string_lossy()
-        .to_string();
-    let _ = agent_registry.load_from_paths(&[agent_pattern]);
-
-    let mut agents_html = String::new();
-    for key in agent_registry.keys() {
-        if let Some(agent) = agent_registry.get(&key) {
-            let wf_info = agent
-                .source
-                .as_ref()
-                .map(|w| format!(" [source: {}]", w))
-                .unwrap_or_default();
-            agents_html.push_str(&format!(
-                "    {} - {} (model: {}){}\n",
-                agent.slug, agent.name, agent.model, wf_info
-            ));
-        }
-    }
-    if agents_html.is_empty() {
-        agents_html = "    (none)\n".to_string();
     }
 
     // Scan workflows (.jg and .jgflow)
@@ -1026,10 +956,6 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
 <pre>
 {}</pre>
 
-<h2>Agents ({} found)</h2>
-<pre>
-{}</pre>
-
 <h2>Workflows ({})</h2>
 <pre>
 {}</pre>
@@ -1041,7 +967,6 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
 <h2>API Endpoints</h2>
 <pre>
     GET  /               - This dashboard
-    GET  /api/agents     - List agents
     GET  /api/prompts    - List prompts
     GET  /api/workflows  - List workflows (with validation)
     POST /api/chat       - Chat endpoint (jug0 compatible)
@@ -1057,8 +982,6 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
         state.jug0_base_url,
         prompt_registry.keys().len(),
         prompts_html,
-        agent_registry.keys().len(),
-        agents_html,
         workflow_summary,
         workflows_html,
         cron_count,
@@ -1098,7 +1021,6 @@ pub async fn start_web_server(
 
     let mut app = Router::new()
         .route("/", get(dashboard))
-        .route("/api/agents", get(list_local_agents))
         .route("/api/prompts", get(list_local_prompts))
         .route("/api/workflows", get(list_local_workflows))
         .route("/api/chat", post(handle_chat))
@@ -1157,7 +1079,6 @@ pub async fn start_web_server(
     info!("📡 Listening on: http://{}", addr);
     info!("📂 Project Root: {:?}", project_root);
     info!("🔌 Endpoints (Jug0 Compatible):");
-    info!("   - GET  /api/agents");
     info!("   - GET  /api/prompts");
     info!("   - GET  /api/workflows");
     info!("   - POST /api/chat");
@@ -1186,56 +1107,12 @@ pub async fn start_web_server(
     Ok(())
 }
 
-async fn list_local_agents(
-    Extension(state): Extension<Arc<WebState>>,
-    Query(params): Query<AgentQuery>,
-) -> Json<Vec<AgentApiModel>> {
-    let mut registry = AgentRegistry::new();
-    let pattern = params.pattern.unwrap_or_else(|| "**/*.jgagent".to_string());
-    let full_pattern = state
-        .project_root
-        .join(&pattern)
-        .to_string_lossy()
-        .to_string();
-
-    let mut results = Vec::new();
-    match registry.load_from_paths(&[full_pattern]) {
-        Ok(_) => {
-            for key in registry.keys() {
-                if let Some(agent) = registry.get(&key) {
-                    // Convert to compatible model
-                    results.push(AgentApiModel {
-                        id: generate_deterministic_id(&agent.slug),
-                        slug: agent.slug.clone(),
-                        user_id: "local".to_string(),
-                        name: agent.name.clone(),
-                        description: agent.description.clone(),
-                        system_prompt_id: agent
-                            .system_prompt_slug
-                            .as_ref()
-                            .map(|s| generate_deterministic_id(s)),
-                        default_model: agent.model.clone(),
-                        temperature: agent.temperature,
-                        skills: Some(agent.skills.clone()),
-                        source: agent.source.clone(),
-                        created_at: Utc::now().to_rfc3339(),
-                    });
-                }
-            }
-        }
-        Err(e) => warn!("❌ Failed to scan agents: {}", e),
-    }
-    Json(results)
-}
-
 async fn list_local_prompts(
     Extension(state): Extension<Arc<WebState>>,
     Query(params): Query<PromptQuery>,
 ) -> Json<Vec<PromptApiModel>> {
     let mut registry = PromptRegistry::new();
-    let pattern = params
-        .pattern
-        .unwrap_or_else(|| "**/*.jgprompt".to_string());
+    let pattern = params.pattern.unwrap_or_else(|| "**/*.jgx".to_string());
     let full_pattern = state
         .project_root
         .join(&pattern)
@@ -1377,31 +1254,15 @@ async fn handle_chat(
         info!("🔐 [Web] Received X-Execution-Token from jug0, will use for subsequent jug0 calls");
     }
 
-    let mut agent_registry = AgentRegistry::new();
-    let agent_pattern = state
-        .project_root
-        .join("**/*.jgagent")
-        .to_string_lossy()
-        .to_string();
-    agent_registry
-        .load_from_paths(&[agent_pattern])
-        .map_err(|e| Json(json!({"error": e.to_string()})))?;
-
-    // Resolve @handle to agent if chat_id is a handle
-    let handle_agent_slug = match &req.chat_id {
-        Some(ChatIdInput::Handle(h)) => {
-            let handle_name = h.strip_prefix('@').unwrap_or(h);
-            // Find agent by username in the registry
-            agent_registry
-                .get_by_username(handle_name)
-                .map(|a| a.slug.clone())
-        }
+    // Resolve @handle to workflow slug
+    let handle_slug = match &req.chat_id {
+        Some(ChatIdInput::Handle(h)) => Some(h.strip_prefix('@').unwrap_or(h).to_string()),
         _ => None,
     };
 
-    // Extract agent slug (jug0-compatible format)
+    // Extract workflow slug (jug0-compatible format)
     // Priority: @handle > agent.slug > agent.id > default
-    let agent_slug = if let Some(slug) = handle_agent_slug {
+    let workflow_slug = if let Some(slug) = handle_slug {
         slug
     } else if let Some(ref agent_config) = req.agent {
         agent_config
@@ -1468,41 +1329,37 @@ async fn handle_chat(
     // Extract system_prompt override
     let system_prompt_override = req.agent.as_ref().and_then(|a| a.system_prompt.clone());
 
-    let (agent_meta, agent_file_path) =
-        agent_registry.get_with_path(&agent_slug).ok_or_else(|| {
-            Json(json!({"error": format!("Agent '{}' not found in workspace", agent_slug)}))
-        })?;
-
-    let agent_meta = agent_meta.clone();
-    let agent_dir = agent_file_path
-        .parent()
-        .unwrap_or(Path::new("."))
-        .to_path_buf();
-
     let config = JuglansConfig::load().map_err(|e| Json(json!({"error": e.to_string()})))?;
 
-    // Create Jug0Client and inject execution token if present
-    let jug0_client = Jug0Client::new(&config);
-    if let Some(ref token) = execution_token {
-        jug0_client.set_execution_token(Some(token.clone()));
-        debug!("🔐 [Web] Injected execution token into Jug0Client");
-    }
-    let runtime: Arc<dyn JuglansRuntime> = Arc::new(jug0_client);
+    // Select runtime: [ai.providers] → LocalRuntime, otherwise → Jug0Client
+    let runtime: Arc<dyn JuglansRuntime> = if config.ai.has_providers() {
+        Arc::new(crate::services::local_runtime::LocalRuntime::new_with_config(&config.ai))
+    } else {
+        let jug0_client = Jug0Client::new(&config);
+        if let Some(ref token) = execution_token {
+            jug0_client.set_execution_token(Some(token.clone()));
+            debug!("🔐 [Web] Injected execution token into Jug0Client");
+        }
+        Arc::new(jug0_client)
+    };
 
     let mut prompt_registry = PromptRegistry::new();
-    let _ = prompt_registry.load_from_paths(&[state
-        .project_root
-        .join("**/*.jgprompt")
-        .to_string_lossy()
-        .to_string()]);
+    let _ = prompt_registry.load_from_paths(&[
+        state
+            .project_root
+            .join("**/*.jgx")
+            .to_string_lossy()
+            .to_string(),
+        state
+            .project_root
+            .join("**/*.jgprompt")
+            .to_string_lossy()
+            .to_string(),
+    ]);
 
-    let mut executor = WorkflowExecutor::new_with_debug(
-        Arc::new(prompt_registry),
-        Arc::new(agent_registry),
-        runtime,
-        config.debug.clone(),
-    )
-    .await;
+    let mut executor =
+        WorkflowExecutor::new_with_debug(Arc::new(prompt_registry), runtime, config.debug.clone())
+            .await;
 
     // Load tool definitions (search for *.json tool files under project_root)
     {
@@ -1530,9 +1387,16 @@ async fn handle_chat(
     let (tx, rx) = mpsc::unbounded_channel::<WorkflowEvent>();
     let ctx = WorkflowContext::with_sender(tx.clone());
 
-    // Set stream_tool_events flag
-    if req.stream_tool_events.unwrap_or(false) {
-        ctx.set_stream_tool_events(true);
+    // Set tool event level from request
+    if let Some(ref te) = req.tool_event {
+        let level = match te.as_str() {
+            "verbose" => 2u8,
+            "info" => 1,
+            _ => 0,
+        };
+        ctx.set_tool_event_level(level);
+    } else if req.stream_tool_events.unwrap_or(false) {
+        ctx.set_tool_event_level(2); // backward compat
     }
 
     // Set stream_node_events flag
@@ -1588,192 +1452,191 @@ async fn handle_chat(
     let project_root = state.project_root.clone();
 
     tokio::spawn(async move {
-        let result = if let Some(wf_ref) = &agent_meta.source {
-            // Determine if it's a file path or slug
-            let is_file_path = wf_ref.ends_with(".jg")
-                || wf_ref.ends_with(".jgflow")
-                || wf_ref.starts_with("./")
-                || wf_ref.starts_with("../")
-                || Path::new(wf_ref).is_absolute();
+        let wf_ref = &workflow_slug;
+        // Determine if it's a file path or slug
+        let is_file_path = wf_ref.ends_with(".jg")
+            || wf_ref.ends_with(".jgflow")
+            || wf_ref.starts_with("./")
+            || wf_ref.starts_with("../")
+            || Path::new(wf_ref).is_absolute();
 
-            let wf_result: Result<(String, PathBuf), anyhow::Error> = if is_file_path {
-                // File path format: parse using existing logic
-                let full_wf_path = if Path::new(wf_ref).is_absolute() {
-                    PathBuf::from(wf_ref)
-                } else {
-                    agent_dir.join(wf_ref)
-                };
-                debug!("📂 Resolving workflow file: {:?}", full_wf_path);
-                fs::read_to_string(&full_wf_path)
-                    .map(|content| (content, full_wf_path.clone()))
-                    .map_err(|e| {
-                        anyhow::anyhow!("Workflow File Error: {} (tried {:?})", e, full_wf_path)
-                    })
+        let wf_result: Result<(String, PathBuf), anyhow::Error> = if is_file_path {
+            // File path format: parse using existing logic
+            let full_wf_path = if Path::new(wf_ref).is_absolute() {
+                PathBuf::from(wf_ref)
             } else {
-                // Slug format: search **/{slug}.jg under project_root, fall back to **/{slug}.jgflow
-                debug!(
-                    "🔍 Resolving workflow by slug: '{}' in {:?}",
-                    wf_ref, project_root
-                );
-                let pattern_jg = project_root
-                    .join(format!("**/{}.jg", wf_ref))
-                    .to_string_lossy()
-                    .to_string();
-                let pattern_jgflow = project_root
-                    .join(format!("**/{}.jgflow", wf_ref))
-                    .to_string_lossy()
-                    .to_string();
-                let found = glob::glob(&pattern_jg)
-                    .ok()
-                    .and_then(|mut paths| paths.find_map(|p| p.ok()))
-                    .or_else(|| {
-                        glob::glob(&pattern_jgflow)
-                            .ok()
-                            .and_then(|mut paths| paths.find_map(|p| p.ok()))
-                    });
-                match found {
-                    Some(path) => {
-                        info!("📂 Found workflow '{}' at {:?}", wf_ref, path);
-                        fs::read_to_string(&path)
-                            .map(|content| (content, path.clone()))
-                            .map_err(|e| {
-                                anyhow::anyhow!("Workflow File Error: {} (tried {:?})", e, path)
-                            })
-                    }
-                    None => Err(anyhow::anyhow!(
-                        "Workflow '{}' not found in workspace {:?}",
-                        wf_ref,
-                        project_root
-                    )),
-                }
+                project_root.join(wf_ref)
             };
-
-            match wf_result {
-                Ok((content, wf_path)) => {
-                    // .jgflow manifest: follow source: field to load .jg file and merge metadata
-                    // Track source file's directory for correct flow import resolution
-                    let mut source_base_dir: Option<PathBuf> = None;
-                    let parse_result = if wf_path.extension().and_then(|e| e.to_str())
-                        == Some("jgflow")
-                    {
-                        match GraphParser::parse_manifest(&content) {
-                            Ok(manifest) if !manifest.source.is_empty() => {
-                                let source_path = wf_path
-                                    .parent()
-                                    .unwrap_or(Path::new("."))
-                                    .join(&manifest.source);
-                                match fs::read_to_string(&source_path) {
-                                    Ok(source_content) => match GraphParser::parse(&source_content)
-                                    {
-                                        Ok(mut g) => {
-                                            source_base_dir = Some(
-                                                source_path
-                                                    .parent()
-                                                    .unwrap_or(Path::new("."))
-                                                    .to_path_buf(),
-                                            );
-                                            manifest.apply_to(&mut g);
-                                            Ok(g)
-                                        }
-                                        Err(e) => Err(anyhow::anyhow!(
-                                            "Workflow Source Parse Error: {}",
-                                            e
-                                        )),
-                                    },
-                                    Err(e) => Err(anyhow::anyhow!(
-                                        "Workflow Source Read Error: {} (tried {:?})",
-                                        e,
-                                        source_path
-                                    )),
-                                }
-                            }
-                            _ => GraphParser::parse(&content)
-                                .map_err(|e| anyhow::anyhow!("Workflow Parse Error: {}", e)),
-                        }
-                    } else {
-                        GraphParser::parse(&content)
-                            .map_err(|e| anyhow::anyhow!("Workflow Parse Error: {}", e))
-                    };
-
-                    match parse_result {
-                        Ok(mut graph) => {
-                            // Resolve lib imports + flow imports
-                            // .jgflow + source: flow imports are relative to the source .jg file directory
-                            let wf_base_dir = source_base_dir
-                                .as_deref()
-                                .unwrap_or_else(|| wf_path.parent().unwrap_or(Path::new(".")));
-                            let wf_canonical = wf_path.canonicalize().unwrap_or(wf_path.clone());
-                            let at_base: Option<PathBuf> = JuglansConfig::load()
-                                .ok()
-                                .and_then(|c| c.paths.base.map(|b| project_root.join(b)));
-                            let mut import_stack = vec![wf_canonical.clone()];
-                            match resolver::resolve_lib_imports(
-                                &mut graph,
-                                wf_base_dir,
-                                &mut import_stack,
-                                at_base.as_deref(),
-                            ) {
-                                Ok(()) => {
-                                    import_stack = vec![wf_canonical];
-                                    match resolver::resolve_flow_imports(
-                                        &mut graph,
-                                        wf_base_dir,
-                                        &mut import_stack,
-                                        at_base.as_deref(),
-                                    ) {
-                                        Ok(()) => {
-                                            // Pre-flight validation
-                                            let validation = WorkflowValidator::validate(&graph);
-                                            if !validation.is_valid {
-                                                let err_msgs: Vec<String> = validation
-                                                    .errors
-                                                    .iter()
-                                                    .map(|e| format!("[{}] {}", e.code, e.message))
-                                                    .collect();
-                                                Err(anyhow::anyhow!(
-                                                    "Validation failed: {}",
-                                                    err_msgs.join("; ")
-                                                ))
-                                            } else {
-                                                executor.execute_graph(Arc::new(graph), &ctx).await
-                                            }
-                                        }
-                                        Err(e) => Err(anyhow::anyhow!("Flow Import Error: {}", e)),
-                                    }
-                                }
-                                Err(e) => Err(anyhow::anyhow!("Lib Import Error: {}", e)),
-                            }
-                        }
-                        Err(e) => Err(e),
-                    }
-                }
-                Err(e) => Err(e),
-            }
+            debug!("📂 Resolving workflow file: {:?}", full_wf_path);
+            fs::read_to_string(&full_wf_path)
+                .map(|content| (content, full_wf_path.clone()))
+                .map_err(|e| {
+                    anyhow::anyhow!("Workflow File Error: {} (tried {:?})", e, full_wf_path)
+                })
+        } else if wf_ref == "default" {
+            // Default mode: direct chat (no workflow)
+            Err(anyhow::anyhow!("__direct_chat__"))
         } else {
-            // Direct chat mode
-            let mut params = std::collections::HashMap::new();
-            params.insert("agent".to_string(), agent_meta.slug.clone());
-            params.insert("message".to_string(), message_text.clone());
-
-            // Pass state parameter
-            if let Some(ref state_val) = req.state {
-                params.insert("state".to_string(), state_val.clone());
+            // Slug format: search **/{slug}.jg under project_root, fall back to **/{slug}.jgflow
+            debug!(
+                "🔍 Resolving workflow by slug: '{}' in {:?}",
+                wf_ref, project_root
+            );
+            let pattern_jg = project_root
+                .join(format!("**/{}.jg", wf_ref))
+                .to_string_lossy()
+                .to_string();
+            let pattern_jgflow = project_root
+                .join(format!("**/{}.jgflow", wf_ref))
+                .to_string_lossy()
+                .to_string();
+            let found = glob::glob(&pattern_jg)
+                .ok()
+                .and_then(|mut paths| paths.find_map(|p| p.ok()))
+                .or_else(|| {
+                    glob::glob(&pattern_jgflow)
+                        .ok()
+                        .and_then(|mut paths| paths.find_map(|p| p.ok()))
+                });
+            match found {
+                Some(path) => {
+                    info!("📂 Found workflow '{}' at {:?}", wf_ref, path);
+                    fs::read_to_string(&path)
+                        .map(|content| (content, path.clone()))
+                        .map_err(|e| {
+                            anyhow::anyhow!("Workflow File Error: {} (tried {:?})", e, path)
+                        })
+                }
+                None => Err(anyhow::anyhow!(
+                    "Workflow '{}' not found in workspace {:?}",
+                    wf_ref,
+                    project_root
+                )),
             }
+        };
 
-            // Pass custom tools
-            if let Some(tools_str) = tools_json {
-                params.insert("tools".to_string(), tools_str);
+        let result = match wf_result {
+            Ok((content, wf_path)) => {
+                // .jgflow manifest: follow source: field to load .jg file and merge metadata
+                // Track source file's directory for correct flow import resolution
+                let mut source_base_dir: Option<PathBuf> = None;
+                let parse_result = if wf_path.extension().and_then(|e| e.to_str()) == Some("jgflow")
+                {
+                    match GraphParser::parse_manifest(&content) {
+                        Ok(manifest) if !manifest.source.is_empty() => {
+                            let source_path = wf_path
+                                .parent()
+                                .unwrap_or(Path::new("."))
+                                .join(&manifest.source);
+                            match fs::read_to_string(&source_path) {
+                                Ok(source_content) => match GraphParser::parse(&source_content) {
+                                    Ok(mut g) => {
+                                        source_base_dir = Some(
+                                            source_path
+                                                .parent()
+                                                .unwrap_or(Path::new("."))
+                                                .to_path_buf(),
+                                        );
+                                        manifest.apply_to(&mut g);
+                                        Ok(g)
+                                    }
+                                    Err(e) => {
+                                        Err(anyhow::anyhow!("Workflow Source Parse Error: {}", e))
+                                    }
+                                },
+                                Err(e) => Err(anyhow::anyhow!(
+                                    "Workflow Source Read Error: {} (tried {:?})",
+                                    e,
+                                    source_path
+                                )),
+                            }
+                        }
+                        _ => GraphParser::parse(&content)
+                            .map_err(|e| anyhow::anyhow!("Workflow Parse Error: {}", e)),
+                    }
+                } else {
+                    GraphParser::parse(&content)
+                        .map_err(|e| anyhow::anyhow!("Workflow Parse Error: {}", e))
+                };
+
+                match parse_result {
+                    Ok(mut graph) => {
+                        // Resolve lib imports + flow imports
+                        // .jgflow + source: flow imports are relative to the source .jg file directory
+                        let wf_base_dir = source_base_dir
+                            .as_deref()
+                            .unwrap_or_else(|| wf_path.parent().unwrap_or(Path::new(".")));
+                        let wf_canonical = wf_path.canonicalize().unwrap_or(wf_path.clone());
+                        let at_base: Option<PathBuf> = JuglansConfig::load()
+                            .ok()
+                            .and_then(|c| c.paths.base.map(|b| project_root.join(b)));
+                        let mut import_stack = vec![wf_canonical.clone()];
+                        match resolver::resolve_lib_imports(
+                            &mut graph,
+                            wf_base_dir,
+                            &mut import_stack,
+                            at_base.as_deref(),
+                        ) {
+                            Ok(()) => {
+                                import_stack = vec![wf_canonical];
+                                match resolver::resolve_flow_imports(
+                                    &mut graph,
+                                    wf_base_dir,
+                                    &mut import_stack,
+                                    at_base.as_deref(),
+                                ) {
+                                    Ok(()) => {
+                                        // Pre-flight validation
+                                        let validation = WorkflowValidator::validate(&graph);
+                                        if !validation.is_valid {
+                                            let err_msgs: Vec<String> = validation
+                                                .errors
+                                                .iter()
+                                                .map(|e| format!("[{}] {}", e.code, e.message))
+                                                .collect();
+                                            Err(anyhow::anyhow!(
+                                                "Validation failed: {}",
+                                                err_msgs.join("; ")
+                                            ))
+                                        } else {
+                                            executor.execute_graph(Arc::new(graph), &ctx).await
+                                        }
+                                    }
+                                    Err(e) => Err(anyhow::anyhow!("Flow Import Error: {}", e)),
+                                }
+                            }
+                            Err(e) => Err(anyhow::anyhow!("Lib Import Error: {}", e)),
+                        }
+                    }
+                    Err(e) => Err(e),
+                }
             }
+            Err(e) if e.to_string() == "__direct_chat__" => {
+                // Direct chat mode (default workflow slug with no .jg file)
+                let mut params = std::collections::HashMap::new();
+                params.insert("message".to_string(), message_text.clone());
 
-            // Pass system_prompt override
-            if let Some(sp) = sys_prompt {
-                params.insert("system_prompt".to_string(), sp);
+                // Pass state parameter
+                if let Some(ref state_val) = req.state {
+                    params.insert("state".to_string(), state_val.clone());
+                }
+
+                // Pass custom tools
+                if let Some(tools_str) = tools_json {
+                    params.insert("tools".to_string(), tools_str);
+                }
+
+                // Pass system_prompt override
+                if let Some(sp) = sys_prompt {
+                    params.insert("system_prompt".to_string(), sp);
+                }
+
+                executor
+                    .execute_tool_internal("chat", &params, &ctx)
+                    .await
+                    .map(|_| ())
             }
-
-            executor
-                .execute_tool_internal("chat", &params, &ctx)
-                .await
-                .map(|_| ())
+            Err(e) => Err(e),
         };
 
         if let Err(e) = result {
@@ -1872,6 +1735,7 @@ async fn handle_chat(
 struct ToolResultRequest {
     call_id: String,
     results: Vec<ToolResultPayload>,
+    tools: Option<Vec<Value>>,
 }
 
 async fn handle_tool_result(
@@ -1895,7 +1759,7 @@ async fn handle_tool_result(
                 payload.results.len(),
                 payload.call_id
             );
-            let _ = tx.send(payload.results);
+            let _ = tx.send((payload.results, payload.tools));
             Json(json!({ "ok": true }))
         }
         None => {

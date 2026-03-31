@@ -51,12 +51,23 @@ endfor_tag = ${ "{%" ~ inner_ws* ~ "endfor" ~ inner_ws* ~ "%}" ~ nl? }
 interpolation = { "{{" ~ inner_ws* ~ expression ~ inner_ws* ~ "}}" }
 
 body = ${ node* }
-node = _{ for_block | if_block | interpolation | raw_text }
+node = _{ for_block | if_block | tag_block | tag_self_close | interpolation | raw_text }
 inner_ws = _{ " " | "\t" | "\r" | "\n" }
 expression = @{ (!"}}" ~ !"%}" ~ ANY)+ }
 raw_text = @{ (!"{{" ~ !"{%" ~ ANY)+ }
 elif_branch = { elif_tag ~ body }
 if_block = { if_tag ~ body ~ elif_branch* ~ (else_tag ~ body)? ~ endif_tag }
 for_block = { for_tag ~ body ~ (else_tag ~ body)? ~ endfor_tag }
+
+// --- Custom Tags (Markdoc-style) ---
+reserved_keyword = @{ ("if" | "elif" | "else" | "endif" | "for" | "endfor") ~ !ASCII_ALPHANUMERIC }
+tag_attr_value = { string | tag_attr_expr }
+tag_attr_expr = @{ (!inner_ws ~ !"%}" ~ !"/%}" ~ ANY)+ }
+tag_attr = ${ inner_ws+ ~ identifier ~ inner_ws* ~ "=" ~ inner_ws* ~ tag_attr_value }
+tag_attrs = ${ tag_attr* }
+tag_open = ${ "{%" ~ inner_ws+ ~ !reserved_keyword ~ identifier ~ tag_attrs ~ inner_ws* ~ "%}" ~ nl? }
+tag_close = ${ "{%" ~ inner_ws* ~ "/" ~ inner_ws* ~ identifier ~ inner_ws* ~ "%}" ~ nl? }
+tag_self_close = ${ "{%" ~ inner_ws+ ~ !reserved_keyword ~ identifier ~ tag_attrs ~ inner_ws* ~ "/%}" ~ nl? }
+tag_block = { tag_open ~ body ~ tag_close }
 
 prompt_file = { SOI ~ frontmatter ~ body ~ EOI }

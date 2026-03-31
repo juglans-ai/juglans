@@ -1,5 +1,4 @@
 // src/core/mod.rs
-pub mod agent_parser;
 pub mod context;
 pub mod expr_ast;
 pub mod expr_eval;

@@ -320,6 +320,12 @@ impl<'a> JwlParser<'a> {
                 TokenKind::Ident(_) => {
                     self.parse_metadata(&mut wf)?;
                 }
+                TokenKind::Impl => {
+                    self.parse_impl_block(&mut wf)?;
+                }
+                TokenKind::Trait => {
+                    self.parse_trait_def(&mut wf)?;
+                }
                 _ => {
                     let tok = self.peek().clone();
                     return Err(self.error_at(
@@ -414,14 +420,18 @@ impl<'a> JwlParser<'a> {
                 }
             }
             "prompts" => wf.prompt_patterns = self.parse_meta_string_list()?,
-            "agents" => wf.agent_patterns = self.parse_meta_string_list()?,
             "tools" => wf.tool_patterns = self.parse_meta_string_list()?,
             "python" => wf.python_imports = self.parse_meta_string_list()?,
+            "agents" => {
+                // Removed: agents are now defined inline as map nodes.
+                // Silently skip for compatibility with existing files.
+                let _ = self.parse_meta_string_list()?;
+            }
             _ => {
                 return Err(self.error_at(
                     self.tokens[self.pos.saturating_sub(2)].span,
                     format!(
-                        "Unknown metadata key '{}'. Valid keys: libs, flows, prompts, agents, tools, python. \
+                        "Unknown metadata key '{}'. Valid keys: libs, flows, prompts, tools, python. \
                          Note: name/version/entry/exit/description belong in .jgflow manifest, not .jg files.",
                         key
                     ),
@@ -1508,6 +1518,131 @@ impl<'a> JwlParser<'a> {
         let func_def = self.parse_function_body_into_def(&full_name, params)?;
         wf.pending_methods
             .push((type_name.to_string(), method_name, func_def));
+        Ok(())
+    }
+
+    // ==================== impl block ====================
+    // impl Type { [method(self)]: body; ... }
+    // impl Trait for Type { [method(self)]: body; ... }
+
+    fn parse_impl_block(&mut self, wf: &mut WorkflowGraph) -> Result<()> {
+        self.expect(&TokenKind::Impl)?;
+        let first_name = self.expect_ident()?;
+        self.skip_newlines();
+
+        // Check for `impl Trait for Type` form
+        let type_name = if matches!(self.peek_kind(), TokenKind::For) {
+            self.advance(); // consume 'for'
+            self.skip_newlines();
+            let target = self.expect_ident()?;
+
+            // Copy default methods from the trait into the target class
+            if let Some(trait_class) = wf.classes.get(&first_name) {
+                let trait_class = trait_class.clone();
+                for (method_name, func_def) in &trait_class.methods {
+                    wf.pending_methods.push((
+                        target.clone(),
+                        method_name.clone(),
+                        func_def.clone(),
+                    ));
+                }
+            }
+
+            target
+        } else {
+            first_name
+        };
+
+        self.skip_newlines();
+        self.expect(&TokenKind::LBrace)?;
+        self.skip_newlines();
+
+        while !matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
+            self.skip_newlines();
+            if matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
+                break;
+            }
+            // Expect [method(params)]: body
+            self.expect(&TokenKind::LBracket)?;
+            let method_name = self.expect_ident_or_keyword()?;
+            let mut params = if matches!(self.peek_kind(), TokenKind::LParen) {
+                self.parse_func_params()?
+            } else {
+                Vec::new()
+            };
+            self.expect(&TokenKind::RBracket)?;
+            self.expect(&TokenKind::Colon)?;
+            self.skip_newlines();
+
+            // Filter out `self` from params
+            if params.first().map(|s| s.as_str()) == Some("self") {
+                params.remove(0);
+            }
+
+            let full_name = format!("{}.{}", type_name, method_name);
+            let func_def = self.parse_function_body_into_def(&full_name, params)?;
+            wf.pending_methods
+                .push((type_name.clone(), method_name, func_def));
+            self.skip_newlines();
+        }
+        self.expect(&TokenKind::RBrace)?;
+        Ok(())
+    }
+
+    // ==================== trait definition ====================
+    // trait Name { [method(self)]: default_body; [required(self)]: }
+
+    fn parse_trait_def(&mut self, wf: &mut WorkflowGraph) -> Result<()> {
+        self.expect(&TokenKind::Trait)?;
+        let trait_name = self.expect_ident()?;
+        self.skip_newlines();
+        self.expect(&TokenKind::LBrace)?;
+        self.skip_newlines();
+
+        let mut methods: HashMap<String, FunctionDef> = HashMap::new();
+
+        while !matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
+            self.skip_newlines();
+            if matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
+                break;
+            }
+            // [method(self)]: body_or_empty
+            self.expect(&TokenKind::LBracket)?;
+            let method_name = self.expect_ident_or_keyword()?;
+            let mut params = if matches!(self.peek_kind(), TokenKind::LParen) {
+                self.parse_func_params()?
+            } else {
+                Vec::new()
+            };
+            self.expect(&TokenKind::RBracket)?;
+            self.expect(&TokenKind::Colon)?;
+
+            // Filter out `self` from params
+            if params.first().map(|s| s.as_str()) == Some("self") {
+                params.remove(0);
+            }
+
+            // Check if this is a required method (no body) or has a default body
+            self.skip_newlines();
+            if matches!(
+                self.peek_kind(),
+                TokenKind::LBracket | TokenKind::RBrace | TokenKind::Eof
+            ) {
+                // Required method stub — no body, skip
+                // We don't store it; the trait ClassDef only holds default methods
+            } else {
+                // Has a default body
+                let full_name = format!("{}.{}", trait_name, method_name);
+                let func_def = self.parse_function_body_into_def(&full_name, params)?;
+                methods.insert(method_name, func_def);
+            }
+            self.skip_newlines();
+        }
+        self.expect(&TokenKind::RBrace)?;
+
+        // Store trait as a ClassDef with no fields but with default methods
+        wf.classes
+            .insert(trait_name, Arc::new(ClassDef::new(Vec::new(), methods)));
         Ok(())
     }
 

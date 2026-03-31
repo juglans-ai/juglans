@@ -2,20 +2,20 @@
 
 A quick reference to Juglans core concepts. This page provides a concise overview; see the dedicated guides for detailed usage.
 
-## Three File Types
+## Two File Types
 
 | Type | Extension | Parser | Purpose |
 |------|-----------|--------|---------|
-| Workflow | `.jg` | GraphParser | Define DAG execution flows, connecting nodes, edges, and conditional branches |
-| Agent | `.jgagent` | AgentParser | Configure AI model parameters (model, system prompt, tools) |
-| Prompt | `.jgprompt` | PromptParser | Jinja-style reusable prompt templates |
+| Workflow | `.jg` | GraphParser | Define DAG execution flows, nodes, edges, conditional branches, and inline agent definitions |
+| Prompt | `.jgx` | PromptParser | Jinja-style reusable prompt templates |
+
+Agents are defined as **inline JSON map nodes** within `.jg` files -- no separate file type needed.
 
 **Decision tree:**
 
 ```
-Need multi-step orchestration?       → .jg (Workflow)
-Need to configure AI model behavior? → .jgagent (Agent)
-Need reusable/templated prompts?     → .jgprompt (Prompt)
+Need orchestration or AI agents?     → .jg (Workflow)
+Need reusable/templated prompts?     → .jgx (Prompt)
 ```
 
 Minimal Workflow example:
@@ -74,10 +74,12 @@ Variables are accessed by path within node parameters:
 When a node invokes a tool, the engine searches in the following order:
 
 ```
-1. Builtin    — chat, p, notify, print, fetch, bash...
-2. Function   — [name(params)]: { ... } defined in the current workflow
-3. Python     — Direct Python module calls (pandas.read_csv(), etc.)
-4. Client Bridge — Unmatched tools forwarded to the frontend via SSE
+1. Builtin         — chat, p, notify, print, fetch, bash...
+2. Function        — [name(params)]: { ... } defined in the current workflow
+3. Associated Fn   — Type.function() calls on struct definitions
+4. Instance Method — instance.method() calls on struct instances
+5. Python          — Direct Python module calls (pandas.read_csv(), etc.)
+6. Client Bridge   — Unmatched tools forwarded to the frontend via SSE
 ```
 
 MCP tools are handled at the DSL level via `std/mcps.jg` (see [How to Use MCP Tools](./use-mcp.md)).
@@ -109,12 +111,17 @@ Calling builtin tools in a Workflow:
 - **Jug0** is the backend platform: provides the LLM API, cloud resource storage, and user management
 - During local development you can work offline with local files; for production deployment, resources are managed through Jug0
 
-Resource referencing: use a slug for local resources (e.g., `"my-agent"`), and `owner/slug` for remote resources (e.g., `"juglans/assistant"`):
+Resource referencing: define agents inline, or use `owner/slug` for remote resources:
 
 ```juglans
-[local]: chat(agent="my-agent", message=input.query)
+[my_agent]: {
+  "model": "gpt-4o",
+  "system_prompt": "You are a helpful assistant."
+}
+
+[local]: chat(agent=my_agent, message=input.query)
 [remote]: chat(agent="juglans/cloud-agent", message=output)
-[local] -> [remote]
+[my_agent] -> [local] -> [remote]
 ```
 
 ## Project Structure
@@ -123,28 +130,31 @@ The recommended layout for a Juglans project:
 
 ```
 src/
-├── main.jg                    # Main workflow (agent entry point)
-├── agents/
-│   └── assistant.jgagent      # Workflow-bound agent (source: "../main.jg")
-├── pure-agents/
-│   └── helper.jgagent         # Pure agent (model + system_prompt)
+├── main.jg                    # Main workflow with inline agent definitions
+├── agents.jg                  # Shared agent library (imported via libs:)
 ├── prompts/
-│   └── system.jgprompt        # Prompt templates
+│   └── system.jgx        # Prompt templates
 └── tools/
     └── toolbox.json           # Tool definitions
 ```
 
-**Two types of agents:**
+Agents are defined as inline JSON map nodes in `.jg` files. For reuse across workflows, define agents in a library file and import with `libs:`:
 
-- **Workflow-bound** (`agents/`) — uses `source:` to bind to a `.jg` file. No model or system prompt in the agent. The workflow controls all behavior.
-- **Pure** (`pure-agents/`) — defines model, temperature, system_prompt directly. Used inside workflows via `chat(agent="slug")`.
+```juglans
+# agents.jg — shared agent library
+[assistant]: { "model": "gpt-4o", "system_prompt": "You are helpful." }
 
-**Prompt-driven pattern:** System prompts live in `.jgprompt` files, rendered at runtime with `p(slug="...", param=value)` inside `chat()` calls. This keeps prompts separate, reusable, and version-controlled.
+# main.jg
+libs: ["./agents.jg"]
+[ask]: chat(agent=agents.assistant, message=input.query)
+```
+
+**Prompt-driven pattern:** System prompts can live in `.jgx` files, rendered at runtime with `p(slug="...", param=value)` inside `chat()` calls. This keeps prompts separate, reusable, and version-controlled.
 
 ## Next Steps
 
 - [Workflow Syntax](./workflow-syntax.md) -- Full syntax reference
-- [Agent Syntax](./agent-syntax.md) -- Agent configuration
+- [Agent Syntax](../reference/agent-spec.md) -- Inline agent configuration
 - [Prompt Syntax](./prompt-syntax.md) -- Template syntax
 - [Connect AI](./connect-ai.md) -- Connecting to AI models
 - [Debugging](./debugging.md) -- Debugging and troubleshooting

@@ -1,18 +1,18 @@
 # Tutorial 7: Prompt Templates
 
-This chapter covers how to manage prompt templates using `.jgprompt` files, and how to render them in workflows using the `p()` tool — making prompts reusable, parameterizable, and maintainable.
+This chapter covers how to manage prompt templates using `.jgx` files, and how to render them in workflows using the `p()` tool — making prompts reusable, parameterizable, and maintainable.
 
 ## 7.1 Why Prompt Templates
 
 Consider a workflow with a hardcoded prompt:
 
 ```juglans
-agents: ["./agents/*.jgagent"]
+[assistant]: { "model": "gpt-4o", "system_prompt": "You are a helpful assistant." }
 
-[ask]: chat(agent="assistant", message="You are a senior code reviewer. Please review the following code and provide feedback on: 1) correctness 2) performance 3) readability. Code: " + input.code)
+[ask]: chat(agent=assistant, message="You are a senior code reviewer. Please review the following code and provide feedback on: 1) correctness 2) performance 3) readability. Code: " + input.code)
 [show]: print(message=output)
 
-[ask] -> [show]
+[assistant] -> [ask] -> [show]
 ```
 
 This works, but has three problems:
@@ -21,13 +21,13 @@ This works, but has three problems:
 2. **Hard to maintain** — Modifying the prompt requires opening the `.jg` file and finding the right place within a long string.
 3. **Cannot be tested** — You cannot independently verify the prompt's rendering result.
 
-The solution: extract the prompt into a `.jgprompt` file and render it with the `p()` tool.
+The solution: extract the prompt into a `.jgx` file and render it with the `p()` tool.
 
-## 7.2 .jgprompt File Structure
+## 7.2 .jgx File Structure
 
-Create `prompts/greeting.jgprompt`:
+Create `prompts/greeting.jgx`:
 
-```jgprompt
+```jgx
 ---
 slug: "greeting"
 name: "Greeting Prompt"
@@ -64,8 +64,8 @@ The template body, supporting Jinja-style template syntax: `{{ }}` for interpola
 my-project/
 ├── app.jg
 └── prompts/
-    ├── greeting.jgprompt
-    └── review.jgprompt
+    ├── greeting.jgx
+    └── review.jgx
 ```
 
 ## 7.3 Using p() in Workflows
@@ -73,7 +73,7 @@ my-project/
 Use the `p()` tool to render templates, and `prompts:` metadata to load files:
 
 ```juglans
-prompts: ["./prompts/*.jgprompt"]
+prompts: ["./prompts/*.jgx"]
 
 [render]: p(slug="greeting", name="Alice", style="casual")
 [show]: print(message=output)
@@ -83,7 +83,7 @@ prompts: ["./prompts/*.jgprompt"]
 
 Line-by-line explanation:
 
-1. `prompts: ["./prompts/*.jgprompt"]` — Loads all `.jgprompt` files from the `prompts/` directory into the PromptRegistry.
+1. `prompts: ["./prompts/*.jgx"]` — Loads all `.jgx` files from the `prompts/` directory into the PromptRegistry.
 2. `p(slug="greeting", name="Alice", style="casual")` — Renders the template with slug `"greeting"`, passing `name="Alice"` and `style="casual"`.
 3. `output` — Stores the rendered plain text result.
 
@@ -91,7 +91,7 @@ Line-by-line explanation:
 
 | Parameter | Purpose |
 |------|------|
-| `slug` | Required. Corresponds to the `slug` field in the `.jgprompt` file |
+| `slug` | Required. Corresponds to the `slug` field in the `.jgx` file |
 | Other key=value pairs | Correspond to template variables, overriding `inputs` default values |
 
 The example above outputs:
@@ -108,9 +108,9 @@ Because `style="casual"` triggers the `{% if style == "casual" %}` branch.
 
 Values defined in `inputs` are defaults. When calling `p()`, provided parameters override the defaults; omitted parameters use the defaults.
 
-Create `prompts/welcome.jgprompt`:
+Create `prompts/welcome.jgx`:
 
-```jgprompt
+```jgx
 ---
 slug: "welcome"
 name: "Welcome Message"
@@ -127,7 +127,7 @@ Language: {{ lang }}
 In a workflow, override only some variables:
 
 ```juglans
-prompts: ["./prompts/*.jgprompt"]
+prompts: ["./prompts/*.jgx"]
 
 [full]: p(slug="welcome", name="Alice", role="admin", lang="Chinese")
 [show1]: print(message=output)
@@ -145,7 +145,7 @@ prompts: ["./prompts/*.jgprompt"]
 Variable values can come from workflow input:
 
 ```juglans
-prompts: ["./prompts/*.jgprompt"]
+prompts: ["./prompts/*.jgx"]
 
 [render]: p(slug="welcome", name=input.name, role=input.role)
 [show]: print(message=output)
@@ -163,9 +163,9 @@ juglans app.jg --input '{"name": "Alice", "role": "admin"}'
 
 Use `{% if %}` / `{% elif %}` / `{% else %}` / `{% endif %}` to control rendered content.
 
-Create `prompts/tone.jgprompt`:
+Create `prompts/tone.jgx`:
 
-```jgprompt
+```jgx
 ---
 slug: "tone"
 name: "Tone-Aware Prompt"
@@ -187,7 +187,7 @@ Use clear, accessible language. Balance depth with readability.
 Use in a workflow:
 
 ```juglans
-prompts: ["./prompts/*.jgprompt"]
+prompts: ["./prompts/*.jgx"]
 
 [expert]: p(slug="tone", topic="Transformer architecture", audience="expert")
 [show]: print(message=output)
@@ -207,7 +207,7 @@ Use technical terminology. Assume deep domain knowledge. Focus on nuances and ed
 
 Conditions can be nested:
 
-```jgprompt
+```jgx
 ---
 slug: "format"
 name: "Format Selector"
@@ -229,9 +229,9 @@ Use Chinese.
 
 Use `{% for item in list %}` / `{% endfor %}` to iterate over arrays.
 
-Create `prompts/checklist.jgprompt`:
+Create `prompts/checklist.jgx`:
 
-```jgprompt
+```jgx
 ---
 slug: "checklist"
 name: "Review Checklist"
@@ -270,7 +270,7 @@ Inside `{% for %}` blocks, the `loop` object provides iteration metadata:
 | `loop.first` | bool | Whether this is the first element |
 | `loop.last` | bool | Whether this is the last element |
 
-```jgprompt
+```jgx
 ---
 slug: "numbered"
 name: "Numbered List"
@@ -294,7 +294,7 @@ Rendered result:
 
 Use functions within `{{ }}` interpolation to transform values. Juglans templates use function call syntax (rather than Jinja's pipe syntax):
 
-```jgprompt
+```jgx
 ---
 slug: "filters"
 name: "Filter Demo"
@@ -333,14 +333,15 @@ Score: 95 points
 `p()` renders the template + `chat()` sends it to the AI — this is the most classic pattern in Juglans:
 
 ```juglans
-prompts: ["./prompts/*.jgprompt"]
-agents: ["./agents/*.jgagent"]
+prompts: ["./prompts/*.jgx"]
+
+[assistant]: { "model": "gpt-4o", "system_prompt": "You are a helpful assistant." }
 
 [render]: p(slug="tone", topic=input.topic, audience=input.audience)
-[ask]: chat(agent="assistant", message=output)
+[ask]: chat(agent=assistant, message=output)
 [show]: print(message=output)
 
-[render] -> [ask] -> [show]
+[assistant] -> [render] -> [ask] -> [show]
 ```
 
 Execution flow:
@@ -354,13 +355,14 @@ Execution flow:
 `p()` can also be used directly as the value of `chat()`'s `message` parameter:
 
 ```juglans
-prompts: ["./prompts/*.jgprompt"]
-agents: ["./agents/*.jgagent"]
+prompts: ["./prompts/*.jgx"]
 
-[ask]: chat(agent="assistant", message=p(slug="tone", topic=input.topic, audience="expert"))
+[assistant]: { "model": "gpt-4o", "system_prompt": "You are a helpful assistant." }
+
+[ask]: chat(agent=assistant, message=p(slug="tone", topic=input.topic, audience="expert"))
 [show]: print(message=output)
 
-[ask] -> [show]
+[assistant] -> [ask] -> [show]
 ```
 
 This passes the rendered result of `p()` directly to `chat()`, eliminating an intermediate node.
@@ -370,16 +372,17 @@ This passes the rendered result of `p()` directly to `chat()`, eliminating an in
 In complex scenarios, you can combine prompts from multiple templates:
 
 ```juglans
-prompts: ["./prompts/*.jgprompt"]
-agents: ["./agents/*.jgagent"]
+prompts: ["./prompts/*.jgx"]
 
-[system]: p(slug="tone", topic=input.topic, audience="expert")
-[save_sys]: system_prompt = output
+[assistant]: { "model": "gpt-4o", "system_prompt": "You are a helpful assistant." }
+
+[sys]: p(slug="tone", topic=input.topic, audience="expert")
+[save_sys]: sys_prompt = output
 [user_msg]: p(slug="checklist")
-[ask]: chat(agent="assistant", message=system_prompt + "\n\n" + output)
+[ask]: chat(agent=assistant, message=sys_prompt + "\n\n" + output)
 [show]: print(message=output)
 
-[system] -> [save_sys] -> [user_msg] -> [ask] -> [show]
+[assistant] -> [sys] -> [save_sys] -> [user_msg] -> [ask] -> [show]
 ```
 
 `[system]` renders the role-setting template, `[user_msg]` renders the checklist template, and the two are concatenated before being sent to the AI.
@@ -388,8 +391,8 @@ agents: ["./agents/*.jgagent"]
 
 | Concept | Syntax | Purpose |
 |------|------|------|
-| Prompt file | `.jgprompt` | Reusable template file with frontmatter + body |
-| Loading templates | `prompts: ["./prompts/*.jgprompt"]` | Import template files into a workflow |
+| Prompt file | `.jgx` | Reusable template file with frontmatter + body |
+| Loading templates | `prompts: ["./prompts/*.jgx"]` | Import template files into a workflow |
 | Rendering templates | `p(slug="name", key=value)` | Render a specified template with parameters |
 | Variable interpolation | `{{ variable }}` | Output variable values |
 | Conditional rendering | `{% if %}` / `{% elif %}` / `{% else %}` / `{% endif %}` | Select content based on conditions |

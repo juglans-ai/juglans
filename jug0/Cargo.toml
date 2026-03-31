@@ -1,0 +1,84 @@
+[workspace]
+members = [".", "db"]
+
+[package]
+name = "jug0"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = ["storage-postgres"]
+server = [
+    "dep:sea-orm",
+    "dep:redis",
+    "dep:qdrant-client",
+    "dep:axum-extra",
+    "dep:jsonwebtoken",
+    "dep:bcrypt",
+    "dep:tower-http",
+    "dep:cron",
+    "dep:scopeguard",
+    "dep:tokio-util",
+    "dep:dotenvy",
+    "dep:tracing-subscriber",
+    "dep:rand",
+    "dep:sha2",
+    "dep:hex",
+    "dep:hmac",
+    "dep:headers",
+    "dep:log",
+]
+storage-postgres = ["sea-orm?/sqlx-postgres"]
+storage-mysql = ["sea-orm?/sqlx-mysql"]
+storage-sqlite = ["sea-orm?/sqlx-sqlite"]
+
+[lib]
+name = "jug0"
+path = "src/lib.rs"
+
+[[bin]]
+name = "jug0"
+path = "src/main.rs"
+
+[dependencies]
+# --- Always required (providers layer) ---
+tokio = { version = "1.0", features = ["full"] }
+axum = { version = "0.7", features = ["multipart"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+async-openai = "0.23"
+uuid = { version = "1.0", features = ["v4", "serde"] }
+futures = "0.3"
+async-stream = "0.3"
+tracing = "0.1"
+anyhow = "1.0"
+tokio-stream = "0.1"
+thiserror = "1.0"
+async-trait = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+eventsource-stream = "0.2"
+regex = "1.10"
+lazy_static = "1.4"
+chrono = { version = "0.4", features = ["serde"] }
+dashmap = "6.0"
+base64 = "0.22"
+
+# --- Server-only dependencies ---
+sea-orm = { version = "1.0", features = ["runtime-tokio-native-tls", "macros"], optional = true }
+dotenvy = { version = "0.15", optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+tokio-util = { version = "0.7", optional = true }
+scopeguard = { version = "1.2", optional = true }
+jsonwebtoken = { version = "9.2", optional = true }
+axum-extra = { version = "0.9", features = ["typed-header"], optional = true }
+headers = { version = "0.4", optional = true }
+bcrypt = { version = "0.15", optional = true }
+rand = { version = "0.8", optional = true }
+sha2 = { version = "0.10", optional = true }
+hex = { version = "0.4", optional = true }
+hmac = { version = "0.12", optional = true }
+qdrant-client = { version = "1.10", optional = true }
+tower-http = { version = "0.5", features = ["cors", "fs"], optional = true }
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"], optional = true }
+cron = { version = "0.15", optional = true }
+log = { version = "0.4", optional = true }

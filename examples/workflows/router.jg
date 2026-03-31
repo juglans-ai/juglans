@@ -1,28 +1,40 @@
-prompts: ["../prompts/*.jgprompt"]
-agents: ["../agents/*.jgagent"]
+prompts: ["../prompts/*.jgx"]
+
+# Inline agent definitions
+[assistant]: {
+  "model": "gpt-4o",
+  "system_prompt": "You are a helpful assistant.",
+  "temperature": 0.7
+}
+
+[analyst]: {
+  "model": "gpt-4o",
+  "system_prompt": "You are a data analyst. Provide clear, data-driven insights.",
+  "temperature": 0.3
+}
 
 # 分类查询意图
 [classify]: chat(
-  agent="helpful-assistant",
+  agent=assistant,
   message="Classify this query into one of: technical, data_analysis, general. Query: " + input.query,
   format="json"
 )
 
 # 技术查询处理
 [technical]: chat(
-  agent="helpful-assistant",
+  agent=assistant,
   message="[Technical Expert] " + input.query
 )
 
 # 数据分析处理
 [data_analysis]: chat(
-  agent="data-analyst",
+  agent=analyst,
   message=input.query
 )
 
 # 通用查询处理
 [general]: chat(
-  agent="helpful-assistant",
+  agent=assistant,
   message=input.query
 )
 
@@ -30,6 +42,7 @@ agents: ["../agents/*.jgagent"]
 [done]: notify(status="Query processed: " + output)
 
 # 路由逻辑
+[assistant] -> [analyst] -> [classify]
 [classify] if output.category == "technical" -> [technical]
 [classify] if output.category == "data_analysis" -> [data_analysis]
 [classify] -> [general]

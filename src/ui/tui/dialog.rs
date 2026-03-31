@@ -40,11 +40,6 @@ pub enum Dialog {
         scroll_offset: usize,
         filter: String,
     },
-    AgentPicker {
-        agents: Vec<(String, PathBuf)>,
-        selected: usize,
-        scroll_offset: usize,
-    },
 }
 
 impl Dialog {
@@ -160,39 +155,6 @@ impl Dialog {
                     _ => (false, None),
                 }
             }
-            Dialog::AgentPicker {
-                agents,
-                selected,
-                scroll_offset,
-            } => match key.code {
-                KeyCode::Up => {
-                    if *selected > 0 {
-                        *selected -= 1;
-                    }
-                    if *selected < *scroll_offset {
-                        *scroll_offset = *selected;
-                    }
-                    (false, None)
-                }
-                KeyCode::Down => {
-                    if *selected < agents.len().saturating_sub(1) {
-                        *selected += 1;
-                    }
-                    if *selected >= *scroll_offset + 14 {
-                        *scroll_offset = selected.saturating_sub(13);
-                    }
-                    (false, None)
-                }
-                KeyCode::Enter => {
-                    if let Some((_, path)) = agents.get(*selected) {
-                        (true, Some(path.to_string_lossy().to_string()))
-                    } else {
-                        (false, None)
-                    }
-                }
-                KeyCode::Esc => (true, None),
-                _ => (false, None),
-            },
             Dialog::FilePicker {
                 current_dir,
                 entries,
@@ -305,10 +267,6 @@ impl<'a> Widget for DialogWidget<'a> {
                 let h = (count as u16 + 6).clamp(10, 22);
                 (62, h)
             }
-            Dialog::AgentPicker { ref agents, .. } => {
-                let h = (agents.len() as u16 + 4).clamp(6, 20);
-                (54, h)
-            }
         };
 
         let dialog_area = centered_rect(width, height, area);
@@ -350,11 +308,6 @@ impl<'a> Widget for DialogWidget<'a> {
                 *scroll_offset,
                 filter,
             ),
-            Dialog::AgentPicker {
-                ref agents,
-                selected,
-                scroll_offset,
-            } => self.render_agent_picker(dialog_area, buf, agents, *selected, *scroll_offset),
         }
     }
 }
@@ -813,119 +766,6 @@ impl<'a> DialogWidget<'a> {
             buf,
         );
     }
-
-    fn render_agent_picker(
-        &self,
-        area: Rect,
-        buf: &mut Buffer,
-        agents: &[(String, PathBuf)],
-        selected: usize,
-        scroll_offset: usize,
-    ) {
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(self.theme.accent))
-            .title(Span::styled(
-                " Select Agent ",
-                Style::default()
-                    .fg(self.theme.accent)
-                    .add_modifier(Modifier::BOLD),
-            ));
-
-        let inner = block.inner(area);
-        block.render(area, buf);
-
-        if inner.height < 3 || inner.width < 10 {
-            return;
-        }
-
-        let list_height = inner.height.saturating_sub(2) as usize;
-
-        for (i, (name, path)) in agents
-            .iter()
-            .skip(scroll_offset)
-            .take(list_height)
-            .enumerate()
-        {
-            let idx = scroll_offset + i;
-            let is_sel = idx == selected;
-            let prefix = if is_sel { " ▸ " } else { "   " };
-            let style = if is_sel {
-                Style::default()
-                    .fg(self.theme.accent)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(self.theme.fg)
-            };
-
-            let fname = path
-                .file_name()
-                .map(|f| f.to_string_lossy().to_string())
-                .unwrap_or_default();
-            let display = if name.is_empty() || name == &fname {
-                fname
-            } else {
-                format!("{} ({})", name, fname)
-            };
-
-            let line = Line::from(Span::styled(format!("{}{}", prefix, display), style));
-            Paragraph::new(line).render(
-                Rect {
-                    x: inner.x,
-                    y: inner.y + i as u16,
-                    width: inner.width,
-                    height: 1,
-                },
-                buf,
-            );
-        }
-
-        // Footer
-        let hints_y = inner.y + inner.height.saturating_sub(1);
-        let hints_line = Line::from(Span::styled(
-            " ↑↓ navigate │ Enter select │ Esc cancel",
-            Style::default().fg(self.theme.muted),
-        ));
-        Paragraph::new(hints_line).render(
-            Rect {
-                x: inner.x,
-                y: hints_y,
-                width: inner.width,
-                height: 1,
-            },
-            buf,
-        );
-    }
-}
-
-/// Scan a directory for .jgagent files and return (name, path) pairs
-pub fn scan_agents(dir: &std::path::Path) -> Vec<(String, PathBuf)> {
-    let mut results = Vec::new();
-    let pattern = dir.join("**/*.jgagent");
-    let pat_str = pattern.to_string_lossy();
-    if let Ok(paths) = glob::glob(&pat_str) {
-        for entry in paths.flatten() {
-            let name = std::fs::read_to_string(&entry)
-                .ok()
-                .and_then(|content| {
-                    // Extract name field from .jgagent
-                    for line in content.lines() {
-                        let trimmed = line.trim();
-                        if let Some(rest) = trimmed.strip_prefix("name:") {
-                            let val = rest.trim().trim_matches('"');
-                            if !val.is_empty() {
-                                return Some(val.to_string());
-                            }
-                        }
-                    }
-                    None
-                })
-                .unwrap_or_default();
-            results.push((name, entry));
-        }
-    }
-    results.sort_by(|a, b| a.1.cmp(&b.1));
-    results
 }
 
 fn filtered_entries<'a>(entries: &'a [FileEntry], filter: &str) -> Vec<&'a FileEntry> {

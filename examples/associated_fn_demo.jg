@@ -1,0 +1,22 @@
+# Associated function (static method) demo
+
+[Config]: {
+  host: str = "localhost"
+  port: int = 8080
+}
+
+impl Config {
+  [info(self)]: output = self.host + ":" + str(self.port)
+
+  # Associated function (no self) — returns a descriptive string
+  [defaults()]: output = "Config defaults: localhost:8080"
+}
+
+# Call associated function via Type.function() syntax
+[info]: Config.defaults()
+
+# Also test regular instance method
+[cfg]: new Config(host="0.0.0.0", port=3000)
+[desc]: cfg.info()
+
+[cfg] -> [desc]

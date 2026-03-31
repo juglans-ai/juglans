@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jug0 Admin</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'SF Mono', 'Menlo', 'Monaco', monospace; background: #0d1117; color: #c9d1d9; font-size: 14px; }
+.container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+h1 { color: #58a6ff; font-size: 20px; margin-bottom: 16px; }
+h2 { color: #8b949e; font-size: 14px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
+
+/* Auth */
+.auth-bar { display: flex; gap: 8px; margin-bottom: 20px; align-items: center; }
+.auth-bar input { flex: 1; max-width: 400px; padding: 8px 12px; background: #161b22; border: 1px solid #30363d; border-radius: 6px; color: #c9d1d9; font-family: inherit; font-size: 13px; }
+.auth-bar input::placeholder { color: #484f58; }
+.btn { padding: 8px 16px; background: #21262d; border: 1px solid #30363d; border-radius: 6px; color: #c9d1d9; cursor: pointer; font-family: inherit; font-size: 13px; }
+.btn:hover { background: #30363d; }
+.btn-primary { background: #238636; border-color: #238636; color: #fff; }
+.btn-primary:hover { background: #2ea043; }
+
+/* Tabs */
+.tabs { display: flex; gap: 0; border-bottom: 1px solid #21262d; margin-bottom: 20px; }
+.tab { padding: 10px 20px; cursor: pointer; color: #8b949e; border-bottom: 2px solid transparent; }
+.tab:hover { color: #c9d1d9; }
+.tab.active { color: #58a6ff; border-bottom-color: #58a6ff; }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+/* Stats cards */
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 24px; }
+.stat-card { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 16px; }
+.stat-value { font-size: 24px; font-weight: 700; color: #58a6ff; }
+.stat-label { font-size: 12px; color: #8b949e; margin-top: 4px; }
+
+/* Table */
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; padding: 8px 12px; border-bottom: 1px solid #21262d; color: #8b949e; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+td { padding: 8px 12px; border-bottom: 1px solid #161b22; font-size: 13px; }
+tr:hover td { background: #161b22; }
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+.muted { color: #484f58; }
+.tag { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; background: #21262d; color: #8b949e; }
+.tag-incognito { background: #30363d; color: #f0883e; }
+
+/* Loading & Error */
+.loading { color: #8b949e; padding: 40px; text-align: center; }
+.error { color: #f85149; padding: 12px; background: #1c1012; border: 1px solid #f8514933; border-radius: 6px; margin-bottom: 16px; }
+.hidden { display: none; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>jug0 Admin Dashboard</h1>
+
+  <div class="auth-bar">
+    <input type="password" id="apiKey" placeholder="Enter Admin API Key..." />
+    <button class="btn btn-primary" onclick="connect()">Connect</button>
+    <span id="authStatus" class="muted"></span>
+  </div>
+  <div id="errorBox" class="error hidden"></div>
+
+  <div id="main" class="hidden">
+    <div class="tabs">
+      <div class="tab active" onclick="switchTab('usage')">Usage</div>
+      <div class="tab" onclick="switchTab('users')">Users</div>
+      <div class="tab" onclick="switchTab('chats')">Chats</div>
+    </div>
+
+    <!-- Usage Tab -->
+    <div id="tab-usage" class="tab-content active">
+      <div id="usage-stats" class="stats"></div>
+      <h2>By Model</h2>
+      <table id="usage-model-table"><thead><tr>
+        <th>Model</th><th class="num">Input</th><th class="num">Output</th><th class="num">Total</th><th class="num">Messages</th>
+      </tr></thead><tbody></tbody></table>
+      <h2 style="margin-top:24px">By User</h2>
+      <table id="usage-user-table"><thead><tr>
+        <th>User</th><th class="num">Input</th><th class="num">Output</th><th class="num">Total</th><th class="num">Messages</th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+
+    <!-- Users Tab -->
+    <div id="tab-users" class="tab-content">
+      <table id="users-table"><thead><tr>
+        <th>Name</th><th>User ID</th><th class="num">Input</th><th class="num">Output</th><th class="num">Total</th><th class="num">Messages</th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+
+    <!-- Chats Tab -->
+    <div id="tab-chats" class="tab-content">
+      <table id="chats-table"><thead><tr>
+        <th>Title</th><th>User</th><th>Agent</th><th>Model</th><th class="num">Msgs</th><th>Updated</th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const $$ = s => document.querySelectorAll(s);
+let API_KEY = localStorage.getItem('jug0_admin_key') || '';
+
+if (API_KEY) {
+  $('#apiKey').value = API_KEY;
+  connect();
+}
+
+function showError(msg) {
+  $('#errorBox').textContent = msg;
+  $('#errorBox').classList.remove('hidden');
+}
+function clearError() { $('#errorBox').classList.add('hidden'); }
+
+async function apiFetch(path) {
+  const res = await fetch(path, { headers: { 'X-Admin-Key': API_KEY } });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+function fmt(n) { return n != null ? n.toLocaleString() : '-'; }
+function fmtDate(s) {
+  if (!s) return '-';
+  const d = new Date(s);
+  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+}
+function truncate(s, n) { return s && s.length > n ? s.slice(0, n) + '...' : (s || '-'); }
+
+async function connect() {
+  API_KEY = $('#apiKey').value.trim();
+  if (!API_KEY) return;
+  localStorage.setItem('jug0_admin_key', API_KEY);
+  clearError();
+  $('#authStatus').textContent = 'Connecting...';
+  try {
+    await loadUsage();
+    await loadUsers();
+    await loadChats();
+    $('#main').classList.remove('hidden');
+    $('#authStatus').textContent = 'Connected';
+  } catch (e) {
+    showError(e.message);
+    $('#authStatus').textContent = 'Failed';
+  }
+}
+
+async function loadUsage() {
+  const data = await apiFetch('/api/admin/usage');
+  $('#usage-stats').innerHTML = `
+    <div class="stat-card"><div class="stat-value">${fmt(data.total_tokens)}</div><div class="stat-label">Total Tokens</div></div>
+    <div class="stat-card"><div class="stat-value">${fmt(data.total_input_tokens)}</div><div class="stat-label">Input Tokens</div></div>
+    <div class="stat-card"><div class="stat-value">${fmt(data.total_output_tokens)}</div><div class="stat-label">Output Tokens</div></div>
+    <div class="stat-card"><div class="stat-value">${data.period_start} ~ ${data.period_end}</div><div class="stat-label">Period</div></div>
+  `;
+  renderTable('#usage-model-table tbody', data.by_model, m => `
+    <td>${m.model}</td><td class="num">${fmt(m.input_tokens)}</td><td class="num">${fmt(m.output_tokens)}</td>
+    <td class="num">${fmt(m.total_tokens)}</td><td class="num">${fmt(m.message_count)}</td>
+  `);
+  renderTable('#usage-user-table tbody', data.by_user, u => `
+    <td>${u.name || u.user_id}</td><td class="num">${fmt(u.total_input_tokens)}</td><td class="num">${fmt(u.total_output_tokens)}</td>
+    <td class="num">${fmt(u.total_tokens)}</td><td class="num">${fmt(u.message_count)}</td>
+  `);
+}
+
+async function loadUsers() {
+  const data = await apiFetch('/api/admin/users');
+  renderTable('#users-table tbody', data, u => `
+    <td>${u.name || '-'}</td><td class="muted">${u.user_id.slice(0,8)}...</td>
+    <td class="num">${fmt(u.total_input_tokens)}</td><td class="num">${fmt(u.total_output_tokens)}</td>
+    <td class="num">${fmt(u.total_tokens)}</td><td class="num">${fmt(u.message_count)}</td>
+  `);
+}
+
+async function loadChats() {
+  const data = await apiFetch('/api/admin/chats?limit=200');
+  renderTable('#chats-table tbody', data, c => `
+    <td>${truncate(c.title, 40)} ${c.incognito ? '<span class="tag tag-incognito">incognito</span>' : ''}</td>
+    <td>${c.user_name || '<span class="muted">-</span>'}</td>
+    <td>${c.agent_name || '<span class="muted">-</span>'}</td>
+    <td>${c.model || '<span class="muted">-</span>'}</td>
+    <td class="num">${c.message_count}</td>
+    <td class="muted">${fmtDate(c.updated_at)}</td>
+  `);
+}
+
+function renderTable(sel, data, rowFn) {
+  $(sel).innerHTML = data.map(d => `<tr>${rowFn(d)}</tr>`).join('');
+}
+
+function switchTab(name) {
+  $$('.tab').forEach(t => t.classList.remove('active'));
+  $$('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelector(`.tab-content#tab-${name}`).classList.add('active');
+  // find tab button by text
+  $$('.tab').forEach(t => { if (t.textContent.toLowerCase() === name) t.classList.add('active'); });
+}
+</script>
+</body>
+</html>

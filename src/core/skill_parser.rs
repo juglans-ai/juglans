@@ -1,7 +1,7 @@
 // src/core/skill_parser.rs
 //
 // Parser for Agent Skills spec (SKILL.md files).
-// Converts SKILL.md → .jgprompt format for use in the juglans ecosystem.
+// Converts SKILL.md → .jgx format for use in the juglans ecosystem.
 
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
@@ -190,8 +190,8 @@ pub fn load_skill_dir(dir: &Path) -> Result<SkillResource> {
     Ok(skill)
 }
 
-/// Convert a SkillResource to .jgprompt file content.
-pub fn skill_to_jgprompt(skill: &SkillResource) -> String {
+/// Convert a SkillResource to .jgx file content.
+pub fn skill_to_jgx(skill: &SkillResource) -> String {
     let mut out = String::new();
 
     // Frontmatter
@@ -261,7 +261,7 @@ Instructions here.
     }
 
     #[test]
-    fn test_skill_to_jgprompt() {
+    fn test_skill_to_jgx() {
         let skill = SkillResource {
             name: "pdf".to_string(),
             description: "Extract PDF content.".to_string(),
@@ -270,7 +270,7 @@ Instructions here.
             scripts: vec![("extract.py".to_string(), "print('hello')".to_string())],
         };
 
-        let output = skill_to_jgprompt(&skill);
+        let output = skill_to_jgx(&skill);
         assert!(output.contains("slug: \"pdf\""));
         assert!(output.contains("type: \"system\""));
         assert!(output.contains("# Instructions"));

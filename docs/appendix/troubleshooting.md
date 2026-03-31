@@ -104,16 +104,20 @@ curl http://localhost:3001/mcp/filesystem
 
 **Error:** `Agent 'my-agent' not found in registry`
 
-**Cause:** The agent slug doesn't match any loaded `.jgagent` file or remote resource.
+**Cause:** The agent node is not defined in the workflow or not imported via `libs:`.
 
 **Solution:**
 
-```bash
-# Check available agents
-juglans list -t agent
+Ensure the agent is defined as an inline JSON map node in the same `.jg` file, or imported from a library:
 
-# Ensure the agents import path is correct in the .jg file:
-# agents: ["./agents/*.jgagent"]
+```juglans
+# Define inline
+[my_agent]: { "model": "gpt-4o", "system_prompt": "..." }
+[ask]: chat(agent=my_agent, message=input.query)
+
+# Or import from library
+libs: ["./agents.jg"]
+[ask]: chat(agent=agents.my_agent, message=input.query)
 ```
 
 ---
@@ -157,7 +161,7 @@ juglans check workflow.jg
 **Solution:**
 
 ```bash
-juglans push src/prompts/my-prompt.jgprompt --force
+juglans push src/prompts/my-prompt.jgx --force
 ```
 
 ---

@@ -1,5 +1,10 @@
-prompts: ["../prompts/*.jgprompt"]
-agents: ["../agents/*.jgagent"]
+prompts: ["../prompts/*.jgx"]
+
+[analyst]: {
+  "model": "gpt-4o",
+  "system_prompt": "You are a data analyst. Provide clear, data-driven insights.",
+  "temperature": 0.3
+}
 
 # 初始化上下文
 [init]: results = [], processed = 0
@@ -17,7 +22,7 @@ agents: ["../agents/*.jgagent"]
 
   # 调用分析 Agent
   [analyze]: chat(
-    agent="data-analyst",
+    agent=analyst,
     message=output
   )
 
@@ -37,11 +42,11 @@ agents: ["../agents/*.jgagent"]
 
 # 生成摘要
 [summary]: chat(
-  agent="data-analyst",
+  agent=analyst,
   message="Summarize these analysis results: " + json(results)
 )
 
 [done]: notify(status="Completed! Total processed: " + processed)
 
 # 执行流程
-[init] -> [start_notify] -> [process_loop] -> [summary] -> [done]
+[analyst] -> [init] -> [start_notify] -> [process_loop] -> [summary] -> [done]

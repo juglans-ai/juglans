@@ -3,6 +3,7 @@ use super::Tool;
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use lazy_static::lazy_static;
+use parking_lot::Mutex;
 use regex::Regex;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -12,7 +13,6 @@ use tracing::{debug, error, info, warn};
 use crate::core::context::WorkflowContext;
 use crate::core::graph::WorkflowGraph;
 use crate::core::prompt_parser::PromptParser;
-use crate::services::agent_loader::AgentRegistry;
 use crate::services::interface::{ChatRequest, ChatToolHandler, JuglansRuntime};
 use crate::services::jug0::ChatOutput;
 use crate::services::prompt_loader::PromptRegistry;
@@ -22,21 +22,15 @@ lazy_static! {
 }
 
 pub struct Chat {
-    agent_registry: Arc<AgentRegistry>,
-    prompt_registry: Arc<PromptRegistry>,
+    _prompt_registry: Arc<PromptRegistry>,
     runtime: Arc<dyn JuglansRuntime>,
     builtin_registry: Option<Weak<super::BuiltinRegistry>>,
 }
 
 impl Chat {
-    pub fn new(
-        agent_registry: Arc<AgentRegistry>,
-        prompt_registry: Arc<PromptRegistry>,
-        runtime: Arc<dyn JuglansRuntime>,
-    ) -> Self {
+    pub fn new(prompt_registry: Arc<PromptRegistry>, runtime: Arc<dyn JuglansRuntime>) -> Self {
         Self {
-            agent_registry,
-            prompt_registry,
+            _prompt_registry: prompt_registry,
             runtime,
             builtin_registry: None,
         }
@@ -193,6 +187,7 @@ struct WorkflowToolHandler {
     builtin_registry: Option<Weak<super::BuiltinRegistry>>,
     context: WorkflowContext,
     stream_tool_events: bool,
+    pending_tools: Arc<Mutex<Option<Vec<Value>>>>,
 }
 
 #[async_trait]
@@ -200,9 +195,8 @@ impl ChatToolHandler for WorkflowToolHandler {
     async fn handle_tool_call(&self, tool_name: &str, arguments_json: &str) -> Result<String> {
         // Emit tool_start event
         if self.stream_tool_events {
-            let params: HashMap<String, String> =
-                serde_json::from_str(arguments_json).unwrap_or_default();
-            self.context.emit_tool_start("chat", tool_name, &params);
+            self.context
+                .emit_tool_start("chat", tool_name, arguments_json);
         }
 
         let result = self.dispatch_tool_call(tool_name, arguments_json).await;
@@ -221,6 +215,10 @@ impl ChatToolHandler for WorkflowToolHandler {
         }
 
         result
+    }
+
+    fn take_pending_tools(&self) -> Option<Vec<Value>> {
+        self.pending_tools.lock().take()
     }
 }
 
@@ -268,10 +266,20 @@ impl WorkflowToolHandler {
             "name": tool_name,
             "arguments": arguments_json
         });
-        let results = self
+        let (results, tools) = self
             .context
             .emit_tool_call_and_wait(uuid::Uuid::new_v4().to_string(), vec![call], 120)
             .await?;
+        // Store dynamic tools from frontend for jug0.rs to pick up
+        if let Some(ref t) = tools {
+            if !t.is_empty() {
+                info!(
+                    "  🔧 [Client Tool Bridge] Received {} dynamic tool definitions",
+                    t.len()
+                );
+                *self.pending_tools.lock() = tools;
+            }
+        }
         Ok(results
             .first()
             .map(|r| r.content.clone())
@@ -294,9 +302,8 @@ impl ChatToolHandler for OnToolCallHandler {
     async fn handle_tool_call(&self, tool_name: &str, arguments_json: &str) -> Result<String> {
         // Emit tool_start event
         if self.stream_tool_events {
-            let params: HashMap<String, String> =
-                serde_json::from_str(arguments_json).unwrap_or_default();
-            self.context.emit_tool_start("chat", tool_name, &params);
+            self.context
+                .emit_tool_start("chat", tool_name, arguments_json);
         }
 
         let result = self.dispatch_tool_call(tool_name, arguments_json).await;
@@ -388,6 +395,7 @@ struct OnToolNodeHandler {
     node_name: String,
     workflow: Arc<WorkflowGraph>,
     stream_tool_events: bool,
+    pending_tools: Arc<Mutex<Option<Vec<Value>>>>,
 }
 
 #[async_trait]
@@ -395,9 +403,8 @@ impl ChatToolHandler for OnToolNodeHandler {
     async fn handle_tool_call(&self, tool_name: &str, arguments_json: &str) -> Result<String> {
         // Emit tool_start event
         if self.stream_tool_events {
-            let params: HashMap<String, String> =
-                serde_json::from_str(arguments_json).unwrap_or_default();
-            self.context.emit_tool_start("chat", tool_name, &params);
+            self.context
+                .emit_tool_start("chat", tool_name, arguments_json);
         }
 
         let result = self.dispatch_tool_call(tool_name, arguments_json).await;
@@ -416,6 +423,10 @@ impl ChatToolHandler for OnToolNodeHandler {
         }
 
         result
+    }
+
+    fn take_pending_tools(&self) -> Option<Vec<Value>> {
+        self.pending_tools.lock().take()
     }
 }
 
@@ -467,30 +478,180 @@ impl OnToolNodeHandler {
             .ok_or_else(|| anyhow!("Executor not available for on_tool handler"))?;
 
         // Check if target is a function node
-        if self.workflow.functions.contains_key(&self.node_name) {
+        let result = if self.workflow.functions.contains_key(&self.node_name) {
             let mut args = HashMap::new();
             args.insert("name".to_string(), json!(tool_name));
             args.insert("arguments".to_string(), args_value);
-            let result = executor
+            executor
                 .execute_function(
                     self.node_name.clone(),
                     args,
                     self.workflow.clone(),
                     &self.context,
                 )
-                .await?;
-            return Ok(match result {
-                Some(Value::String(s)) => s,
-                Some(v) => v.to_string(),
-                None => "OK".to_string(),
+                .await?
+        } else {
+            // Target is a regular node
+            executor
+                .clone()
+                .run_single_node_by_name(&self.node_name, &self.workflow, &self.context)
+                .await?
+        };
+
+        // Check if the handler wants to bridge to frontend
+        let bridge = match &result {
+            Some(Value::Object(map)) => map
+                .get("__bridge__")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            _ => false,
+        };
+        if bridge {
+            info!(
+                "  🌉 [On Tool Node] {} returned __bridge__, forwarding to frontend",
+                tool_name
+            );
+            let call = json!({
+                "id": uuid::Uuid::new_v4().to_string(),
+                "name": tool_name,
+                "arguments": arguments_json
             });
+            let (results, tools) = self
+                .context
+                .emit_tool_call_and_wait(uuid::Uuid::new_v4().to_string(), vec![call], 120)
+                .await?;
+            if let Some(ref t) = tools {
+                if !t.is_empty() {
+                    info!(
+                        "  🔧 [On Tool Node] Received {} dynamic tool definitions",
+                        t.len()
+                    );
+                    *self.pending_tools.lock() = tools;
+                }
+            }
+            return Ok(results
+                .first()
+                .map(|r| r.content.clone())
+                .unwrap_or_default());
         }
 
-        // Target is a regular node
-        let result = executor
-            .clone()
-            .run_single_node_by_name(&self.node_name, &self.workflow, &self.context)
-            .await?;
+        Ok(match result {
+            Some(Value::String(s)) => s,
+            Some(v) => v.to_string(),
+            None => "OK".to_string(),
+        })
+    }
+}
+
+/// Tool call handler that dispatches by tool name to different nodes.
+/// Used when tools parameter uses declarative map format with per-tool handler bindings.
+struct MapToolHandler {
+    builtin_registry: Option<Weak<super::BuiltinRegistry>>,
+    context: WorkflowContext,
+    handler_map: HashMap<String, String>, // tool_name → node_name
+    workflow: Arc<WorkflowGraph>,
+    stream_tool_events: bool,
+}
+
+#[async_trait]
+impl ChatToolHandler for MapToolHandler {
+    async fn handle_tool_call(&self, tool_name: &str, arguments_json: &str) -> Result<String> {
+        if self.stream_tool_events {
+            self.context
+                .emit_tool_start("chat", tool_name, arguments_json);
+        }
+
+        let result = self.dispatch_tool_call(tool_name, arguments_json).await;
+
+        if self.stream_tool_events {
+            match &result {
+                Ok(s) => self
+                    .context
+                    .emit_tool_complete("chat", tool_name, &Ok(Some(json!(s)))),
+                Err(e) => {
+                    self.context
+                        .emit_tool_complete("chat", tool_name, &Err(anyhow!("{}", e)))
+                }
+            }
+        }
+
+        result
+    }
+}
+
+impl MapToolHandler {
+    async fn dispatch_tool_call(&self, tool_name: &str, arguments_json: &str) -> Result<String> {
+        // 1. Try builtin tool first
+        if let Some(weak) = &self.builtin_registry {
+            if let Some(registry) = weak.upgrade() {
+                if let Some(tool) = registry.get(tool_name) {
+                    let args_map: HashMap<String, String> =
+                        serde_json::from_str(arguments_json).unwrap_or_default();
+                    info!("  🔧 [Builtin Tool] Executing: {} ...", tool_name);
+                    match tool.execute(&args_map, &self.context).await {
+                        Ok(Some(val)) => {
+                            let s = match val {
+                                Value::String(s) => s,
+                                other => other.to_string(),
+                            };
+                            return Ok(s);
+                        }
+                        Ok(None) => return Ok("Tool executed successfully.".to_string()),
+                        Err(e) => return Ok(format!("Error during tool execution: {}", e)),
+                    }
+                }
+            }
+        }
+
+        // 2. Lookup handler node by tool name
+        let node_name = self.handler_map.get(tool_name).ok_or_else(|| {
+            anyhow!(
+                "No handler defined for tool '{}'. Available: {:?}",
+                tool_name,
+                self.handler_map.keys().collect::<Vec<_>>()
+            )
+        })?;
+
+        info!(
+            "  🎯 [Map Tool Handler] Routing '{}' to node [{}]",
+            tool_name, node_name
+        );
+
+        let args_value: Value = serde_json::from_str(arguments_json).unwrap_or(json!({}));
+        self.context.set(
+            "input.tool_call".to_string(),
+            json!({
+                "name": tool_name,
+                "arguments": args_value
+            }),
+        )?;
+
+        let executor = self
+            .builtin_registry
+            .as_ref()
+            .and_then(|w| w.upgrade())
+            .and_then(|r| r.get_executor())
+            .ok_or_else(|| anyhow!("Executor not available for map tool handler"))?;
+
+        let result = if self.workflow.functions.contains_key(node_name) {
+            let mut args = HashMap::new();
+            args.insert("name".to_string(), json!(tool_name));
+            args.insert("arguments".to_string(), args_value);
+            executor
+                .execute_function(
+                    node_name.clone(),
+                    args,
+                    self.workflow.clone(),
+                    &self.context,
+                )
+                .await?
+        } else {
+            executor
+                .clone()
+                .run_single_node_by_name(node_name, &self.workflow, &self.context)
+                .await?
+        };
+
         Ok(match result {
             Some(Value::String(s)) => s,
             Some(v) => v.to_string(),
@@ -573,7 +734,7 @@ impl Tool for Chat {
         params: &HashMap<String, String>,
         context: &WorkflowContext,
     ) -> Result<Option<Value>> {
-        let agent_slug_str = params.get("agent").map(|s| s.as_str()).unwrap_or("default");
+        let agent_param = params.get("agent").map(|s| s.as_str()).unwrap_or("default");
         let user_message_body = params
             .get("message")
             .ok_or_else(|| anyhow!("Chat Tool Error: Mandatory parameter 'message' is missing."))?;
@@ -602,19 +763,32 @@ impl Tool for Chat {
             .map(|s| s.to_lowercase())
             .unwrap_or_else(|| "text".to_string());
 
+        // Parse inline agent map: agent param may be a JSON object (from Literal node)
+        let inline_agent: Option<Value> = serde_json::from_str::<Value>(agent_param)
+            .ok()
+            .filter(|v| v.is_object());
+
+        // Extract tools from inline agent config (serialized back to string for downstream parsing)
+        let inline_agent_tools: Option<String> =
+            inline_agent.as_ref().and_then(|a| a.get("tools")).map(|t| {
+                if let Some(s) = t.as_str() {
+                    s.to_string()
+                } else {
+                    t.to_string()
+                }
+            });
+
         // Tools resolution priority:
         // 1. Node parameter tools=... (explicitly specified)
-        // 2. Agent's default tools (.jgagent tools: field)
-        // Note: $input.tools is no longer implicitly injected to prevent frontend tools from leaking to all chat nodes
-        // To use frontend tools, pass explicitly in workflow: chat(tools=$input.tools)
-        let tools_json_str = params.get("tools").or_else(|| {
-            self.agent_registry
-                .get(agent_slug_str)
-                .and_then(|agent| agent.tools.as_ref())
-        });
+        // 2. Inline agent's tools field
+        let tools_json_str = params.get("tools").or(inline_agent_tools.as_ref());
+
+        // Handler map for declarative tool definitions (tool_name → node_name)
+        let mut tool_handler_map: Option<HashMap<String, String>> = None;
 
         let custom_tools_json_schema = if let Some(schema_raw) = tools_json_str {
-            // Parse tools: supports inline JSON, single reference (@slug), multiple references ([slugs])
+            // Parse tools: supports inline JSON, single reference (@slug), multiple references ([slugs]),
+            // or declarative map format {"tool_name": {"description": "...", "params": {...}, "handler": "node"}}
             let parsed: Vec<Value> = if let Some(slug) = schema_raw.strip_prefix('@') {
                 // Single reference: @web-tools
                 debug!("Resolving tool reference: {}", slug);
@@ -684,6 +858,66 @@ impl Tool for Chat {
                 } else {
                     return Err(anyhow!("BuiltinRegistry not set for Chat builtin"));
                 }
+            } else if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(schema_raw) {
+                // Declarative map format: {"tool_name": {"description": "...", "params": {...}, "handler": "node"}}
+                // Auto-generates OpenAI function calling schemas and extracts handler mappings
+                let mut schemas = Vec::new();
+                let mut handlers = HashMap::new();
+                for (tool_name, def) in &map {
+                    let description = def
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let params_raw = def.get("params").cloned().unwrap_or(json!({}));
+
+                    // Expand shorthand params: {"city": "string"} → {"city": {"type": "string"}}
+                    let properties = if let Value::Object(params_obj) = &params_raw {
+                        let mut expanded = serde_json::Map::new();
+                        for (param_name, param_val) in params_obj {
+                            match param_val {
+                                Value::String(type_str) => {
+                                    expanded.insert(param_name.clone(), json!({"type": type_str}));
+                                }
+                                Value::Object(_) => {
+                                    expanded.insert(param_name.clone(), param_val.clone());
+                                }
+                                _ => {
+                                    expanded.insert(param_name.clone(), json!({"type": "string"}));
+                                }
+                            }
+                        }
+                        Value::Object(expanded)
+                    } else {
+                        json!({})
+                    };
+
+                    let required: Vec<&str> = if let Value::Object(params_obj) = &params_raw {
+                        params_obj.keys().map(|k| k.as_str()).collect()
+                    } else {
+                        vec![]
+                    };
+
+                    schemas.push(json!({
+                        "type": "function",
+                        "function": {
+                            "name": tool_name,
+                            "description": description,
+                            "parameters": {
+                                "type": "object",
+                                "properties": properties,
+                                "required": required
+                            }
+                        }
+                    }));
+
+                    if let Some(handler) = def.get("handler").and_then(|v| v.as_str()) {
+                        handlers.insert(tool_name.clone(), handler.to_string());
+                    }
+                }
+                if !handlers.is_empty() {
+                    tool_handler_map = Some(handlers);
+                }
+                schemas
             } else {
                 // Inline JSON: [{...}, {...}]
                 serde_json::from_str(schema_raw).with_context(|| {
@@ -753,145 +987,44 @@ impl Tool for Chat {
             None
         };
 
-        let final_agent_config = if let Some(local_res) = self.agent_registry.get(agent_slug_str) {
-            info!(
-                "│   Using local agent: {} (has_source: {})",
-                agent_slug_str,
-                local_res.source.is_some()
-            );
+        let final_agent_config = if let Some(ref agent_obj) = inline_agent {
+            // Inline agent map: extract config from JSON object
+            let model = agent_obj
+                .get("model")
+                .and_then(|v| v.as_str())
+                .unwrap_or("gpt-4o");
+            let system_prompt = agent_obj
+                .get("system_prompt")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let temperature = agent_obj.get("temperature").and_then(|v| v.as_f64());
+            let slug = agent_obj
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("inline");
 
-            // Check if agent has a workflow; if so, execute nested workflow
-            if let Some(ref workflow_path) = local_res.source {
-                if let Some(registry_weak) = &self.builtin_registry {
-                    if let Some(registry) = registry_weak.upgrade() {
-                        // Get the base directory of the agent file
-                        let agent_base_dir = if let Some((_, path)) =
-                            self.agent_registry.get_with_path(agent_slug_str)
-                        {
-                            path.parent().unwrap_or(std::path::Path::new("."))
-                        } else {
-                            std::path::Path::new(".")
-                        };
+            // Node-level overrides take precedence
+            let final_system_prompt = system_prompt_manual_override
+                .as_deref()
+                .unwrap_or(system_prompt);
+            let final_model = params.get("model").map(|s| s.as_str()).unwrap_or(model);
+            let final_temp = params
+                .get("temperature")
+                .and_then(|t| t.parse::<f64>().ok())
+                .or(temperature);
 
-                        // Build identifier for recursion detection
-                        let identifier = format!("{}:{}", agent_slug_str, workflow_path);
-
-                        // Get timeout config (optional parameter, defaults to no limit)
-                        let timeout = params
-                            .get("workflow_timeout")
-                            .and_then(|t| t.parse::<u64>().ok())
-                            .map(std::time::Duration::from_secs);
-
-                        if let Some(timeout_duration) = timeout {
-                            info!(
-                                "│   ⚡ Executing workflow: {} (timeout: {:?})",
-                                workflow_path, timeout_duration
-                            );
-                        } else {
-                            info!("│   ⚡ Executing workflow: {} (no timeout)", workflow_path);
-                        }
-
-                        // Save original input.message, restore after execution
-                        let original_input_message =
-                            context.resolve_path("input.message").ok().flatten();
-
-                        // Set input.message in context (required by workflow)
-                        context.set(
-                            "input.message".to_string(),
-                            serde_json::json!(user_message_body),
-                        )?;
-
-                        // Execute nested workflow (with timeout control)
-                        let workflow_future = registry.execute_nested_workflow(
-                            workflow_path,
-                            agent_base_dir,
-                            context,
-                            identifier,
-                        );
-
-                        let execution_result = if let Some(timeout_duration) = timeout {
-                            // Execute with timeout
-                            match tokio::time::timeout(timeout_duration, workflow_future).await {
-                                Ok(result) => result,
-                                Err(_) => {
-                                    return Err(anyhow::anyhow!(
-                                        "Workflow execution timeout after {:?}. Consider increasing workflow_timeout parameter.",
-                                        timeout_duration
-                                    ));
-                                }
-                            }
-                        } else {
-                            // No timeout limit
-                            workflow_future.await
-                        };
-
-                        let result = match execution_result {
-                            Ok(_) => {
-                                // Get workflow output from context
-                                let output = context
-                                    .resolve_path("reply.output")?
-                                    .and_then(|v| v.as_str().map(|s| s.to_string()))
-                                    .unwrap_or_default();
-
-                                if requested_format_mode == "json" {
-                                    Ok(Some(
-                                        serde_json::from_str::<Value>(&output)
-                                            .unwrap_or(json!(output)),
-                                    ))
-                                } else {
-                                    Ok(Some(json!(output)))
-                                }
-                            }
-                            Err(e) => {
-                                Err(anyhow::anyhow!("Nested workflow execution failed: {}", e))
-                            }
-                        };
-
-                        // Restore original input.message
-                        if let Some(original) = original_input_message {
-                            context.set("input.message".to_string(), original)?;
-                        }
-
-                        return result;
-                    }
-                }
-            }
-
-            let resolved_sys_prompt;
-            if let Some(override_val) = system_prompt_manual_override {
-                resolved_sys_prompt = override_val;
-            } else if let Some(slug_ref) = &local_res.system_prompt_slug {
-                if let Some(template_content) = self.prompt_registry.get(slug_ref) {
-                    match PromptParser::parse(template_content) {
-                        Ok(parsed_resource) => {
-                            resolved_sys_prompt = parsed_resource.content;
-                        }
-                        Err(_) => {
-                            resolved_sys_prompt = template_content.clone();
-                        }
-                    }
-                } else {
-                    warn!("Warning: Linked prompt '{}' not found locally.", slug_ref);
-                    resolved_sys_prompt = local_res.system_prompt.clone();
-                }
-            } else {
-                resolved_sys_prompt = local_res.system_prompt.clone();
-            }
-
-            info!(
-                "│   System prompt: {}...",
-                &resolved_sys_prompt.chars().take(100).collect::<String>()
-            );
+            info!("│   Inline agent: {} (model: {})", slug, final_model);
 
             json!({
-                "slug": local_res.slug,
-                "model": local_res.model,
-                "system_prompt": resolved_sys_prompt,
-                "temperature": local_res.temperature,
+                "slug": slug,
+                "model": final_model,
+                "system_prompt": final_system_prompt,
+                "temperature": final_temp,
             })
         } else {
-            debug!("│   Using remote agent: {}", agent_slug_str);
-            let mut base_config = json!({ "slug": agent_slug_str });
+            // Plain string: treat as remote agent slug (jug0)
+            debug!("│   Using remote agent: {}", agent_param);
+            let mut base_config = json!({ "slug": agent_param });
             if let Some(map) = base_config.as_object_mut() {
                 if let Some(override_val) = system_prompt_manual_override {
                     map.insert("system_prompt".to_string(), json!(override_val));
@@ -966,16 +1099,48 @@ impl Tool for Chat {
         let meta_sender = context.get_meta_sender_adapter();
         let effective_meta_sender = if should_stream { meta_sender } else { None };
 
-        // Read stream_tool_events parameter
-        let stream_tool_events = params
+        // Read tool_event parameter: "silent" (default), "info", "verbose"
+        // Backward compat: stream_tool_events=true → verbose
+        let tool_event_level: u8 = if let Some(te) = params.get("tool_event") {
+            match te.trim().trim_matches('"') {
+                "verbose" => 2,
+                "info" => 1,
+                _ => 0,
+            }
+        } else if params
             .get("stream_tool_events")
             .map(|v| v == "true" || v == "1")
-            .unwrap_or(false);
+            .unwrap_or(false)
+        {
+            2 // backward compat
+        } else {
+            0
+        };
+        let stream_tool_events = tool_event_level > 0;
+        if tool_event_level > 0 {
+            context.set_tool_event_level(tool_event_level);
+        }
 
         // Create tool execution callback — tool_call handled within SSE stream, no tool loop needed
-        // on_tool=[node]    -> route to node in current workflow
-        // on_tool_call=path -> route to external workflow file
-        let handler: Arc<dyn ChatToolHandler> = if let Some(on_tool_ref) = params.get("on_tool") {
+        // Priority: map handler (from declarative tools) > on_tool=[node] > on_tool_call=path > default
+        let handler: Arc<dyn ChatToolHandler> = if let Some(map) = tool_handler_map.take() {
+            // Declarative map format: tools={"name": {..., "handler": "node"}}
+            let workflow = context
+                .get_current_workflow()
+                .ok_or_else(|| anyhow!("Map tool handler: No current workflow in context"))?;
+            info!(
+                "│   tools (map): {} tool handlers bound: {:?}",
+                map.len(),
+                map.keys().collect::<Vec<_>>()
+            );
+            Arc::new(MapToolHandler {
+                builtin_registry: self.builtin_registry.clone(),
+                context: context.clone(),
+                handler_map: map,
+                workflow,
+                stream_tool_events,
+            })
+        } else if let Some(on_tool_ref) = params.get("on_tool") {
             // on_tool=[node_name] — extract node name (strip brackets)
             let node_name = on_tool_ref
                 .trim()
@@ -992,6 +1157,7 @@ impl Tool for Chat {
                 node_name,
                 workflow,
                 stream_tool_events,
+                pending_tools: Arc::new(Mutex::new(None)),
             })
         } else if let Some(on_tool_call_path) = params.get("on_tool_call") {
             let base_dir =
@@ -1012,6 +1178,7 @@ impl Tool for Chat {
                 builtin_registry: self.builtin_registry.clone(),
                 context: context.clone(),
                 stream_tool_events,
+                pending_tools: Arc::new(Mutex::new(None)),
             })
         };
 

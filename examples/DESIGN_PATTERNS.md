@@ -25,7 +25,7 @@ Entry Agent (test.jgagent)
   ├─ workflow: test.jg
   │
   └─ test.jg
-      ├─ prompts: [test.jgprompt]
+      ├─ prompts: [test.jgx]
       ├─ agents: [test-worker.jgagent]  ← Pure Agent
       │
       └─ nodes use agent="test-worker"
@@ -85,7 +85,7 @@ if let Some(local_res) = self.agent_registry.get(agent_slug_str) {
 
 ```yaml
 # bad-example.jg
-prompts: ["./test.jgprompt"]
+prompts: ["./test.jgx"]
 # agents: []  ← 没有声明依赖
 
 [node1]: chat(
@@ -98,7 +98,7 @@ prompts: ["./test.jgprompt"]
 
 ```yaml
 e# good-example.jg
-prompts: ["./test.jgprompt"]
+prompts: ["./test.jgx"]
 agents: ["./agents/test-worker.jgagent"]  ← 明确声明
 
 [node1]: chat(
@@ -120,7 +120,7 @@ agents: ["./agents/test-worker.jgagent"]  ← 明确声明
    examples/
    ├── test.jgagent           # Entry agent with workflow
    ├── test.jg            # Workflow definition
-   ├── test.jgprompt          # Prompt template
+   ├── test.jgx          # Prompt template
    ├── agents/
    │   └── test-worker.jgagent  # Pure agent for workflow
    └── pure-agents/

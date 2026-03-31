@@ -22,7 +22,7 @@ juglans <COMMAND> [OPTIONS]
 
 | Command | Description |
 |---------|-------------|
-| `juglans <file>` | Execute .jg / .jgagent / .jgprompt file |
+| `juglans <file>` | Execute .jg / .jgx file |
 | `juglans init` | Create a new project scaffold |
 | `juglans install` | Fetch MCP tool schemas |
 | `juglans check` | Validate file syntax |
@@ -49,7 +49,7 @@ juglans <COMMAND> [OPTIONS]
 
 ## Execute File
 
-Run a workflow, agent, or prompt file.
+Run a workflow or prompt file.
 
 ```bash
 juglans <FILE> [OPTIONS]
@@ -60,15 +60,7 @@ File type is determined by extension:
 | Extension | Behavior |
 |-----------|----------|
 | `.jg` | Execute workflow DAG |
-| `.jgagent` | Interactive agent session |
-| `.jgprompt` | Render prompt template |
-
-**Agent-specific options:**
-
-| Option | Description |
-|--------|-------------|
-| `--message <TEXT>` | Send a single message (non-interactive) |
-| `--info` | Show agent configuration |
+| `.jgx` | Render prompt template |
 
 **Examples:**
 
@@ -88,14 +80,8 @@ juglans src/main.jg --dry-run
 # JSON output for programmatic use
 juglans src/main.jg --output-format json
 
-# Interactive agent chat
-juglans src/agents/assistant.jgagent
-
-# Single-message agent call
-juglans src/agents/assistant.jgagent --message "What is Rust?"
-
 # Render a prompt template
-juglans src/prompts/greeting.jgprompt --input '{"name": "Alice"}'
+juglans src/prompts/greeting.jgx --input '{"name": "Alice"}'
 ```
 
 ---
@@ -147,7 +133,7 @@ juglans install
 
 ## check
 
-Validate syntax of `.jg`, `.jgagent`, `.jgprompt` files.
+Validate syntax of `.jg` and `.jgx` files.
 
 ```bash
 juglans check [PATH] [OPTIONS]
@@ -242,10 +228,10 @@ When called without paths, uses `[workspace]` glob patterns from `juglans.toml`.
 
 ```bash
 # Push a single file
-juglans push src/agents/trader.jgagent
+juglans push src/main.jg
 
 # Force overwrite
-juglans push src/prompts/greeting.jgprompt --force
+juglans push src/prompts/greeting.jgx --force
 
 # Push all workspace resources
 juglans push
@@ -381,12 +367,12 @@ juglans chat [OPTIONS]
 
 | Option | Description |
 |--------|-------------|
-| `--agent <FILE>`, `-a` | Agent file to load (.jgagent) |
+| `--agent <SLUG>`, `-a` | Agent slug to use |
 
 **Example:**
 
 ```bash
-juglans chat --agent src/agents/assistant.jgagent
+juglans chat --agent assistant
 ```
 
 ---

@@ -146,6 +146,18 @@ impl JwlRenderer {
                         }
                     }
                 }
+
+                TemplateNode::Tag {
+                    children,
+                    self_closing,
+                    ..
+                } => {
+                    // Tags are transparent containers in prompt rendering mode.
+                    // Block tags render their children; self-closing tags produce no output.
+                    if !self_closing {
+                        output.push_str(&self.render_nodes(children, scope)?);
+                    }
+                }
             }
         }
         Ok(output)

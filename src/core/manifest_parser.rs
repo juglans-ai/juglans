@@ -79,7 +79,6 @@ impl<'a> ManifestParser<'a> {
                 }
             }
             "prompts" => m.prompt_patterns = self.parse_string_list()?,
-            "agents" => m.agent_patterns = self.parse_string_list()?,
             "tools" => m.tool_patterns = self.parse_string_list()?,
             "python" => m.python_imports = self.parse_string_list()?,
             _ => {
@@ -359,14 +358,12 @@ mod tests {
             name: "Test"
             source: "./main.jg"
             libs: ["./utils.jg"]
-            prompts: ["./prompts/*.jgprompt"]
-            agents: ["./agents/*.jgagent"]
+            prompts: ["./prompts/*.jgx"]
         "#,
         )
         .unwrap();
         assert!(m.lib_imports.contains_key("utils"));
-        assert_eq!(m.prompt_patterns, vec!["./prompts/*.jgprompt"]);
-        assert_eq!(m.agent_patterns, vec!["./agents/*.jgagent"]);
+        assert_eq!(m.prompt_patterns, vec!["./prompts/*.jgx"]);
     }
 
     #[test]

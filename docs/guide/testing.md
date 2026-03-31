@@ -4,7 +4,7 @@ This guide covers how to validate and test Juglans workflows.
 
 ## juglans check -- Static Validation
 
-`juglans check` performs static syntax validation on `.jg`, `.jgagent`, and `.jgprompt` files without executing any tool calls:
+`juglans check` performs static syntax validation on `.jg` and `.jgx` files without executing any tool calls:
 
 ```bash
 # Check all files in the current directory
@@ -67,14 +67,11 @@ juglans src/main.jg --output-format json
 Test individual resource types:
 
 ```bash
-# Test an Agent (interactive mode)
-juglans src/agents/assistant.jgagent
-
-# Test an Agent (single message)
-juglans src/agents/assistant.jgagent --message "What is Rust?"
-
 # Test a Prompt (render the template)
-juglans src/prompts/greeting.jgprompt --input '{"name": "Alice"}'
+juglans src/prompts/greeting.jgx --input '{"name": "Alice"}'
+
+# Test a workflow with inline agents
+juglans src/main.jg --input '{"message": "Hello"}'
 ```
 
 ## doctest -- Validate Documentation

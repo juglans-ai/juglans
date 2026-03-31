@@ -1,5 +1,4 @@
 // src/services/mod.rs
-pub mod agent_loader;
 pub mod interface;
 pub mod prompt_loader;
 pub mod tool_registry;
@@ -12,5 +11,7 @@ pub mod deploy;
 pub mod github;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod jug0;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod local_runtime;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod web_server;

@@ -301,6 +301,180 @@ impl Tool for FeishuWebhook {
     }
 }
 
+/// feishu_send(chat_id="oc_xxx", message="text", image="url_or_path")
+/// Send messages (text/image) via Feishu Open API using app_id + app_secret.
+pub struct FeishuSend;
+
+#[async_trait]
+impl Tool for FeishuSend {
+    fn name(&self) -> &str {
+        "feishu_send"
+    }
+
+    async fn execute(
+        &self,
+        params: &HashMap<String, String>,
+        _context: &WorkflowContext,
+    ) -> Result<Option<Value>> {
+        let chat_id = params
+            .get("chat_id")
+            .ok_or_else(|| anyhow!("feishu_send() requires 'chat_id' parameter"))?
+            .trim_matches('"');
+
+        let message = params
+            .get("message")
+            .map(|s| s.trim_matches('"').to_string());
+        let image = params.get("image").map(|s| s.trim_matches('"').to_string());
+
+        if message.is_none() && image.is_none() {
+            return Err(anyhow!(
+                "feishu_send() requires 'message' or 'image' parameter"
+            ));
+        }
+
+        // Load config
+        let config = crate::services::config::JuglansConfig::load()
+            .map_err(|e| anyhow!("Cannot load config: {}", e))?;
+        let feishu = config
+            .bot
+            .as_ref()
+            .and_then(|b| b.feishu.as_ref())
+            .ok_or_else(|| anyhow!("Missing [bot.feishu] config"))?;
+        let app_id = feishu
+            .app_id
+            .as_ref()
+            .ok_or_else(|| anyhow!("Missing [bot.feishu] app_id"))?;
+        let app_secret = feishu
+            .app_secret
+            .as_ref()
+            .ok_or_else(|| anyhow!("Missing [bot.feishu] app_secret"))?;
+        let base_url = &feishu.base_url;
+
+        // Get tenant access token
+        let client = reqwest::Client::new();
+        let token_resp = client
+            .post(format!(
+                "{}/open-apis/auth/v3/tenant_access_token/internal",
+                base_url
+            ))
+            .json(&json!({
+                "app_id": app_id,
+                "app_secret": app_secret
+            }))
+            .send()
+            .await?;
+        let token_body: Value = token_resp.json().await?;
+        let token = token_body["tenant_access_token"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Failed to get tenant_access_token: {:?}", token_body))?
+            .to_string();
+
+        // If image provided, upload it first
+        if let Some(ref image_src) = image {
+            // Get image bytes
+            let image_bytes =
+                if image_src.starts_with("http://") || image_src.starts_with("https://") {
+                    client.get(image_src).send().await?.bytes().await?.to_vec()
+                } else {
+                    tokio::fs::read(image_src)
+                        .await
+                        .map_err(|e| anyhow!("Cannot read image file '{}': {}", image_src, e))?
+                };
+
+            // Upload image to Feishu
+            let form = reqwest::multipart::Form::new()
+                .text("image_type", "message")
+                .part(
+                    "image",
+                    reqwest::multipart::Part::bytes(image_bytes)
+                        .file_name("image.png")
+                        .mime_str("image/png")?,
+                );
+            let upload_resp = client
+                .post(format!("{}/open-apis/im/v1/images", base_url))
+                .bearer_auth(&token)
+                .multipart(form)
+                .send()
+                .await?;
+            let upload_body: Value = upload_resp.json().await?;
+            let image_key = upload_body["data"]["image_key"]
+                .as_str()
+                .ok_or_else(|| anyhow!("Failed to upload image: {:?}", upload_body))?;
+
+            // Send image message
+            let content = json!({"image_key": image_key}).to_string();
+            let send_resp = client
+                .post(format!(
+                    "{}/open-apis/im/v1/messages?receive_id_type=chat_id",
+                    base_url
+                ))
+                .bearer_auth(&token)
+                .json(&json!({
+                    "receive_id": chat_id,
+                    "msg_type": "image",
+                    "content": content
+                }))
+                .send()
+                .await?;
+            let send_body: Value = send_resp.json().await?;
+            if send_body["code"].as_i64() != Some(0) {
+                return Err(anyhow!("Feishu send image error: {:?}", send_body));
+            }
+
+            // If also has text message, send it separately
+            if let Some(ref msg) = message {
+                let text_content = json!({"text": msg}).to_string();
+                client
+                    .post(format!(
+                        "{}/open-apis/im/v1/messages?receive_id_type=chat_id",
+                        base_url
+                    ))
+                    .bearer_auth(&token)
+                    .json(&json!({
+                        "receive_id": chat_id,
+                        "msg_type": "text",
+                        "content": text_content
+                    }))
+                    .send()
+                    .await?;
+            }
+
+            return Ok(Some(json!({
+                "status": "sent",
+                "type": "image",
+                "image_key": image_key
+            })));
+        }
+
+        // Text-only message
+        if let Some(ref msg) = message {
+            let content = json!({"text": msg}).to_string();
+            let send_resp = client
+                .post(format!(
+                    "{}/open-apis/im/v1/messages?receive_id_type=chat_id",
+                    base_url
+                ))
+                .bearer_auth(&token)
+                .json(&json!({
+                    "receive_id": chat_id,
+                    "msg_type": "text",
+                    "content": content
+                }))
+                .send()
+                .await?;
+            let send_body: Value = send_resp.json().await?;
+            if send_body["code"].as_i64() != Some(0) {
+                return Err(anyhow!("Feishu send error: {:?}", send_body));
+            }
+        }
+
+        Ok(Some(json!({
+            "status": "sent",
+            "type": "text"
+        })))
+    }
+}
+
 /// return(value=expr) — Return the evaluated expression result as $output
 /// Used in function definitions to return computed results: `[add(a, b)]: return(value=$ctx.a + $ctx.b)`
 pub struct Return;

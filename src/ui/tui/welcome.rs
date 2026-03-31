@@ -113,11 +113,6 @@ impl<'a> Widget for WelcomeWidget<'a> {
         let shortcuts_spans = match self.app.mode {
             TuiMode::Agent => vec![
                 Span::styled(
-                    "tab",
-                    Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(" select agent   ", Style::default().fg(theme.muted)),
-                Span::styled(
                     "ctrl+t",
                     Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
                 ),

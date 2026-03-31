@@ -1,0 +1,51 @@
+# Rust-style impl block and trait demo
+
+# --- Struct definitions ---
+[Counter]: {
+  value: int = 0
+  step: int = 1
+}
+
+# --- impl block: group methods + associated functions ---
+impl Counter {
+  [get(self)]: output = self.value
+  [describe(self)]: output = "Counter(value=" + str(self.value) + ", step=" + str(self.step) + ")"
+}
+
+# --- Trait definitions ---
+trait Displayable {
+  [format(self)]:
+  [label(self)]: output = "[display] " + str(self.format())
+}
+
+trait Validatable {
+  [validate(self)]:
+}
+
+# --- impl Trait for Type ---
+[User]: {
+  name: str
+  email: str
+}
+
+impl Displayable for User {
+  [format(self)]: output = self.name + " <" + self.email + ">"
+}
+
+impl Validatable for User {
+  [validate(self)]: valid = self.name != "" and self.email != ""
+}
+
+# --- Workflow ---
+[c]: new Counter(value=10, step=5)
+[desc]: c.describe()
+[val]: c.get()
+
+[u]: new User(name="Alice", email="alice@example.com")
+[show]: u.format()
+[lbl]: u.label()
+[v]: u.validate()
+
+[c] -> [desc] -> [val]
+[u] -> [show] -> [lbl]
+[u] -> [v]

@@ -1,0 +1,64 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: jug0
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-jug0}
+      POSTGRES_DB: jug0_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/backup/jug0.sql:/docker-entrypoint-initdb.d/01-backup.sql:ro
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jug0"]
+      interval: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: unless-stopped
+    volumes:
+      - qdrant_data:/qdrant/storage
+    ports:
+      - "127.0.0.1:6334:6334"
+    networks:
+      - default
+      - juglans
+
+  jug0:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${PORT:-3000}:${PORT:-3000}"
+    env_file: .env
+    volumes:
+      - uploads_data:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - default
+      - juglans
+
+volumes:
+  postgres_data:
+  qdrant_data:
+  redis_data:
+  uploads_data:
+
+networks:
+  juglans:
+    name: juglans
+    driver: bridge

@@ -53,6 +53,9 @@ pub enum TokenKind {
     Assert,
     New,
     Yield,
+    Impl,
+    Trait,
+    For,
     At, // @
 
     // Special
@@ -102,6 +105,9 @@ impl TokenKind {
             Self::Return => "'return'",
             Self::New => "'new'",
             Self::Yield => "'yield'",
+            Self::Impl => "'impl'",
+            Self::Trait => "'trait'",
+            Self::For => "'for'",
             Self::At => "'@'",
             Self::Newline => "newline",
             Self::Eof => "end of file",

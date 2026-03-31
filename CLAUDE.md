@@ -8,12 +8,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Core Architecture
 
-### Three File Types, Three Parsers
+### Two File Types, Two Parsers
 
 ```
-.jg   → GraphParser      → Workflow DAG execution
-.jgprompt → PromptParser     → Jinja-style template rendering
-.jgagent  → AgentParser      → AI agent configuration
+.jg   → GraphParser      → Workflow DAG execution (includes inline agent map nodes)
+.jgx → PromptParser     → Jinja-style template rendering
 ```
 
 ### Execution Flow
@@ -21,10 +20,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```
 1. Parse file → AST
 2. Resolve flow imports (merge subgraph nodes/edges with namespace prefixes)
-3. Load imported resources (prompts/agents via glob patterns)
+3. Load imported resources (prompts via glob patterns)
 4. Build WorkflowExecutor with:
-   - PromptRegistry (from .jgprompt files)
-   - AgentRegistry (from .jgagent files)
+   - PromptRegistry (from .jgx files)
    - JuglansRuntime (Jug0Client or custom implementation)
 5. Execute DAG:
    - Traverse graph (petgraph)
@@ -51,7 +49,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `mcp.rs` - Model Context Protocol client for tool integration
 - `web_server.rs` - Local development server (Axum) with SSE streaming and client tool bridge (`/api/chat/tool-result`)
 - `config.rs` - juglans.toml configuration loader
-- `prompt_loader.rs` / `agent_loader.rs` - Resource registries with glob loading
+- `prompt_loader.rs` - Resource registry with glob loading
 
 **src/builtins/**
 - `ai.rs` - chat() (with `state` parameter, client tool bridge, terminal tool detection), p() (prompt render), memory_search(), history() tools
@@ -131,12 +129,8 @@ cargo clippy
 juglans workflow.jg --input '{"query": "test"}'
 juglans workflow.jg --input-file input.json
 
-# Interactive agent
-juglans agent.jgagent
-juglans agent.jgagent --message "one-off question"
-
 # Render prompt
-juglans prompt.jgprompt --input '{"name": "Alice"}'
+juglans prompt.jgx --input '{"name": "Alice"}'
 
 # Validate all files (like cargo check)
 juglans check
@@ -181,7 +175,7 @@ The CLI searches for config in: `./juglans.toml` → `~/.config/juglans/juglans.
 
 ### Parser Architecture
 
-- Uses **Pest** (PEG parser) for `.jg`, `.jgagent`, `.jgprompt` grammars
+- Uses **Pest** (PEG parser) for `.jg` and `.jgx` grammars
 - Each file type has dedicated parser module and `.pest` grammar file
 - Workflow parser builds DAG using **petgraph** library
 
@@ -302,10 +296,11 @@ Unlike conditional edges (`if`), switch ensures mutual exclusivity.
 
 ### Resource Loading
 
-- Use glob patterns in workflow: `prompts: ["./prompts/*.jgprompt"]`
+- Use glob patterns in workflow: `prompts: ["./prompts/*.jgx"]`
 - Paths are relative to `.jg` file location
 - Registry resolves and caches resources by slug
-- Reference by slug in nodes: `chat(agent="my-agent")`
+- Agents are defined as inline JSON map nodes: `[my_agent]: { "model": "gpt-4o", ... }`
+- Reference agents by node ID: `chat(agent=my_agent, ...)`
 
 ### Error Handling
 

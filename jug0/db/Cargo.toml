@@ -1,0 +1,18 @@
+[package]
+name = "migration"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+async-trait = "0.1"
+tokio = { version = "1.0", features = ["full"] }
+
+[dependencies.sea-orm-migration]
+version = "1.0"
+features = ["runtime-tokio-native-tls"]
+
+[features]
+default = ["sqlx-postgres"]
+sqlx-postgres = ["sea-orm-migration/sqlx-postgres"]
+sqlx-mysql = ["sea-orm-migration/sqlx-mysql"]
+sqlx-sqlite = ["sea-orm-migration/sqlx-sqlite"]

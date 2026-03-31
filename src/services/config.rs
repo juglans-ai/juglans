@@ -113,6 +113,31 @@ fn default_python_workers() -> usize {
     1
 }
 
+// AI provider configuration
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub struct AiConfig {
+    /// Default model for chat() when not specified (e.g. "deepseek/deepseek-chat")
+    pub default_model: Option<String>,
+    /// Per-provider configuration (key = provider name: openai, anthropic, deepseek, etc.)
+    #[serde(default)]
+    pub providers: std::collections::HashMap<String, ProviderConfig>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub struct ProviderConfig {
+    pub api_key: Option<String>,
+    pub base_url: Option<String>,
+}
+
+impl AiConfig {
+    /// Check if any provider has a non-empty api_key configured.
+    pub fn has_providers(&self) -> bool {
+        self.providers
+            .values()
+            .any(|p| p.api_key.as_ref().map(|k| !k.is_empty()).unwrap_or(false))
+    }
+}
+
 // Path alias configuration
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct PathsConfig {
@@ -230,6 +255,10 @@ pub struct JuglansConfig {
 
     // Package Registry configuration
     pub registry: Option<RegistryConfig>,
+
+    // AI provider configuration
+    #[serde(default)]
+    pub ai: AiConfig,
 }
 
 fn default_env_file() -> Vec<String> {
@@ -285,6 +314,7 @@ impl JuglansConfig {
                 bot: None,
                 paths: PathsConfig::default(),
                 registry: None,
+                ai: AiConfig::default(),
             });
         }
 

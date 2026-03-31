@@ -9,14 +9,13 @@ use futures::StreamExt;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
 use crate::core::context::{WorkflowContext, WorkflowEvent};
 use crate::core::executor::WorkflowExecutor;
 use crate::core::parser::GraphParser;
-use crate::services::agent_loader::AgentRegistry;
 use crate::services::config::JuglansConfig;
 use crate::services::interface::JuglansRuntime;
 use crate::services::jug0::Jug0Client;
@@ -224,40 +223,36 @@ pub async fn run_agent_for_message(
     message: &PlatformMessage,
     tool_executor: Option<&dyn ToolExecutor>,
 ) -> Result<BotReply> {
-    // 1. Load agent registry
-    let mut agent_registry = AgentRegistry::new();
-    let agent_pattern = project_root
-        .join("**/*.jgagent")
-        .to_string_lossy()
-        .to_string();
-    agent_registry.load_from_paths(&[agent_pattern])?;
+    // 1. Find workflow file by slug (agent_slug is now a workflow name)
+    let wf_path = {
+        let jg_pattern = project_root
+            .join(format!("**/{}.jg", agent_slug))
+            .to_string_lossy()
+            .to_string();
+        glob::glob(&jg_pattern)
+            .ok()
+            .and_then(|mut paths| paths.find_map(|p| p.ok()))
+            .ok_or_else(|| anyhow!("Workflow '{}' not found in workspace", agent_slug))?
+    };
 
-    let (agent_meta, agent_file_path) = agent_registry
-        .get_with_path(agent_slug)
-        .ok_or_else(|| anyhow!("Agent '{}' not found in workspace", agent_slug))?;
-
-    let agent_meta = agent_meta.clone();
-    let agent_dir = agent_file_path
-        .parent()
-        .unwrap_or(Path::new("."))
-        .to_path_buf();
+    let wf_content = fs::read_to_string(&wf_path)
+        .map_err(|e| anyhow!("Workflow File Error: {} (tried {:?})", e, wf_path))?;
 
     // 2. Create runtime + executor
     let runtime: Arc<dyn JuglansRuntime> = Arc::new(Jug0Client::new(config));
 
     let mut prompt_registry = PromptRegistry::new();
-    let _ = prompt_registry.load_from_paths(&[project_root
-        .join("**/*.jgprompt")
-        .to_string_lossy()
-        .to_string()]);
+    let _ = prompt_registry.load_from_paths(&[
+        project_root.join("**/*.jgx").to_string_lossy().to_string(),
+        project_root
+            .join("**/*.jgprompt")
+            .to_string_lossy()
+            .to_string(),
+    ]);
 
-    let mut executor = WorkflowExecutor::new_with_debug(
-        Arc::new(prompt_registry),
-        Arc::new(agent_registry),
-        runtime,
-        config.debug.clone(),
-    )
-    .await;
+    let mut executor =
+        WorkflowExecutor::new_with_debug(Arc::new(prompt_registry), runtime, config.debug.clone())
+            .await;
 
     // Load tool definitions
     {
@@ -272,54 +267,9 @@ pub async fn run_agent_for_message(
             }
         }
     }
-    // Parse workflow early (before Arc wrapping) to call init_python_runtime / load_tools
-    let parsed_workflow = if let Some(wf_ref) = &agent_meta.source {
-        let is_file_path = wf_ref.ends_with(".jg")
-            || wf_ref.ends_with(".jgflow")
-            || wf_ref.starts_with("./")
-            || wf_ref.starts_with("../")
-            || Path::new(wf_ref).is_absolute();
 
-        let wf_content =
-            if is_file_path {
-                let full_wf_path = if Path::new(wf_ref).is_absolute() {
-                    PathBuf::from(wf_ref)
-                } else {
-                    agent_dir.join(wf_ref)
-                };
-                Some(fs::read_to_string(&full_wf_path).map_err(|e| {
-                    anyhow!("Workflow File Error: {} (tried {:?})", e, full_wf_path)
-                })?)
-            } else {
-                // Try .jg first, fall back to .jgflow
-                let jg_pattern = project_root
-                    .join(format!("**/{}.jg", wf_ref))
-                    .to_string_lossy()
-                    .to_string();
-                let jgflow_pattern = project_root
-                    .join(format!("**/{}.jgflow", wf_ref))
-                    .to_string_lossy()
-                    .to_string();
-                glob::glob(&jg_pattern)
-                    .ok()
-                    .and_then(|mut paths| paths.find_map(|p| p.ok()))
-                    .or_else(|| {
-                        glob::glob(&jgflow_pattern)
-                            .ok()
-                            .and_then(|mut paths| paths.find_map(|p| p.ok()))
-                    })
-                    .map(|path| fs::read_to_string(&path))
-                    .transpose()
-                    .map_err(|e| anyhow!("Workflow File Error: {}", e))?
-            };
-
-        match wf_content {
-            Some(content) => Some(Arc::new(GraphParser::parse(&content)?)),
-            None => None,
-        }
-    } else {
-        None
-    };
+    // Parse workflow
+    let parsed_workflow = Some(Arc::new(GraphParser::parse(&wf_content)?));
 
     // Initialize Python runtime + load workflow tools (requires &mut self, must be before Arc)
     if let Some(ref wf) = parsed_workflow {
@@ -380,15 +330,15 @@ pub async fn run_agent_for_message(
 
     // 4. Execute workflow asynchronously
     let executor_clone = executor.clone();
-    let agent_meta_clone = agent_meta.clone();
+    let agent_slug_owned = agent_slug.to_string();
 
     let exec_handle = tokio::spawn(async move {
         let result = if let Some(workflow) = parsed_workflow {
             executor_clone.execute_graph(workflow, &ctx).await
         } else {
-            // Direct chat mode
+            // Direct chat mode (remote agent slug)
             let mut params = HashMap::new();
-            params.insert("agent".to_string(), agent_meta_clone.slug.clone());
+            params.insert("agent".to_string(), agent_slug_owned);
             params.insert("message".to_string(), "$input.message".to_string());
 
             executor_clone
@@ -451,10 +401,10 @@ pub async fn run_agent_for_message(
                             content,
                         });
                     }
-                    let _ = result_tx.send(results);
+                    let _ = result_tx.send((results, None));
                 } else {
                     warn!("[Bot] Client tool call received but no executor available, skipping");
-                    let _ = result_tx.send(vec![]);
+                    let _ = result_tx.send((vec![], None));
                 }
             }
             WorkflowEvent::Meta(_)

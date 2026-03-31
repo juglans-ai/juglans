@@ -88,7 +88,7 @@ impl<'a> Widget for SidebarWidget<'a> {
                     )));
                     if let Some(state) = &self.app.agent_state {
                         lines.push(Line::from(Span::styled(
-                            state.agent_resource.model.clone(),
+                            state.model.clone(),
                             Style::default().fg(self.theme.muted),
                         )));
                     }

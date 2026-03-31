@@ -26,7 +26,7 @@ Metadata lines appear at the top of the file. Each line follows `key: value` for
 | `author` | string | Author name |
 | `source` | string | Source file path |
 | `prompts` | string list | Prompt file glob patterns |
-| `agents` | string list | Agent file glob patterns |
+| `agents` | string list | _(deprecated, silently ignored)_ |
 | `tools` | string list | Tool definition file patterns |
 | `python` | string list | Python module imports |
 | `flows` | object map | Subworkflow imports: `{ alias: "path.jg" }` |
@@ -45,8 +45,7 @@ Minimal metadata:
 Full metadata:
 
 ```juglans
-prompts: ["./prompts/*.jgprompt"]
-agents: ["./agents/*.jgagent"]
+prompts: ["./prompts/*.jgx"]
 
 [start]: notify(status="begin")
 [done]: notify(status="end")
@@ -69,8 +68,7 @@ Entry nodes are determined automatically by topological sort (nodes with in-degr
 ### Resource Imports
 
 ```juglans
-prompts: ["./prompts/*.jgprompt", "./shared/*.jgprompt"]
-agents: ["./agents/main.jgagent"]
+prompts: ["./prompts/*.jgx", "./shared/*.jgx"]
 
 [step]: notify(status="imported")
 ```
@@ -446,6 +444,156 @@ Loop bodies contain their own node definitions and edge definitions:
 
 ---
 
+## Struct Definitions
+
+Structs define typed data containers with fields and optional defaults:
+
+```juglans
+[User]: {
+  name: str
+  email: str
+  age: int = 0
+  role: str = "user"
+}
+
+[req]: new User(name="Alice", email="alice@example.com")
+```
+
+### Field Syntax
+
+```text
+field_name: type_hint [= default_value]
+```
+
+Supported types: `str`, `int`, `float`, `bool`, `list[T]`, `dict[K, V]`, `T?` (optional). Class names are also valid types.
+
+### Instantiation
+
+```juglans
+[u]: new User(name="Alice", email="alice@example.com", age=30)
+```
+
+Fields with defaults can be omitted — they use their default value.
+
+---
+
+## impl Blocks
+
+`impl` blocks group methods and associated functions for a struct, similar to Rust:
+
+```juglans
+[Counter]: {
+  value: int = 0
+  step: int = 1
+}
+
+impl Counter {
+  [get(self)]: output = self.value
+  [describe(self)]: output = "Counter(" + str(self.value) + ")"
+  [defaults()]: output = "Counter defaults: value=0, step=1"
+}
+
+[c]: new Counter(value=10)
+[val]: c.get()
+[c] -> [val]
+```
+
+### Instance Methods
+
+Methods with `self` as the first parameter operate on an instance:
+
+```juglans
+[c2]: new Counter(value=5, step=2)
+[desc]: c2.describe()
+[c2] -> [desc]
+```
+
+Inside a method body, `self.field_name` accesses instance fields.
+
+### Associated Functions
+
+Methods without `self` are associated functions (static methods), called via `Type.function()`:
+
+```juglans
+[info]: Counter.defaults()
+```
+
+### Standalone Method Syntax
+
+Methods can also be defined outside `impl` blocks (backward-compatible):
+
+```juglans
+[User]: {
+  name: str
+  email: str
+}
+
+[User.validate(self)]: valid = self.name != ""
+
+[u]: new User(name="Alice", email="alice@example.com")
+[v]: u.validate()
+[u] -> [v]
+```
+
+This is equivalent to defining `validate` inside `impl User { ... }`.
+
+---
+
+## Trait Definitions
+
+Traits define behavior contracts (interfaces) without inheritance:
+
+```juglans
+trait Displayable {
+  [format(self)]:
+  [label(self)]: output = "[display] " + str(self.format())
+}
+
+[User]: {
+  name: str
+  email: str
+}
+
+impl Displayable for User {
+  [format(self)]: output = self.name + " <" + self.email + ">"
+}
+
+[u]: new User(name="Alice", email="alice@example.com")
+[show]: u.format()
+[u] -> [show]
+```
+
+- Methods ending with `:` followed by a newline are **required** — implementing types must provide them.
+- Methods with a body are **default implementations** — inherited if not overridden.
+
+### impl Trait for Type
+
+The compiler validates that all required methods are provided. Default methods (like `label` above) are automatically inherited.
+
+### Trait in Libraries
+
+Traits and impl blocks can be defined in library files and imported via `libs:`. Trait names are namespace-prefixed like functions:
+
+```juglans
+trait Renderable {
+  [render(self)]:
+}
+
+[MyType]: {
+  value: str = "hello"
+}
+
+impl Renderable for MyType {
+  [render(self)]: output = self.value
+}
+
+[m]: new MyType(value="world")
+[r]: m.render()
+[m] -> [r]
+```
+
+---
+
 ## Comments
 
 Line comments start with `#`:
@@ -481,25 +629,41 @@ Variables use dot notation for nested access: `output.data.items[0].name`.
 ## Complete Example
 
 ```juglans
-agents: ["./agents/*.jgagent"]
-prompts: ["./prompts/*.jgprompt"]
+prompts: ["./prompts/*.jgx"]
+
+# Agent definitions
+[classifier]: {
+  "model": "gpt-4o",
+  "temperature": 0.0,
+  "system_prompt": "Classify user intent as question, task, or chat. Return JSON."
+}
+
+[expert]: {
+  "model": "gpt-4o",
+  "system_prompt": "You are a knowledgeable expert."
+}
+
+[assistant]: {
+  "model": "gpt-4o",
+  "system_prompt": "You are a friendly assistant."
+}
 
 # Classify user intent
-[classify]: chat(
-  agent="classifier",
-  message=input.query,
-  format="json"
-)
+[classify]: chat(agent=classifier, message=input.query, format="json")
 
 # Handler branches
-[handle_question]: chat(agent="expert", message=input.query)
-[handle_task]: chat(agent="executor", message=input.query)
-[handle_chat]: chat(agent="assistant", message=input.query)
+[handle_question]: chat(agent=expert, message=input.query)
+[handle_task]: chat(agent=expert, message=input.query)
+[handle_chat]: chat(agent=assistant, message=input.query)
 
 # Final output
 [done]: notify(status="processed")
 
 # Routing logic
+[classifier] -> [classify]
+[expert] -> [handle_question]
+[assistant] -> [handle_chat]
+
 [classify] -> switch output.intent {
     "question": [handle_question]
     "task": [handle_task]

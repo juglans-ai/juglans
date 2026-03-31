@@ -1,13 +1,13 @@
-# Minimal juglans.toml for testing
-
 [account]
-id = "test-user"
-name = "Test User"
-api_key = "sk_test"
+id = "juglans-wallet"
+name = "Juglans Wallet"
 
-[jug0]
-base_url = "http://localhost:3000"
+[ai]
+default_model = "deepseek-chat"
+
+[ai.providers.deepseek]
+api_key = "sk-897fdc3c264d463da77a35b2d5c3e280"
 
 [server]
 host = "127.0.0.1"
-port = 8080
+port = 8090

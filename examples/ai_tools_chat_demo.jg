@@ -3,13 +3,13 @@ libs: ["../std/ai.jg"]
 # Define tools as struct instances
 [t_time]: ai.tool {
   name="get_current_time",
-  description="Get the current UTC time. Always call this when the user asks about the time.",
+  description="Get the current date and time in UTC.",
   params={}
 }
 
 [t_math]: ai.tool {
   name="calculate",
-  description="Evaluate a math expression and return the result.",
+  description="Evaluate a math expression using bc calculator. Supports +, -, *, /, ^, sqrt(), etc.",
   params={"expression": {"type": "string", "description": "Math expression to evaluate, e.g. 2+2"}},
   required=["expression"]
 }
@@ -21,17 +21,22 @@ libs: ["../std/ai.jg"]
 # Group tools
 [my_tools]: ai.toolbox(tools=[t_time.schema, t_math.schema])
 
-# Chat with tools — the model should invoke get_current_time
+# Chat with tools — the model should invoke the tools
 [ask]: chat(
   model="byteplus/seed-2-0-lite-260228",
   system_prompt="You are a helpful assistant. Use the provided tools to answer questions.",
-  message="What time is it right now?",
+  message="What time is it right now? Also calculate 355/113.",
   tools=my_tools.output,
   on_tool=[handle_tool]
 )
 
-# Tool handler node — receives input.tool_call
-[handle_tool]: result = "2026-03-11T12:00:00Z (mocked UTC time)"
+# Tool handler function — only invoked on tool_call, never auto-executed.
+# Receives: name (tool name), arguments (tool call arguments)
+[handle_tool(name, arguments)]: {
+  [time_result]: bash(command="date -u '+%Y-%m-%dT%H:%M:%SZ'")
+  [math_result]: bash(command="echo '" + arguments.expression + "' | bc -l")
+  output = time_result if name == "get_current_time" else math_result
+}
 
 # Show result
 [done]: notify(message=ask.output)

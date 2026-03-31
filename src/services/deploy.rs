@@ -13,7 +13,7 @@ const DEFAULT_PORT: u16 = 8080;
 
 /// File extensions to include in build context
 const INCLUDE_EXTS: &[&str] = &[
-    "jg", "jgagent", "jgprompt", "json", "yaml", "yml", "toml", "csv", "txt", "py", "md",
+    "jg", "jgx", "jgprompt", "json", "yaml", "yml", "toml", "csv", "txt", "py", "md",
 ];
 
 /// Directories to exclude from build context
@@ -178,14 +178,11 @@ fn validate_project(root: &Path) -> Result<()> {
     let has_jg = fs::read_dir(root)?.filter_map(|e| e.ok()).any(|e| {
         e.path()
             .extension()
-            .is_some_and(|ext| ext == "jg" || ext == "jgagent" || ext == "jgprompt")
+            .is_some_and(|ext| ext == "jg" || ext == "jgx" || ext == "jgprompt")
     });
 
     if !has_jg {
-        return Err(anyhow!(
-            "No .jg/.jgagent/.jgprompt files found in {}",
-            root.display()
-        ));
+        return Err(anyhow!("No .jg/.jgx files found in {}", root.display()));
     }
     Ok(())
 }

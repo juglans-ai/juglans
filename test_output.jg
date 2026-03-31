@@ -1,0 +1,2 @@
+[reply]: chat(message=input.message)
+[show]: reply(message=reply)

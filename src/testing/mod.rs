@@ -19,7 +19,6 @@ use crate::core::context::WorkflowContext;
 use crate::core::executor::WorkflowExecutor;
 use crate::core::graph::{self, WorkflowGraph};
 use crate::core::parser::GraphParser;
-use crate::services::agent_loader::AgentRegistry;
 use crate::services::interface::JuglansRuntime;
 use crate::services::prompt_loader::PromptRegistry;
 
@@ -58,19 +57,11 @@ impl FileTestResult {
 /// Main test runner
 pub struct TestRunner {
     runtime: Arc<dyn JuglansRuntime>,
-    agent_registry: Arc<AgentRegistry>,
 }
 
 impl TestRunner {
-    pub fn new(
-        runtime: Arc<dyn JuglansRuntime>,
-        _prompt_registry: Arc<PromptRegistry>,
-        agent_registry: Arc<AgentRegistry>,
-    ) -> Self {
-        Self {
-            runtime,
-            agent_registry,
-        }
+    pub fn new(runtime: Arc<dyn JuglansRuntime>, _prompt_registry: Arc<PromptRegistry>) -> Self {
+        Self { runtime }
     }
 
     /// Run all tests in a single .jg file
@@ -95,8 +86,7 @@ impl TestRunner {
             });
         }
 
-        // Load prompts declared in the test file (needed for {% if %} / {% for %} template logic)
-        // Agents are NOT loaded locally — they are resolved via jug0 server which has tool resources
+        // Load prompts declared in the test file
         let base_dir = path.parent().unwrap_or(Path::new("."));
         let mut prompt_registry = PromptRegistry::new();
 
@@ -109,15 +99,9 @@ impl TestRunner {
             let _ = prompt_registry.load_from_paths(&resolved);
         }
 
-        // Create executor with loaded prompt registry
-        let executor = Arc::new(
-            WorkflowExecutor::new(
-                Arc::new(prompt_registry),
-                self.agent_registry.clone(),
-                self.runtime.clone(),
-            )
-            .await,
-        );
+        // Create executor with loaded registries
+        let executor =
+            Arc::new(WorkflowExecutor::new(Arc::new(prompt_registry), self.runtime.clone()).await);
         executor
             .get_registry()
             .set_executor(Arc::downgrade(&executor));

@@ -150,7 +150,7 @@ pub fn parse_registry_import(import: &str) -> Result<(String, Option<String>)> {
 }
 
 /// Collect all files that should be included in the package archive.
-/// Includes .jg/.jgflow, .jgagent, .jgprompt, jgpackage.toml, and README/LICENSE.
+/// Includes .jg/.jgflow, .jgx/.jgprompt, jgpackage.toml, and README/LICENSE.
 pub fn collect_package_files(dir: &Path) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
 
@@ -182,7 +182,7 @@ fn collect_recursive(_root: &Path, dir: &Path, files: &mut Vec<PathBuf>) -> Resu
             collect_recursive(_root, &path, files)?;
         } else {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            let is_source = matches!(ext, "jg" | "jgflow" | "jgagent" | "jgprompt");
+            let is_source = matches!(ext, "jg" | "jgflow" | "jgx" | "jgprompt");
             let is_meta = matches!(
                 name.as_ref(),
                 "README.md"

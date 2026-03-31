@@ -149,13 +149,10 @@ A real Juglans project uses the `src/` layout:
 
 ```
 src/
-├── main.jg                    # Main workflow
-├── agents/
-│   └── assistant.jgagent      # Workflow-bound agent (source: "../main.jg")
-├── pure-agents/
-│   └── helper.jgagent         # Pure agent (used inside workflows)
+├── main.jg                    # Main workflow (with inline agent definitions)
+├── agents.jg                  # Shared agent library (imported via libs:)
 ├── prompts/
-│   └── system.jgprompt        # Prompt templates
+│   └── system.jgx        # Prompt templates
 └── tools/                     # Tool definitions
 ```
 

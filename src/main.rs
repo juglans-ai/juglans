@@ -23,7 +23,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
-use core::agent_parser::AgentParser;
 use core::context::WorkflowContext;
 use core::executor::WorkflowExecutor;
 use core::parser::GraphParser;
@@ -33,7 +32,6 @@ use core::resolver;
 use core::skill_parser;
 use core::type_checker::TypeChecker;
 use core::validator::{ProjectContext, WorkflowValidator};
-use services::agent_loader::AgentRegistry;
 use services::config::JuglansConfig;
 use services::github;
 use services::interface::JuglansRuntime;
@@ -45,13 +43,13 @@ use ui::{render::render_markdown, render::show_shortcuts, render::show_welcome, 
 #[derive(Parser)]
 #[command(name = "juglans", author = "Juglans Team", version = env!("CARGO_PKG_VERSION"))]
 struct Cli {
-    /// Target file path to process (.jg, .jgprompt, .jgagent)
+    /// Target file path to process (.jg, .jgx)
     file: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Option<Commands>,
 
-    /// Direct input for prompt variables or agent messages
+    /// Direct input for prompt variables
     #[arg(short, long)]
     input: Option<String>,
 
@@ -71,11 +69,15 @@ struct Cli {
     #[arg(short, long)]
     output: Option<PathBuf>,
 
-    /// Output format (text or json)
+    /// Output format (text, json, or sse)
     #[arg(long, default_value = "text")]
     output_format: String,
 
-    /// Show agent/prompt info without executing
+    /// Chat session ID for multi-turn conversation
+    #[arg(long)]
+    chat_id: Option<String>,
+
+    /// Show prompt info without executing
     #[arg(long)]
     info: bool,
 }
@@ -96,7 +98,7 @@ enum Commands {
         /// Preview changes without pushing
         #[arg(long)]
         dry_run: bool,
-        /// Filter by resource type (workflow, agent, prompt, tool, all)
+        /// Filter by resource type (workflow, prompt, tool, all)
         #[arg(long, short = 't')]
         r#type: Option<String>,
         /// Recursively scan directories
@@ -106,7 +108,7 @@ enum Commands {
         #[arg(long)]
         endpoint: Option<String>,
     },
-    /// Validate syntax of .jg/.jgflow, .jgagent, .jgprompt files (like cargo check)
+    /// Validate syntax of .jg/.jgflow, .jgx files (like cargo check)
     Check {
         /// Path to check (file or directory, defaults to current directory)
         path: Option<PathBuf>,
@@ -128,7 +130,7 @@ enum Commands {
     Pull {
         /// Resource slug to pull
         slug: String,
-        /// Resource type (prompt, agent, workflow)
+        /// Resource type (prompt, workflow)
         #[arg(long, short = 't')]
         r#type: String,
         /// Output directory
@@ -137,7 +139,7 @@ enum Commands {
     },
     /// List resources on the server
     List {
-        /// Resource type to list (prompt, agent, workflow)
+        /// Resource type to list (prompt, workflow)
         #[arg(long, short = 't')]
         r#type: Option<String>,
     },
@@ -145,7 +147,7 @@ enum Commands {
     Delete {
         /// Resource slug to delete
         slug: String,
-        /// Resource type (prompt, agent, workflow)
+        /// Resource type (prompt, workflow)
         #[arg(long, short = 't')]
         r#type: String,
     },
@@ -169,7 +171,7 @@ enum Commands {
         #[arg(long)]
         port: Option<u16>,
     },
-    /// Manage Agent Skills (fetch from GitHub, convert to .jgprompt)
+    /// Manage Agent Skills (fetch from GitHub, convert to .jgx)
     Skills {
         #[command(subcommand)]
         action: SkillsAction,
@@ -199,7 +201,7 @@ enum Commands {
     },
     /// Launch interactive chat UI
     Chat {
-        /// Agent file to load (.jgagent)
+        /// Agent file to load
         #[arg(short, long)]
         agent: Option<PathBuf>,
     },
@@ -262,7 +264,7 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum SkillsAction {
-    /// Fetch skills from a GitHub repository and save as .jgprompt
+    /// Fetch skills from a GitHub repository and save as .jgx
     Add {
         /// GitHub repository (owner/repo), e.g. "anthropics/skills"
         repo: String,
@@ -275,7 +277,7 @@ enum SkillsAction {
         /// List available skills without downloading
         #[arg(long)]
         list: bool,
-        /// Output directory for .jgprompt files (default: ./prompts)
+        /// Output directory for .jgx files (default: ./prompts)
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
@@ -317,22 +319,45 @@ fn resolve_import_patterns_verbose(
     resolved_output_list
 }
 
+/// Check if local LLM providers are available (direct API, no jug0 needed).
+/// Priority: [ai.providers] in juglans.toml > environment variables (fallback).
+fn has_local_llm_provider(config: &JuglansConfig) -> bool {
+    // 1. Check [ai.providers] in juglans.toml
+    if config.ai.has_providers() {
+        return true;
+    }
+    // 2. Fallback: check environment variables (compat with projects without [ai] section)
+    [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "GEMINI_API_KEY",
+        "QWEN_API_KEY",
+        "ARK_API_KEY",
+        "XAI_API_KEY",
+    ]
+    .iter()
+    .any(|k| std::env::var(k).map(|v| !v.is_empty()).unwrap_or(false))
+}
+
 /// Build a configured WorkflowExecutor with registries, MCP tools, and Python runtime.
 async fn build_executor(
     config: &JuglansConfig,
     prompt_registry: PromptRegistry,
-    agent_registry: AgentRegistry,
     workflow: Option<&Arc<core::graph::WorkflowGraph>>,
 ) -> Result<Arc<WorkflowExecutor>> {
-    let runtime: Arc<dyn JuglansRuntime> = Arc::new(Jug0Client::new(config));
+    let runtime: Arc<dyn JuglansRuntime> = if has_local_llm_provider(config) {
+        tracing::info!("Using local LLM provider (direct API)");
+        Arc::new(services::local_runtime::LocalRuntime::new_with_config(
+            &config.ai,
+        ))
+    } else {
+        Arc::new(Jug0Client::new(config))
+    };
 
-    let mut executor = WorkflowExecutor::new_with_debug(
-        Arc::new(prompt_registry),
-        Arc::new(agent_registry),
-        runtime,
-        config.debug.clone(),
-    )
-    .await;
+    let mut executor =
+        WorkflowExecutor::new_with_debug(Arc::new(prompt_registry), runtime, config.debug.clone())
+            .await;
 
     executor.apply_limits(&config.limits);
 
@@ -550,16 +575,10 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
             }
 
             let mut prompt_registry_inst = PromptRegistry::new();
-            let mut agent_registry_inst = AgentRegistry::new();
 
             let resolved_p_patterns = resolve_import_patterns_verbose(
                 &relative_base_offset,
                 &workflow_definition_obj.prompt_patterns,
-                at_base.as_deref(),
-            );
-            let resolved_a_patterns = resolve_import_patterns_verbose(
-                &relative_base_offset,
-                &workflow_definition_obj.agent_patterns,
                 at_base.as_deref(),
             );
             let resolved_t_patterns = resolve_import_patterns_verbose(
@@ -575,14 +594,10 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
             if !resolved_p_patterns.is_empty() {
                 prompt_registry_inst.load_from_paths(&resolved_p_patterns)?;
             }
-            if !resolved_a_patterns.is_empty() {
-                agent_registry_inst.load_from_paths(&resolved_a_patterns)?;
-            }
 
             let shared_executor_engine = build_executor(
                 &local_config,
                 prompt_registry_inst,
-                agent_registry_inst,
                 Some(&workflow_definition_obj),
             )
             .await?;
@@ -591,121 +606,39 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
             let input_value: Option<serde_json::Value> =
                 resolve_input_data(cli)?.and_then(|s| serde_json::from_str(&s).ok());
 
-            shared_executor_engine
+            let context = shared_executor_engine
                 .run_with_input(workflow_definition_obj, &local_config, input_value)
                 .await?;
-        }
 
-        "jgagent" => {
-            let agent_meta_definition = AgentParser::parse(&source_raw_text)?;
-
-            // Display welcome message
-            show_welcome(
-                &agent_meta_definition.name,
-                &agent_meta_definition.slug,
-                agent_meta_definition.source.is_some(),
-            );
-
-            let global_system_config = JuglansConfig::load()?;
-
-            // Compute base directory for @ path alias
-            let at_base: Option<PathBuf> = global_system_config
-                .paths
-                .base
-                .as_ref()
-                .map(|b| project_root_path.join(b));
-
-            let mut local_p_store = PromptRegistry::new();
-            let mut local_a_store = AgentRegistry::new();
-
-            // Register current agent into local registry so pure agents work correctly
-            local_a_store.register(agent_meta_definition.clone(), absolute_target_path.clone());
-
-            let mut active_workflow_ptr = None;
-
-            if let Some(wf_path_string) = &agent_meta_definition.source {
-                let wf_physical_path = relative_base_offset.join(wf_path_string);
-                let wf_source_data_str =
-                    fs::read_to_string(&wf_physical_path).with_context(|| {
-                        format!("Linked logic file missing: {:?}", wf_physical_path)
-                    })?;
-
-                let mut workflow_parsed_data = GraphParser::parse(&wf_source_data_str)?;
-                let wf_context_base_dir = wf_physical_path.parent().unwrap_or(Path::new("."));
-
-                // Resolve lib imports (extract function definitions into namespace)
-                let wf_canonical = fs::canonicalize(&wf_physical_path)
-                    .unwrap_or_else(|_| wf_physical_path.clone());
-                let mut import_stack = vec![wf_canonical.clone()];
-                resolver::resolve_lib_imports(
-                    &mut workflow_parsed_data,
-                    wf_context_base_dir,
-                    &mut import_stack,
-                    at_base.as_deref(),
-                )?;
-
-                // Resolve flow imports and merge subgraphs (compile-time graph merging)
-                import_stack = vec![wf_canonical];
-                resolver::resolve_flow_imports(
-                    &mut workflow_parsed_data,
-                    wf_context_base_dir,
-                    &mut import_stack,
-                    at_base.as_deref(),
-                )?;
-
-                let p_import_list = resolve_import_patterns_verbose(
-                    wf_context_base_dir,
-                    &workflow_parsed_data.prompt_patterns,
-                    at_base.as_deref(),
-                );
-                let a_import_list = resolve_import_patterns_verbose(
-                    wf_context_base_dir,
-                    &workflow_parsed_data.agent_patterns,
-                    at_base.as_deref(),
-                );
-                let t_import_list = resolve_import_patterns_verbose(
-                    wf_context_base_dir,
-                    &workflow_parsed_data.tool_patterns,
-                    at_base.as_deref(),
-                );
-
-                local_p_store.load_from_paths(&p_import_list)?;
-                local_a_store.load_from_paths(&a_import_list)?;
-
-                // Update workflow with resolved tool patterns
-                workflow_parsed_data.tool_patterns = t_import_list;
-
-                active_workflow_ptr = Some(Arc::new(workflow_parsed_data));
+            // Output result based on format
+            match cli.output_format.as_str() {
+                "json" => {
+                    let output = context
+                        .resolve_path("output")
+                        .ok()
+                        .flatten()
+                        .unwrap_or(serde_json::Value::Null);
+                    println!("{}", serde_json::to_string(&output)?);
+                }
+                "sse" => {
+                    let output = context
+                        .resolve_path("output")
+                        .ok()
+                        .flatten()
+                        .unwrap_or(serde_json::Value::Null);
+                    println!(
+                        "data: {}\n",
+                        serde_json::to_string(&serde_json::json!({
+                            "event": "done",
+                            "output": output
+                        }))?
+                    );
+                }
+                _ => {} // text: already printed by notify/chat during execution
             }
-
-            let primary_executor_ptr = build_executor(
-                &global_system_config,
-                local_p_store,
-                local_a_store,
-                active_workflow_ptr.as_ref(),
-            )
-            .await?;
-
-            let multi_turn_interaction_ctx = WorkflowContext::new();
-            let resolved_cli_input = resolve_input_data(cli)?;
-
-            // Set agent definition in context (persists across REPL iterations)
-            multi_turn_interaction_ctx
-                .set("input.agent".to_string(), json!(agent_meta_definition))?;
-
-            run_agent_loop(
-                primary_executor_ptr,
-                &agent_meta_definition.name,
-                &agent_meta_definition.slug,
-                &multi_turn_interaction_ctx,
-                active_workflow_ptr.as_ref(),
-                resolved_cli_input.as_deref(),
-                HashMap::new(),
-            )
-            .await?;
         }
 
-        "jgprompt" => {
+        "jgx" | "jgprompt" => {
             println!("🔍 Executing Local Render: {:?}", source_file_path);
             let prompt_resource_item = PromptParser::parse(&source_raw_text)?;
             let mut rendering_variables_ctx = prompt_resource_item.inputs.clone();
@@ -755,8 +688,7 @@ async fn handle_remote_agent(cli: &Cli, handle: &str) -> Result<()> {
     show_welcome(&agent_name, &agent_slug, false);
 
     // Build executor with empty registries (remote agent, no local files)
-    let executor_ptr =
-        build_executor(&config, PromptRegistry::new(), AgentRegistry::new(), None).await?;
+    let executor_ptr = build_executor(&config, PromptRegistry::new(), None).await?;
 
     let context = WorkflowContext::new();
     let resolved_cli_input = resolve_input_data(cli)?;
@@ -980,9 +912,8 @@ async fn handle_whoami(verbose: bool, check_connection: bool) -> Result<()> {
 
         // Resource paths (verbose mode)
         if verbose {
-            if !workspace.agents.is_empty() {
+            if !workspace.workflows.is_empty() || !workspace.prompts.is_empty() {
                 println!("\nResource Paths:");
-                println!("  Agents:      {}", workspace.agents.join(", "));
                 println!("  Workflows:   {}", workspace.workflows.join(", "));
                 println!("  Prompts:     {}", workspace.prompts.join(", "));
                 if !workspace.tools.is_empty() {
@@ -1067,10 +998,7 @@ fn handle_check(path: Option<&Path>, show_all: bool, output_format: &str) -> Res
         vec![
             check_path.join("**/*.jg").to_string_lossy().to_string(),
             check_path.join("**/*.jgflow").to_string_lossy().to_string(),
-            check_path
-                .join("**/*.jgagent")
-                .to_string_lossy()
-                .to_string(),
+            check_path.join("**/*.jgx").to_string_lossy().to_string(),
             check_path
                 .join("**/*.jgprompt")
                 .to_string_lossy()
@@ -1086,7 +1014,6 @@ fn handle_check(path: Option<&Path>, show_all: bool, output_format: &str) -> Res
 
     // Collect stats by type
     let mut workflow_count = 0;
-    let mut agent_count = 0;
     let mut prompt_count = 0;
 
     println!(
@@ -1103,7 +1030,7 @@ fn handle_check(path: Option<&Path>, show_all: bool, output_format: &str) -> Res
     }
 
     if all_paths.is_empty() {
-        println!("    \x1b[33mNo .jg/.jgflow, .jgagent, or .jgprompt files found\x1b[0m");
+        println!("    \x1b[33mNo .jg/.jgflow or .jgx files found\x1b[0m");
         return Ok(());
     }
 
@@ -1116,12 +1043,7 @@ fn handle_check(path: Option<&Path>, show_all: bool, output_format: &str) -> Res
         if let Ok(content) = fs::read_to_string(entry) {
             let ext = entry.extension().and_then(|s| s.to_str()).unwrap_or("");
             match ext {
-                "jgagent" => {
-                    if let Ok(agent) = AgentParser::parse(&content) {
-                        project_ctx.agent_slugs.insert(agent.slug);
-                    }
-                }
-                "jgprompt" => {
+                "jgx" | "jgprompt" => {
                     if let Ok(prompt) = PromptParser::parse(&content) {
                         project_ctx.prompt_slugs.insert(prompt.slug);
                     }
@@ -1380,47 +1302,7 @@ fn handle_check(path: Option<&Path>, show_all: bool, output_format: &str) -> Res
                         }
                     }
                 }
-                "jgagent" => {
-                    agent_count += 1;
-                    match AgentParser::parse(&content) {
-                        Ok(agent) => {
-                            valid_count += 1;
-                            if output_format == "json" {
-                                results.push(serde_json::json!({
-                                    "file": relative_path,
-                                    "type": "agent",
-                                    "slug": agent.slug,
-                                    "valid": true,
-                                    "errors": [],
-                                    "warnings": [],
-                                }));
-                            }
-                        }
-                        Err(e) => {
-                            error_count += 1;
-                            let full_err = e.to_string();
-                            println!(
-                                "    \x1b[1;31merror\x1b[0m[agent]: {} (parse failed)",
-                                relative_path
-                            );
-                            for line in full_err.lines() {
-                                println!("      \x1b[31m-->\x1b[0m {}", line);
-                            }
-
-                            if output_format == "json" {
-                                results.push(serde_json::json!({
-                                    "file": relative_path,
-                                    "type": "agent",
-                                    "slug": file_name,
-                                    "valid": false,
-                                    "errors": [{"code": "PARSE", "message": full_err}],
-                                    "warnings": [],
-                                }));
-                            }
-                        }
-                    }
-                }
-                "jgprompt" => {
+                "jgx" | "jgprompt" => {
                     prompt_count += 1;
                     match PromptParser::parse(&content) {
                         Ok(prompt) => {
@@ -1484,7 +1366,6 @@ fn handle_check(path: Option<&Path>, show_all: bool, output_format: &str) -> Res
                 "warnings": warning_count,
                 "by_type": {
                     "workflows": workflow_count,
-                    "agents": agent_count,
                     "prompts": prompt_count,
                 },
                 "results": results,
@@ -1510,9 +1391,6 @@ fn handle_check(path: Option<&Path>, show_all: bool, output_format: &str) -> Res
         let mut parts = Vec::new();
         if workflow_count > 0 {
             parts.push(format!("{} workflow(s)", workflow_count));
-        }
-        if agent_count > 0 {
-            parts.push(format!("{} agent(s)", agent_count));
         }
         if prompt_count > 0 {
             parts.push(format!("{} prompt(s)", prompt_count));
@@ -1559,20 +1437,18 @@ async fn handle_push(
         if let Some(ref workspace) = local_config.workspace {
             let patterns = match resource_type.as_deref() {
                 Some("workflow") => workspace.workflows.clone(),
-                Some("agent") => workspace.agents.clone(),
                 Some("prompt") => workspace.prompts.clone(),
                 Some("tool") => workspace.tools.clone(),
                 Some("all") | None => {
                     let mut all = Vec::new();
                     all.extend(workspace.workflows.clone());
-                    all.extend(workspace.agents.clone());
                     all.extend(workspace.prompts.clone());
                     all.extend(workspace.tools.clone());
                     all
                 }
                 _ => {
                     return Err(anyhow!(
-                        "Invalid resource type. Use: workflow, agent, prompt, tool, all"
+                        "Invalid resource type. Use: workflow, prompt, tool, all"
                     ))
                 }
             };
@@ -1609,16 +1485,14 @@ async fn handle_push(
         return Ok(());
     }
 
-    // Sort files by dependency order: workflows → prompts → agents
-    // This ensures agents can reference workflows that were just created
+    // Sort files by dependency order: workflows → prompts
     files_to_push.sort_by_key(|path| {
         let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
         match ext {
-            "jg" | "jgflow" => 0, // Workflows first (no dependencies)
-            "jgprompt" => 1,      // Prompts second (agents reference them)
-            "jgagent" => 2,       // Agents last (depend on workflows and prompts)
-            "json" => 3,          // Tool definitions last (local only)
-            _ => 4,
+            "jg" | "jgflow" => 0,    // Workflows first (no dependencies)
+            "jgx" | "jgprompt" => 1, // Prompts second
+            "json" => 2,             // Tool definitions last (local only)
+            _ => 3,
         }
     });
 
@@ -1628,8 +1502,7 @@ async fn handle_push(
         if let Some(ext) = file.extension().and_then(|s| s.to_str()) {
             match ext {
                 "jg" | "jgflow" => stats.workflows += 1,
-                "jgagent" => stats.agents += 1,
-                "jgprompt" => stats.prompts += 1,
+                "jgx" | "jgprompt" => stats.prompts += 1,
                 "json" => stats.tools += 1,
                 _ => {}
             }
@@ -1639,9 +1512,6 @@ async fn handle_push(
     println!("\n📂 Found resources:");
     if stats.workflows > 0 {
         println!("  📄 {} workflow(s)", stats.workflows);
-    }
-    if stats.agents > 0 {
-        println!("  👤 {} agent(s)", stats.agents);
     }
     if stats.prompts > 0 {
         println!("  📝 {} prompt(s)", stats.prompts);
@@ -1754,7 +1624,6 @@ async fn handle_push(
 #[derive(Default)]
 struct PushStats {
     workflows: usize,
-    agents: usize,
     prompts: usize,
     tools: usize,
 }
@@ -1785,10 +1654,9 @@ fn scan_directory(
 ) -> Result<()> {
     let extensions = match resource_type.as_deref() {
         Some("workflow") => vec!["jgflow"],
-        Some("agent") => vec!["jgagent"],
-        Some("prompt") => vec!["jgprompt"],
+        Some("prompt") => vec!["jgx", "jgprompt"],
         Some("tool") => vec!["json"],
-        Some("all") | None => vec!["jgflow", "jgagent", "jgprompt", "json"],
+        Some("all") | None => vec!["jgflow", "jgx", "jgprompt", "json"],
         _ => vec![],
     };
 
@@ -1828,15 +1696,7 @@ async fn push_single_file(
         .unwrap_or("unknown");
 
     match ext_str {
-        "jgagent" => {
-            let agent = AgentParser::parse(&raw_file_data)?;
-            let msg = jug0_client.apply_agent(&agent, force).await?;
-            Ok(PushResult::Success(format!(
-                "agent: {} - {}",
-                filename, msg
-            )))
-        }
-        "jgprompt" => {
+        "jgx" | "jgprompt" => {
             let msg = jug0_client
                 .apply_prompt(&PromptParser::parse(&raw_file_data)?, force)
                 .await?;
@@ -2035,9 +1895,9 @@ async fn handle_skills(action: &SkillsAction) -> Result<()> {
             for skill_entry in &fetched {
                 match skill_parser::load_skill_dir(&skill_entry.local_dir) {
                     Ok(skill) => {
-                        let jgprompt_content = skill_parser::skill_to_jgprompt(&skill);
-                        let output_path = prompts_dir.join(format!("{}.jgprompt", skill.name));
-                        fs::write(&output_path, &jgprompt_content)?;
+                        let jgx_content = skill_parser::skill_to_jgx(&skill);
+                        let output_path = prompts_dir.join(format!("{}.jgx", skill.name));
+                        fs::write(&output_path, &jgx_content)?;
                         println!("  ✓ Saved: {}", output_path.display());
                         success_count += 1;
                     }
@@ -2056,7 +1916,7 @@ async fn handle_skills(action: &SkillsAction) -> Result<()> {
                 prompts_dir.display()
             );
             println!(
-                "Use 'juglans push {}/*.jgprompt' to push to jug0.",
+                "Use 'juglans push {}/*.jgx' to push to jug0.",
                 prompts_dir.display()
             );
         }
@@ -2070,7 +1930,10 @@ async fn handle_skills(action: &SkillsAction) -> Result<()> {
             if let Ok(entries) = fs::read_dir(&prompts_dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    if path.extension().and_then(|e| e.to_str()) == Some("jgprompt") {
+                    if matches!(
+                        path.extension().and_then(|e| e.to_str()),
+                        Some("jgx" | "jgprompt")
+                    ) {
                         let name = path.file_stem().unwrap().to_string_lossy();
                         println!("  - {}", name);
                         found = true;
@@ -2078,11 +1941,11 @@ async fn handle_skills(action: &SkillsAction) -> Result<()> {
                 }
             }
             if !found {
-                println!("No .jgprompt files found in prompts/");
+                println!("No .jgx files found in prompts/");
             }
         }
         SkillsAction::Remove { name } => {
-            let path = PathBuf::from(format!("./prompts/{}.jgprompt", name));
+            let path = PathBuf::from(format!("./prompts/{}.jgx", name));
             if path.exists() {
                 fs::remove_file(&path)?;
                 println!("Removed: {}", path.display());
@@ -2369,6 +2232,7 @@ async fn handle_cron(file: &PathBuf, schedule_override: Option<&str>) -> Result<
             dry_run: false,
             output: None,
             output_format: "text".to_string(),
+            chat_id: None,
             verbose: false,
             info: false,
         };
@@ -2397,11 +2261,16 @@ async fn handle_test(path: Option<&Path>, filter: Option<&str>, format: &str) ->
 
     // Create runtime dependencies
     let config = JuglansConfig::load()?;
-    let runtime: Arc<dyn JuglansRuntime> = Arc::new(Jug0Client::new(&config));
+    let runtime: Arc<dyn JuglansRuntime> = if has_local_llm_provider(&config) {
+        Arc::new(services::local_runtime::LocalRuntime::new_with_config(
+            &config.ai,
+        ))
+    } else {
+        Arc::new(Jug0Client::new(&config))
+    };
     let prompt_registry = Arc::new(PromptRegistry::new());
-    let agent_registry = Arc::new(AgentRegistry::new());
 
-    let runner = TestRunner::new(runtime, prompt_registry, agent_registry);
+    let runner = TestRunner::new(runtime, prompt_registry);
 
     // Run all test files
     let mut all_results = Vec::new();

@@ -1,0 +1,49 @@
+# Declarative tool definition demo
+#
+# tools parameter accepts a map format:
+# {"tool_name": {"description": "...", "params": {...}, "handler": "func_name"}}
+#
+# The engine auto-generates OpenAI function calling schemas and dispatches
+# tool_call responses to the corresponding handler function.
+# Handlers MUST be functions [name()], not plain nodes — plain nodes with
+# no incoming edges are treated as entry points and auto-executed on startup.
+
+[my_tools]: {
+  "get_current_time": {
+    "description": "Get the current date and time in UTC.",
+    "params": {},
+    "handler": "handle_time"
+  },
+  "calculate": {
+    "description": "Evaluate a math expression using bc calculator. Supports +, -, *, /, ^, sqrt(), etc.",
+    "params": {
+      "expression": "string"
+    },
+    "handler": "handle_math"
+  }
+}
+
+# Handler functions — only invoked on tool_call, never auto-executed.
+# Each receives two arguments:
+#   name      — the tool name (e.g. "calculate")
+#   arguments — the LLM-provided arguments (e.g. {"expression": "2+2"})
+
+[handle_time(name, arguments)]: {
+  [run]: bash(command="date -u '+%Y-%m-%dT%H:%M:%SZ'")
+  output = run
+}
+
+[handle_math(name, arguments)]: {
+  [run]: bash(command="echo '" + arguments.expression + "' | bc -l")
+  output = run
+}
+
+# Ask the model — it will call the tools and get real results
+[ask]: chat(
+  message="What time is it now? Also calculate 355/113 for me.",
+  tools=my_tools
+)
+
+[done]: notify(message=output)
+
+[my_tools] -> [ask] -> [done]

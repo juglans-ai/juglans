@@ -1,0 +1,148 @@
+# finance.jg — Financial Data Library (yfinance-inspired)
+#
+# Instrument-centric API wrapping juglans-finance REST service.
+# Base URL: env FINANCE_API_URL, fallback https://finance.juglans.ai
+#
+# Usage:
+#   libs: ["finance"]
+#
+#   # ── ID builders (use in expressions) ──
+#   [_]: id = finance.stock("AAPL")          # → "US_STOCK:AAPL@USD_SPOT"
+#   [_]: id = finance.crypto("BTC")          # → "CRYPTO:BTC@USDT_SPOT"
+#   [_]: id = finance.crypto("ETH", "USD")   # → "CRYPTO:ETH@USD_SPOT"
+#
+#   # ── Data functions (use as node actions) ──
+#   [q]: finance.quote(id="US_STOCK:AAPL@USD_SPOT")
+#   [h]: finance.history(id="US_STOCK:AAPL@USD_SPOT", interval="1d")
+#   [i]: finance.info(id="US_STOCK:AAPL@USD_SPOT")
+#
+#   # ── OOP style (struct + methods) ──
+#   [aapl]: new finance.Instrument(id="US_STOCK:AAPL@USD_SPOT")
+#   [q]: aapl.quote()
+#   [h]: aapl.history(interval="1d")
+#
+#   # ── Module functions ──
+#   [r]: finance.search(q="AAPL", limit=5, asset_class="US_STOCK")
+#   [q]: finance.batch(ids=["US_STOCK:AAPL@USD_SPOT", "CRYPTO:BTC@USDT_SPOT"])
+#   [s]: finance.snapshot(asset_class="US_STOCK")
+#   [l]: finance.instruments(limit=50, asset_class="CRYPTO")
+#   [c]: finance.stats()
+
+# ── Instrument Struct (OOP style) ──
+
+[Instrument]: {
+  id: str
+  _base: str = env("FINANCE_API_URL", "https://finance.juglans.ai")
+}
+
+[Instrument.history(self, interval, from, to)]: {
+  _params = {"id": self.id, "interval": default(interval, "1d")}
+  _params = if(default(from, null) != null, merge(_params, {"from": str(from)}), _params)
+  _params = if(default(to, null) != null, merge(_params, {"to": str(to)}), _params)
+  _resp = http_request(url=self._base + "/api/v1/klines", method="GET", params=_params)
+  output = _resp.json
+}
+
+[Instrument.quote(self)]: {
+  _resp = http_request(url=self._base + "/api/v1/ticker", method="GET", params={"id": self.id})
+  output = _resp.json
+}
+
+[Instrument.info(self)]: {
+  _resp = http_request(url=self._base + "/api/v1/info", method="GET", params={"id": self.id})
+  output = _resp.json
+}
+
+# ── ID Builders (expression functions — use in var = finance.xxx("...")) ──
+
+[stock(symbol)]: output = "US_STOCK:" + symbol + "@USD_SPOT"
+
+[crypto(symbol, quote)]: output = "CRYPTO:" + symbol + "@" + default(quote, "USDT") + "_SPOT"
+
+[index(symbol)]: output = "INDEX:" + symbol + "@USD_SPOT"
+
+[forex(pair)]: output = "FOREX:" + pair + "@USD_SPOT"
+
+[hk_stock(symbol)]: output = "HK_STOCK:" + symbol + "@HKD_SPOT"
+
+[cn_stock(symbol)]: output = "CN_STOCK:" + symbol + "@CNY_SPOT"
+
+# ── Data Functions (node actions — use as [node]: finance.xxx(...)) ──
+
+# Historical OHLCV klines
+# interval: "1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"
+# from/to: unix timestamp in milliseconds
+[history(id, interval, from, to, base)]: {
+  _base = default(base, env("FINANCE_API_URL", "https://finance.juglans.ai"))
+  _params = {"id": id, "interval": default(interval, "1d")}
+  _params = if(default(from, null) != null, merge(_params, {"from": str(from)}), _params)
+  _params = if(default(to, null) != null, merge(_params, {"to": str(to)}), _params)
+  _resp = http_request(url=_base + "/api/v1/klines", method="GET", params=_params)
+  output = _resp.json
+}
+
+# Current ticker snapshot: lastPrice, priceChange, priceChangePercent, volume, turnover, marketCap
+[quote(id, base)]: {
+  _base = default(base, env("FINANCE_API_URL", "https://finance.juglans.ai"))
+  _resp = http_request(url=_base + "/api/v1/ticker", method="GET", params={"id": id})
+  output = _resp.json
+}
+
+# Instrument details: symbol, name, assetClass, market, quoteCurrency, productType
+[info(id, base)]: {
+  _base = default(base, env("FINANCE_API_URL", "https://finance.juglans.ai"))
+  _resp = http_request(url=_base + "/api/v1/info", method="GET", params={"id": id})
+  output = _resp.json
+}
+
+# ── Module-Level Functions ──
+
+# Search instruments by symbol or name
+[search(q, limit, asset_class, base)]: {
+  _base = default(base, env("FINANCE_API_URL", "https://finance.juglans.ai"))
+  _params = {}
+  _params = if(default(q, null) != null, merge(_params, {"q": q}), _params)
+  _params = if(default(limit, null) != null, merge(_params, {"limit": str(limit)}), _params)
+  _params = if(default(asset_class, null) != null, merge(_params, {"assetClass": asset_class}), _params)
+  _resp = http_request(url=_base + "/api/v1/instruments/search", method="GET", params=_params)
+  output = _resp.json
+}
+
+# Batch ticker quotes
+[batch(ids, base)]: {
+  _base = default(base, env("FINANCE_API_URL", "https://finance.juglans.ai"))
+  _resp = http_request(url=_base + "/api/v1/tickers", method="POST", json={"ids": ids})
+  output = _resp.json
+}
+
+# All tickers for an asset class
+[snapshot(asset_class, base)]: {
+  _base = default(base, env("FINANCE_API_URL", "https://finance.juglans.ai"))
+  _resp = http_request(url=_base + "/api/v1/snapshot", method="GET", params={"assetClass": default(asset_class, "US_STOCK")})
+  output = _resp.json
+}
+
+# Paginated instrument listing
+[instruments(page, limit, asset_class, base)]: {
+  _base = default(base, env("FINANCE_API_URL", "https://finance.juglans.ai"))
+  _params = {}
+  _params = if(default(page, null) != null, merge(_params, {"page": str(page)}), _params)
+  _params = if(default(limit, null) != null, merge(_params, {"limit": str(limit)}), _params)
+  _params = if(default(asset_class, null) != null, merge(_params, {"assetClass": asset_class}), _params)
+  _resp = http_request(url=_base + "/api/v1/instruments/list", method="GET", params=_params)
+  output = _resp.json
+}
+
+# Lookup single instrument by full ID (identifier must include market, e.g. US_STOCK:AAPL.NASDAQ@USD_SPOT)
+[lookup(id, base)]: {
+  _base = default(base, env("FINANCE_API_URL", "https://finance.juglans.ai"))
+  _resp = http_request(url=_base + "/api/v1/instruments/lookup", method="GET", params={"id": id})
+  output = _resp.json
+}
+
+# Instrument count by asset class
+[stats(base)]: {
+  _base = default(base, env("FINANCE_API_URL", "https://finance.juglans.ai"))
+  _resp = http_request(url=_base + "/api/v1/instruments/stats", method="GET")
+  output = _resp.json
+}

@@ -107,7 +107,7 @@ pub struct WorkflowGraph {
     pub entry_node: String,
     pub libs: Vec<String>,
     pub prompt_patterns: Vec<String>,
-    pub agent_patterns: Vec<String>,
+
     pub tool_patterns: Vec<String>,
     pub python_imports: Vec<String>,
     pub switch_routes: HashMap<String, SwitchRoute>,
@@ -142,7 +142,7 @@ pub struct Manifest {
     pub lib_imports: HashMap<String, String>,
     pub lib_auto_namespaces: HashSet<String>,
     pub prompt_patterns: Vec<String>,
-    pub agent_patterns: Vec<String>,
+
     pub tool_patterns: Vec<String>,
     pub python_imports: Vec<String>,
     pub flow_imports: HashMap<String, String>,
@@ -173,9 +173,6 @@ impl Manifest {
         }
         if !self.prompt_patterns.is_empty() {
             wf.prompt_patterns = self.prompt_patterns.clone();
-        }
-        if !self.agent_patterns.is_empty() {
-            wf.agent_patterns = self.agent_patterns.clone();
         }
         if !self.tool_patterns.is_empty() {
             wf.tool_patterns = self.tool_patterns.clone();
@@ -251,7 +248,6 @@ impl Default for WorkflowGraph {
             entry_node: String::new(),
             libs: Vec::new(),
             prompt_patterns: Vec::new(),
-            agent_patterns: Vec::new(),
             tool_patterns: Vec::new(),
             python_imports: Vec::new(),
             switch_routes: HashMap::new(),

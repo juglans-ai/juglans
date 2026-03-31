@@ -15,9 +15,8 @@ name = "My Workspace"
 members = ["u_demo"]
 
 # Resource paths (glob patterns supported)
-agents = ["agents/**/*.jgagent"]
 workflows = ["workflows/**/*.jg"]
-prompts = ["prompts/**/*.jgprompt"]
+prompts = ["prompts/**/*.jgx"]
 tools = ["tools/**/*.json"]
 
 # Exclude patterns
@@ -32,7 +31,7 @@ host = "127.0.0.1"
 port = 3000
 
 # [paths]
-# Enable @ path alias for imports (e.g. "@/prompts/*.jgprompt")
+# Enable @ path alias for imports (e.g. "@/prompts/*.jgx")
 # @ resolves to {project_root}/{base}
 # base = "."
 

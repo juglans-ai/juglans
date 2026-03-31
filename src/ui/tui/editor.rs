@@ -424,13 +424,6 @@ impl<'a> Widget for EditorWidget<'a> {
                 ),
                 Span::styled(" variants  ", Style::default().fg(self.theme.muted)),
                 Span::styled(
-                    "tab",
-                    Style::default()
-                        .fg(self.theme.fg)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(" agents  ", Style::default().fg(self.theme.muted)),
-                Span::styled(
                     "ctrl+p",
                     Style::default()
                         .fg(self.theme.fg)

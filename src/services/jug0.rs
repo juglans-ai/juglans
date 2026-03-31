@@ -10,7 +10,6 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use uuid::Uuid;
 
-use crate::core::agent_parser::AgentResource;
 use crate::core::graph::WorkflowGraph;
 use crate::core::jvalue::JValue;
 use crate::core::prompt_parser::PromptResource;
@@ -28,12 +27,6 @@ pub enum ChatOutput {
         _calls: Vec<Value>,
         _chat_id: String,
     },
-}
-
-// Response types for get_prompt_id / get_workflow_id
-#[derive(Deserialize)]
-struct IdResponse {
-    id: Uuid,
 }
 
 /// Resource info for listing
@@ -256,22 +249,6 @@ impl Jug0Client {
         Ok(agent)
     }
 
-    pub async fn get_prompt_id(&self, slug: &str) -> Result<Uuid> {
-        let url = self.build_resource_url(slug, "prompts");
-        let res = self
-            .build_auth_request(reqwest::Method::GET, &url)
-            .send()
-            .await?;
-        if !res.status().is_success() {
-            return Err(anyhow!(
-                "Remote Resource Not Found: Prompt '{}' is missing.",
-                slug
-            ));
-        }
-        let body: IdResponse = res.json().await?;
-        Ok(body.id)
-    }
-
     /// Generic upsert: GET by slug → PATCH by id → fallback POST to create.
     /// Returns a success message string.
     async fn upsert_resource(
@@ -367,62 +344,6 @@ impl Jug0Client {
         ))
     }
 
-    /// Upload a local file to jug0 and return the URL
-    pub async fn upload_file(&self, file_path: &std::path::Path) -> Result<String> {
-        let file_name = file_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("upload")
-            .to_string();
-
-        let data = tokio::fs::read(file_path)
-            .await
-            .map_err(|e| anyhow!("Failed to read file '{}': {}", file_path.display(), e))?;
-
-        let ext = file_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
-
-        let mime_type = match ext.as_str() {
-            "png" => "image/png",
-            "jpg" | "jpeg" => "image/jpeg",
-            "gif" => "image/gif",
-            "webp" => "image/webp",
-            "svg" => "image/svg+xml",
-            _ => "application/octet-stream",
-        };
-
-        let part = reqwest::multipart::Part::bytes(data)
-            .file_name(file_name.clone())
-            .mime_str(mime_type)?;
-
-        let form = reqwest::multipart::Form::new().part("file", part);
-
-        let url = format!("{}/api/upload", self.base_url);
-        let res = self
-            .build_auth_request(reqwest::Method::POST, &url)
-            .multipart(form)
-            .send()
-            .await?;
-
-        if !res.status().is_success() {
-            let status = res.status();
-            let error_text = res.text().await.unwrap_or_default();
-            return Err(anyhow!("Upload failed ({}): {}", status, error_text));
-        }
-
-        #[derive(Deserialize)]
-        struct UploadResponse {
-            url: String,
-        }
-
-        let resp: UploadResponse = res.json().await?;
-        info!("Uploaded {} → {}", file_name, resp.url);
-        Ok(resp.url)
-    }
-
     pub async fn apply_prompt(&self, prompt: &PromptResource, force: bool) -> Result<String> {
         let mut payload = json!({
             "name": prompt.name,
@@ -439,75 +360,6 @@ impl Jug0Client {
 
         self.upsert_resource(&prompt.slug, "prompts", payload, force)
             .await
-    }
-
-    pub async fn apply_agent(&self, agent: &AgentResource, force: bool) -> Result<String> {
-        let sys_prompt_id = if let Some(slug) = &agent.system_prompt_slug {
-            self.get_prompt_id(slug).await?
-        } else {
-            self.get_prompt_id("system-default").await?
-        };
-
-        let mut payload = json!({
-            "name": agent.name,
-            "description": agent.description,
-            "system_prompt_id": sys_prompt_id,
-            "default_model": agent.model,
-            "temperature": agent.temperature,
-            "skills": agent.skills,
-        });
-
-        if let Some(public) = agent.is_public {
-            payload["is_public"] = json!(public);
-        }
-
-        // Add username if present (auto-registers @handle in jug0)
-        if let Some(ref username) = agent.username {
-            payload["username"] = json!(username);
-        }
-
-        // Handle avatar: upload local file or use URL directly
-        if let Some(ref avatar_value) = agent.avatar {
-            let avatar_url = if avatar_value.starts_with("http") || avatar_value.starts_with("/") {
-                // Already a URL, use directly
-                avatar_value.clone()
-            } else {
-                // Local file path — upload it
-                let path = std::path::Path::new(avatar_value);
-                match self.upload_file(path).await {
-                    Ok(url) => url,
-                    Err(e) => {
-                        tracing::warn!(
-                            "Agent '{}': failed to upload avatar '{}': {}",
-                            agent.slug,
-                            avatar_value,
-                            e
-                        );
-                        avatar_value.clone()
-                    }
-                }
-            };
-            payload["avatar"] = json!(avatar_url);
-        }
-
-        // Add endpoint_url if provided (tells jug0 where to forward requests)
-        let endpoint_suffix = if let Some(ref ep) = agent.endpoint {
-            let base = ep.trim_end_matches('/');
-            let url = if base.ends_with("/api/chat") {
-                base.to_string()
-            } else {
-                format!("{}/api/chat", base)
-            };
-            payload["endpoint_url"] = json!(url);
-            format!(" (endpoint: {})", url)
-        } else {
-            String::new()
-        };
-
-        let result = self
-            .upsert_resource(&agent.slug, "agents", payload, force)
-            .await?;
-        Ok(format!("{}{}", result, endpoint_suffix))
     }
 
     /// Pull a resource from the server
@@ -546,7 +398,7 @@ impl Jug0Client {
                     serde_json::to_string_pretty(&inputs)?,
                     content
                 );
-                (formatted, "jgprompt")
+                (formatted, "jgx")
             }
             "agent" => {
                 let name_jv = jb.get("name");
@@ -555,10 +407,10 @@ impl Jug0Client {
                 let model = model_jv.str_or("gpt-4o");
                 let temp = jb.get("temperature").f64().unwrap_or(0.7);
                 let formatted = format!(
-                    "slug: \"{}\"\nname: \"{}\"\nmodel: \"{}\"\ntemperature: {}\nsystem_prompt: \"\"",
-                    slug, name, model, temp
+                    "[agent]: {{\n  \"name\": \"{}\",\n  \"model\": \"{}\",\n  \"temperature\": {},\n  \"system_prompt\": \"\"\n}}\n\n[start]: chat(agent=agent, message=input.message)\n[agent] -> [start]",
+                    name, model, temp
                 );
-                (formatted, "jgagent")
+                (formatted, "jg")
             }
             "workflow" => {
                 let def_jv = jb.get("definition");
@@ -1024,7 +876,7 @@ impl JuglansRuntime for Jug0Client {
                 return Err(anyhow!(
                     "Agent configuration is incomplete. Missing required field: slug\n\n\
                     💡 This usually means:\n\
-                       1. The agent file (.jgagent) is missing required field: slug\n\
+                       1. The agent map is missing the 'name' field\n\
                        2. Or the jug0 server endpoint is incorrect\n\
                        3. Current jug0 endpoint: {}\n\
                        4. For local development, add [jug0] section in juglans.toml:\n\
@@ -1103,7 +955,7 @@ impl JuglansRuntime for Jug0Client {
         let mut stream = res.bytes_stream().eventsource();
         let mut text_acc = String::new();
         let mut final_id = chat_id.unwrap_or_default();
-        let mut tool_calls = Vec::new();
+        let tool_calls = Vec::new();
 
         while let Some(event_res) = stream.next().await {
             let ev = event_res.map_err(|e| anyhow!("Stream Interrupted: {}", e))?;
@@ -1184,13 +1036,29 @@ impl JuglansRuntime for Jug0Client {
                             }
                         }
 
+                        // Collect dynamic tools from handler (injected by frontend via tool-result)
+                        let pending_tools = handler.take_pending_tools();
+                        info!(
+                            "🔧 [Tool Handler] pending_tools: {:?}",
+                            pending_tools.as_ref().map(|t| t.len())
+                        );
+
                         // POST /api/chat/tool-result -> jug0 channel receives -> SSE stream resumes
+                        let mut post_body = json!({"call_id": call_id, "results": results});
+                        if let Some(tools) = pending_tools {
+                            if !tools.is_empty() {
+                                info!("🔧 [Tool Handler] Forwarding {} dynamic tool definitions to jug0", tools.len());
+                                post_body["tools"] = json!(tools);
+                            }
+                        } else {
+                            info!("🔧 [Tool Handler] No pending tools to forward");
+                        }
                         let post_result = self
                             .build_auth_request(
                                 reqwest::Method::POST,
                                 &format!("{}/api/chat/tool-result", self.base_url),
                             )
-                            .json(&json!({"call_id": call_id, "results": results}))
+                            .json(&post_body)
                             .send()
                             .await;
 
@@ -1222,9 +1090,10 @@ impl JuglansRuntime for Jug0Client {
                         }
                         continue; // SSE stream resumes, continue reading
                     } else {
-                        // No handler -> break and return ToolCalls (backward compatible with old callers)
-                        tool_calls.extend(tools);
-                        break;
+                        // No handler -> forward tool_call event to frontend as-is (client tools)
+                        if let Some(sender) = &meta_sender {
+                            let _ = sender.send(d.clone());
+                        }
                     }
                 }
                 continue;

@@ -66,7 +66,11 @@ libs: ["std/mcps.jg"]
 
 ```juglans
 libs: ["std/mcps.jg"]
-agents: ["./agents/*.jgagent"]
+
+[code_reviewer]: {
+  "model": "gpt-4o",
+  "system_prompt": "You are a thorough code reviewer."
+}
 
 # Connect to GitHub and filesystem MCP servers
 [github]: mcps.MCP(name="github", url="http://localhost:3001/mcp/github", token=input.github_token)
@@ -74,7 +78,7 @@ agents: ["./agents/*.jgagent"]
 
 # AI agent with access to all MCP tools
 [review]: chat(
-  agent="code-reviewer",
+  agent=code_reviewer,
   message="Review PR #" + str(input.pr_number) + " in " + input.repo,
   tools=mcp_tools,
   on_tool=[mcps.handle]
