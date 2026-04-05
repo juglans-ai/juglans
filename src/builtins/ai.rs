@@ -13,8 +13,8 @@ use tracing::{debug, error, info, warn};
 use crate::core::context::WorkflowContext;
 use crate::core::graph::WorkflowGraph;
 use crate::core::prompt_parser::PromptParser;
+use crate::services::interface::ChatOutput;
 use crate::services::interface::{ChatRequest, ChatToolHandler, JuglansRuntime};
-use crate::services::jug0::ChatOutput;
 use crate::services::prompt_loader::PromptRegistry;
 
 lazy_static! {
@@ -764,9 +764,17 @@ impl Tool for Chat {
             .unwrap_or_else(|| "text".to_string());
 
         // Parse inline agent map: agent param may be a JSON object (from Literal node)
+        // When referenced via node output, the value is wrapped as {"output": {...}} — unwrap it.
         let inline_agent: Option<Value> = serde_json::from_str::<Value>(agent_param)
             .ok()
-            .filter(|v| v.is_object());
+            .filter(|v| v.is_object())
+            .map(|v| {
+                if let Some(inner) = v.get("output").filter(|o| o.is_object()) {
+                    inner.clone()
+                } else {
+                    v
+                }
+            });
 
         // Extract tools from inline agent config (serialized back to string for downstream parsing)
         let inline_agent_tools: Option<String> =
@@ -954,11 +962,33 @@ impl Tool for Chat {
 
         let history_param = params.get("history").map(|s| s.as_str());
 
-        let chat_messages_buffer = vec![json!({
+        // Build message buffer: prepend history messages if provided as JSON array
+        let mut chat_messages_buffer: Vec<Value> = if let Some(history_str) = history_param {
+            if let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(history_str) {
+                arr.into_iter()
+                    .filter_map(|m| {
+                        let role = m.get("role")?.as_str()?;
+                        let content = m.get("content")?.as_str()?;
+                        Some(json!({
+                            "type": "text",
+                            "role": role,
+                            "content": content
+                        }))
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+
+        // Append current user message
+        chat_messages_buffer.push(json!({
             "type": "text",
             "role": "user",
             "content": user_message_body
-        })];
+        }));
 
         let active_session_id = if let Some(explicit_id) = params.get("chat_id") {
             if explicit_id.starts_with("[Missing:") || explicit_id.trim().is_empty() {
@@ -1289,7 +1319,7 @@ impl MemorySearch {
 #[async_trait]
 impl Tool for MemorySearch {
     fn name(&self) -> &str {
-        "memory_search"
+        "jug0.memory_search"
     }
 
     async fn execute(
@@ -1332,7 +1362,7 @@ impl WebSearch {
 #[async_trait]
 impl Tool for WebSearch {
     fn name(&self) -> &str {
-        "web_search"
+        "jug0.web_search"
     }
 
     async fn execute(
@@ -1366,7 +1396,7 @@ impl VectorCreateSpace {
 #[async_trait]
 impl Tool for VectorCreateSpace {
     fn name(&self) -> &str {
-        "vector_create_space"
+        "jug0.vector_create_space"
     }
 
     async fn execute(
@@ -1411,7 +1441,7 @@ impl VectorUpsert {
 #[async_trait]
 impl Tool for VectorUpsert {
     fn name(&self) -> &str {
-        "vector_upsert"
+        "jug0.vector_upsert"
     }
 
     async fn execute(
@@ -1458,7 +1488,7 @@ impl VectorSearch {
 #[async_trait]
 impl Tool for VectorSearch {
     fn name(&self) -> &str {
-        "vector_search"
+        "jug0.vector_search"
     }
 
     async fn execute(
@@ -1506,7 +1536,7 @@ impl VectorListSpaces {
 #[async_trait]
 impl Tool for VectorListSpaces {
     fn name(&self) -> &str {
-        "vector_list_spaces"
+        "jug0.vector_list_spaces"
     }
 
     async fn execute(
@@ -1533,7 +1563,7 @@ impl VectorDeleteSpace {
 #[async_trait]
 impl Tool for VectorDeleteSpace {
     fn name(&self) -> &str {
-        "vector_delete_space"
+        "jug0.vector_delete_space"
     }
 
     async fn execute(
@@ -1564,7 +1594,7 @@ impl VectorDelete {
 #[async_trait]
 impl Tool for VectorDelete {
     fn name(&self) -> &str {
-        "vector_delete"
+        "jug0.vector_delete"
     }
 
     async fn execute(
@@ -1611,7 +1641,7 @@ impl History {
 #[async_trait]
 impl Tool for History {
     fn name(&self) -> &str {
-        "history"
+        "jug0.history"
     }
 
     async fn execute(

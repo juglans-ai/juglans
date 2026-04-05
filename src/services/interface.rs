@@ -1,10 +1,21 @@
 // src/services/interface.rs
-use crate::services::jug0::ChatOutput;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
+
+/// Chat output type, distinguishing final text from tool call requests
+#[derive(Debug)]
+pub enum ChatOutput {
+    /// Final reply text
+    Final { text: String, chat_id: String },
+    /// Tool call request initiated by AI
+    ToolCalls {
+        _calls: Vec<Value>,
+        _chat_id: String,
+    },
+}
 
 /// Tool execution callback -- provided by the caller, invoked inline when runtime.chat() receives a tool_call event
 #[async_trait]

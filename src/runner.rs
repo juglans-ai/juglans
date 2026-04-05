@@ -9,6 +9,7 @@
 // # });
 // ```
 
+use crate::core::context::WorkflowEvent;
 use crate::core::parser::GraphParser;
 use crate::core::resolver;
 use crate::core::validator::WorkflowValidator;
@@ -22,6 +23,7 @@ use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio::sync::mpsc;
 
 /// Run a .jg workflow file with optional JSON input. Returns the final `output` value.
 ///
@@ -78,6 +80,37 @@ impl RunBuilder {
 
     /// Execute the workflow and return the full WorkflowContext.
     pub async fn run_context(self, input: Option<Value>) -> Result<WorkflowContext> {
+        self.run_context_inner(input, None).await
+    }
+
+    /// Execute the workflow with streaming events.
+    ///
+    /// Returns `(rx, join_handle)` where `rx` receives real-time `WorkflowEvent`s
+    /// (including `Token` for streamed AI output) and `join_handle` resolves to the
+    /// final output value once the workflow completes.
+    pub fn run_stream(
+        self,
+        input: Option<Value>,
+    ) -> Result<(
+        mpsc::UnboundedReceiver<WorkflowEvent>,
+        tokio::task::JoinHandle<Result<Value>>,
+    )> {
+        let (tx, rx) = mpsc::unbounded_channel::<WorkflowEvent>();
+
+        let handle = tokio::spawn(async move {
+            let ctx = self.run_context_inner(input, Some(tx)).await?;
+            Ok(ctx.resolve_path("output")?.unwrap_or(Value::Null))
+        });
+
+        Ok((rx, handle))
+    }
+
+    /// Shared implementation for `run_context` and `run_stream`.
+    async fn run_context_inner(
+        self,
+        input: Option<Value>,
+        sender: Option<mpsc::UnboundedSender<WorkflowEvent>>,
+    ) -> Result<WorkflowContext> {
         let _guard = SetCwd::new(&self.project_root)?;
 
         let file_parent = self.file_path.parent().unwrap_or(Path::new("."));
@@ -175,10 +208,29 @@ impl RunBuilder {
             .get_registry()
             .set_executor(Arc::downgrade(&executor));
 
-        // 6. Execute
-        let context = executor
-            .run_with_input(workflow, &self.config, input)
-            .await?;
+        // 6. Create context — with or without event sender
+        let context = match sender {
+            Some(tx) => WorkflowContext::with_sender(tx),
+            None => WorkflowContext::new(),
+        };
+
+        // Inject juglans.toml configuration into $config
+        if let Ok(config_value) = serde_json::to_value(&self.config) {
+            context.set("config".to_string(), config_value)?;
+        }
+
+        // Set input data to ctx.input
+        if let Some(input_val) = input {
+            if let Some(obj) = input_val.as_object() {
+                for (key, val) in obj {
+                    context.set(format!("input.{}", key), val.clone())?;
+                }
+            }
+            context.set("input".to_string(), input_val)?;
+        }
+
+        // 7. Execute
+        executor.execute_graph(workflow, &context).await?;
 
         Ok(context)
     }

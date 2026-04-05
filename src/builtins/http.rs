@@ -7,7 +7,6 @@
 
 use super::Tool;
 use crate::core::context::WorkflowContext;
-use crate::core::graph::NodeType;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -52,39 +51,25 @@ pub struct InlineRoute {
     pub handler: String,
 }
 
-/// Scan workflow graph for _deco_N nodes and extract route table
+/// Scan workflow for route declarations: function annotations (new) + _deco_N nodes (legacy).
 pub fn extract_routes_from_graph(workflow: &crate::core::graph::WorkflowGraph) -> Vec<InlineRoute> {
     let mut routes = Vec::new();
-    for (node_id, &node_idx) in &workflow.node_map {
-        if !node_id.starts_with("_deco_") {
-            continue;
-        }
-        let node = &workflow.graph[node_idx];
-        if let NodeType::Task(action) = &node.node_type {
-            // action.name is like "api.post" or "api.get"
-            let method = action.name.rsplit('.').next().unwrap_or("").to_uppercase();
-            if !["GET", "POST", "PUT", "DELETE", "PATCH"].contains(&method.as_str()) {
-                continue;
-            }
-            let path = action
-                .params
-                .get("arg0")
-                .map(|s| s.trim_matches('"').to_string())
-                .unwrap_or_default();
-            let handler = action
-                .params
-                .get("handler")
-                .map(|s| s.trim_matches('"').to_string())
-                .unwrap_or_default();
-            if !path.is_empty() && !handler.is_empty() {
+
+    // New: scan function annotations for route metadata (from @get/@post decorators)
+    for (fn_name, fn_def) in &workflow.functions {
+        if let Some(route_val) = fn_def.annotations.get("route") {
+            let method = route_val["method"].as_str().unwrap_or("GET").to_uppercase();
+            let path = route_val["path"].as_str().unwrap_or("/").to_string();
+            if !path.is_empty() {
                 routes.push(InlineRoute {
                     method,
                     path,
-                    handler,
+                    handler: fn_name.clone(),
                 });
             }
         }
     }
+
     routes
 }
 

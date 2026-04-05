@@ -3,6 +3,7 @@
 
 pub mod feishu;
 pub mod telegram;
+pub mod wechat;
 
 use anyhow::{anyhow, Result};
 use futures::StreamExt;
@@ -19,6 +20,7 @@ use crate::core::parser::GraphParser;
 use crate::services::config::JuglansConfig;
 use crate::services::interface::JuglansRuntime;
 use crate::services::jug0::Jug0Client;
+use crate::services::local_runtime::LocalRuntime;
 use crate::services::prompt_loader::PromptRegistry;
 
 /// Standardized platform event envelope.
@@ -34,6 +36,8 @@ pub struct PlatformMessage {
     /// Convenience field: message text (populated for message events, empty for others)
     pub text: String,
     pub username: Option<String>,
+    /// Platform identifier: "telegram" | "feishu" | "wechat" | "web"
+    pub platform: String,
 }
 
 /// Bot reply
@@ -78,6 +82,7 @@ pub async fn chat_via_jug0(
         "chat_id": format!("@{}", agent_slug),
         "messages": [{"type": "text", "role": "user", "content": &message.text}],
         "variables": {
+            "platform": &message.platform,
             "platform_user_id": &message.platform_user_id,
             "platform_chat_id": &message.platform_chat_id,
         },
@@ -238,8 +243,12 @@ pub async fn run_agent_for_message(
     let wf_content = fs::read_to_string(&wf_path)
         .map_err(|e| anyhow!("Workflow File Error: {} (tried {:?})", e, wf_path))?;
 
-    // 2. Create runtime + executor
-    let runtime: Arc<dyn JuglansRuntime> = Arc::new(Jug0Client::new(config));
+    // 2. Create runtime + executor (prefer local providers if configured)
+    let runtime: Arc<dyn JuglansRuntime> = if config.ai.has_providers() {
+        Arc::new(LocalRuntime::new_with_config(&config.ai))
+    } else {
+        Arc::new(Jug0Client::new(config))
+    };
 
     let mut prompt_registry = PromptRegistry::new();
     let _ = prompt_registry.load_from_paths(&[
@@ -268,8 +277,10 @@ pub async fn run_agent_for_message(
         }
     }
 
-    // Parse workflow
-    let parsed_workflow = Some(Arc::new(GraphParser::parse(&wf_content)?));
+    // Parse workflow + expand decorators
+    let mut wf_graph = GraphParser::parse(&wf_content)?;
+    crate::core::macro_expand::expand_decorators(&mut wf_graph)?;
+    let parsed_workflow = Some(Arc::new(wf_graph));
 
     // Initialize Python runtime + load workflow tools (requires &mut self, must be before Arc)
     if let Some(ref wf) = parsed_workflow {
@@ -290,6 +301,8 @@ pub async fn run_agent_for_message(
     let ctx = WorkflowContext::with_sender(tx.clone());
 
     // Set standardized event input
+    ctx.set("input.platform".into(), json!(message.platform))
+        .ok();
     ctx.set("input.event_type".into(), json!(message.event_type))
         .ok();
     ctx.set("input.event_data".into(), message.event_data.clone())

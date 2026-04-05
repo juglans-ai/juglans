@@ -393,6 +393,15 @@ async fn handle_serve_request(
         );
     }
 
+    // Macro expand: process @decorator applications
+    if let Err(e) = crate::core::macro_expand::expand_decorators(&mut graph) {
+        error!("❌ [Serve] Macro expand error: {}", e);
+        return error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("Macro expand error: {}", e),
+        );
+    }
+
     // Pre-flight validation
     let validation = WorkflowValidator::validate(&graph);
     if !validation.is_valid {
@@ -1440,6 +1449,19 @@ async fn handle_chat(
                 ctx.set(format!("input.{}", k), v.clone()).ok();
             }
         }
+    }
+
+    // Set defaults for API callers (e.g. clawdbot) if not already set
+    if ctx.resolve_path("input.platform").ok().flatten().is_none() {
+        ctx.set("input.platform".into(), json!("web")).ok();
+    }
+    if ctx
+        .resolve_path("input.event_type")
+        .ok()
+        .flatten()
+        .is_none()
+    {
+        ctx.set("input.event_type".into(), json!("message")).ok();
     }
 
     // Build chat parameters

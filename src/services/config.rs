@@ -151,6 +151,7 @@ pub struct PathsConfig {
 pub struct BotConfig {
     pub telegram: Option<TelegramBotConfig>,
     pub feishu: Option<FeishuBotConfig>,
+    pub wechat: Option<WechatBotConfig>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -183,6 +184,12 @@ pub struct FeishuBotConfig {
     /// Execution mode: "local" (local execution) or "jug0" (SSE client), auto-detected from jug0.base_url by default
     #[serde(default)]
     pub mode: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct WechatBotConfig {
+    #[serde(default = "default_bot_agent")]
+    pub agent: String,
 }
 
 fn default_bot_agent() -> String {
@@ -365,6 +372,7 @@ impl JuglansConfig {
             let bot = self.bot.get_or_insert(BotConfig {
                 telegram: None,
                 feishu: None,
+                wechat: None,
             });
             let feishu = bot.feishu.get_or_insert_with(|| FeishuBotConfig {
                 app_id: None,
@@ -388,6 +396,7 @@ impl JuglansConfig {
             let bot = self.bot.get_or_insert(BotConfig {
                 telegram: None,
                 feishu: None,
+                wechat: None,
             });
             let tg = bot.telegram.get_or_insert_with(|| TelegramBotConfig {
                 token: String::new(),

@@ -35,7 +35,7 @@ async fn test_deepseek_chat() {
 
     let result = runtime.chat(req).await;
     match result {
-        Ok(juglans::services::jug0::ChatOutput::Final { text, .. }) => {
+        Ok(juglans::services::interface::ChatOutput::Final { text, .. }) => {
             println!("DeepSeek response: {}", text);
             assert!(
                 text.to_lowercase().contains("hello") || text.to_lowercase().contains("juglans"),

@@ -9,6 +9,7 @@ pub mod jvalue;
 pub mod jwl_lexer;
 pub mod jwl_parser;
 pub mod jwl_token;
+pub mod macro_expand;
 pub mod manifest_parser;
 pub mod parser;
 pub mod prompt_parser;

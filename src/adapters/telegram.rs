@@ -98,6 +98,7 @@ impl TelegramWebhookHandler {
             platform_chat_id: chat_id.to_string(),
             text,
             username,
+            platform: "telegram".into(),
         };
 
         // Process asynchronously (don't block webhook response)
@@ -281,6 +282,7 @@ pub async fn start(config: JuglansConfig, project_root: PathBuf, agent_slug: Str
                         platform_chat_id: chat_id.to_string(),
                         text,
                         username,
+                        platform: "telegram".into(),
                     };
 
                     // Send "typing" status

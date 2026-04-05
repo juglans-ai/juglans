@@ -1,20 +1,13 @@
-# decorator_simple_test.jg — 验证 @ 装饰器解析和编译期展开
+# decorator_simple_test.jg — 验证新 @decorator 语法
 
-[Router]: {
-  routes: str = "[]"
-}
-
-[Router.register(self, path, handler)]: {
-  print(message="Registered: " + path + " -> " + handler)
-}
-
-[router]: new Router()
-
-@router.register("/api/hello")
+@get("/api/hello")
 [hello()]: {
-  yield { type: "content", text: "hello from decorated function" }
+  response(status=200, body={"message": "hello from decorated function"})
 }
 
-[start]: print(message="done")
+@post("/api/echo")
+[echo()]: {
+  response(status=200, body=input.body)
+}
 
-[_deco_0] -> [start]
+[start]: serve()

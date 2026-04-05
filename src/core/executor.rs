@@ -1071,11 +1071,6 @@ impl WorkflowExecutor {
                     return false;
                 }
 
-                // Skip _deco_* nodes (decorator route registrations)
-                if workflow.graph[**idx].id.starts_with("_deco_") {
-                    return false;
-                }
-
                 // Check if all predecessors have completed
                 let all_predecessors_done = workflow
                     .graph
@@ -1565,10 +1560,6 @@ impl WorkflowExecutor {
                 .node_indices()
                 .filter(|&idx| {
                     let id = &workflow.graph[idx].id;
-                    // _deco_* nodes are always excluded (decorator route registrations)
-                    if id.starts_with("_deco_") {
-                        return true;
-                    }
                     // test_* ROOT nodes (in_degree=0) are excluded
                     graph::is_test_node_id(id)
                         && workflow
@@ -1604,7 +1595,7 @@ impl WorkflowExecutor {
                     .iter()
                     .filter(|(idx, &degree)| {
                         let id = &workflow.graph[**idx].id;
-                        degree == 0 && !graph::is_test_node_id(id) && !id.starts_with("_deco_")
+                        degree == 0 && !graph::is_test_node_id(id)
                     })
                     .map(|(&idx, _)| idx)
                     .collect()

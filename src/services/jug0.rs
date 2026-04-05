@@ -14,20 +14,8 @@ use crate::core::graph::WorkflowGraph;
 use crate::core::jvalue::JValue;
 use crate::core::prompt_parser::PromptResource;
 use crate::services::config::JuglansConfig;
-use crate::services::interface::{ChatRequest, JuglansRuntime};
+use crate::services::interface::{ChatOutput, ChatRequest, JuglansRuntime};
 use tracing::{error, info};
-
-/// Chat output type, distinguishing final text from tool call requests
-#[derive(Debug)]
-pub enum ChatOutput {
-    /// Final reply text
-    Final { text: String, chat_id: String },
-    /// Tool call request initiated by AI
-    ToolCalls {
-        _calls: Vec<Value>,
-        _chat_id: String,
-    },
-}
 
 /// Resource info for listing
 #[derive(Debug)]

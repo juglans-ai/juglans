@@ -28,6 +28,9 @@ pub mod registry;
 pub mod runtime;
 
 #[cfg(not(target_arch = "wasm32"))]
+pub mod providers;
+
+#[cfg(not(target_arch = "wasm32"))]
 pub mod lsp;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -59,7 +62,8 @@ pub use core::executor::WorkflowExecutor;
 pub use services::interface::JuglansRuntime;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use services::jug0::{ChatOutput, Jug0Client};
+pub use services::interface::ChatOutput;
+pub use services::jug0::Jug0Client;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use services::prompt_loader::PromptRegistry;

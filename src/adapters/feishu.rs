@@ -323,6 +323,7 @@ impl FeishuWebhookHandler {
             platform_chat_id: chat_id.clone(),
             text,
             username: None,
+            platform: "feishu".into(),
         };
 
         let result = if self.use_jug0 {
@@ -465,6 +466,7 @@ async fn start_webhook_mode(
             platform_chat_id: "cli".to_string(),
             text: text.to_string(),
             username: None,
+            platform: "feishu".into(),
         };
 
         match run_agent_for_message(&config, &project_root, &agent_slug, &msg, None).await {
@@ -769,6 +771,7 @@ async fn handle_message_event(state: &FeishuState, event: &Value) -> Result<()> 
         platform_chat_id: chat_id.clone(),
         text,
         username: None,
+        platform: "feishu".into(),
     };
 
     // Execute agent -- choose local execution or SSE client based on mode
@@ -948,6 +951,7 @@ async fn handle_card_action_event(state: &FeishuState, event: &Value) -> Result<
         platform_chat_id: chat_id.to_string(),
         text: String::new(),
         username: None,
+        platform: "feishu".into(),
     };
 
     // Route through workflow (workflow switch routes to Python direct calls)

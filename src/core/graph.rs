@@ -122,6 +122,8 @@ pub struct WorkflowGraph {
     pub classes: HashMap<String, Arc<ClassDef>>,
     // External method definitions, merged into ClassDef.methods after parsing (type_name, method_name, FunctionDef)
     pub pending_methods: Vec<(String, String, FunctionDef)>,
+    /// Decorator applications recorded during parsing, processed in macro expand phase.
+    pub decorator_applications: Vec<DecoratorApplication>,
 }
 
 /// .jgflow Manifest — pure configuration struct, no DAG
@@ -185,6 +187,35 @@ impl Manifest {
 pub struct FunctionDef {
     pub params: Vec<String>,
     pub body: Arc<WorkflowGraph>,
+    /// Compile-time annotations added by decorator macros (e.g., route metadata).
+    #[allow(dead_code)]
+    pub annotations: HashMap<String, Value>,
+}
+
+/// A decorator application recorded during parsing, expanded in the macro expand phase.
+#[derive(Debug, Clone)]
+pub struct DecoratorApplication {
+    /// Decorator function name (e.g., "get", "auth")
+    pub decorator_fn: String,
+    /// Positional arguments to the decorator (e.g., ["\"/health\""])
+    pub args: Vec<String>,
+    /// The target node/function ID being decorated
+    pub target_node_id: String,
+}
+
+/// A graph fragment representing a decorated function's AST.
+/// Passed to decorator functions as the last parameter.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct GraphFragment {
+    /// The decorated function's ID
+    pub id: String,
+    /// Function parameters
+    pub params: Vec<String>,
+    /// Function body sub-graph
+    pub body: Arc<WorkflowGraph>,
+    /// Metadata annotations (populated by decorator functions)
+    pub annotations: HashMap<String, Value>,
 }
 
 /// Class field definition: name + optional type annotation + optional default value expression
@@ -259,6 +290,7 @@ impl Default for WorkflowGraph {
             lib_auto_namespaces: HashSet::new(),
             classes: HashMap::new(),
             pending_methods: Vec::new(),
+            decorator_applications: Vec::new(),
         }
     }
 }

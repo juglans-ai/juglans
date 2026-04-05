@@ -1,16 +1,15 @@
 // src/services/local_runtime.rs
 //
-// LocalRuntime: calls LLM providers directly via jug0's provider layer.
-// No jug0 server needed — uses API keys configured locally.
+// LocalRuntime: calls LLM providers directly via the providers layer.
+// No cloud server needed — uses API keys configured locally.
 
+use crate::providers::llm::{Message, ToolCallChunk};
+use crate::providers::ProviderFactory;
 use crate::services::config::AiConfig;
-use crate::services::interface::{ChatRequest, JuglansRuntime};
-use crate::services::jug0::ChatOutput;
+use crate::services::interface::{ChatOutput, ChatRequest, JuglansRuntime};
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::StreamExt;
-use jug0::providers::llm::{Message, ToolCallChunk};
-use jug0::providers::ProviderFactory;
 use serde_json::{json, Value};
 
 pub struct LocalRuntime {
@@ -33,7 +32,7 @@ impl LocalRuntime {
     }
 
     pub fn new_with_config(ai: &AiConfig) -> Self {
-        use jug0::providers::llm::factory::LlmProviderConfig;
+        use crate::providers::llm::factory::LlmProviderConfig;
         let configs: std::collections::HashMap<String, LlmProviderConfig> = ai
             .providers
             .iter()

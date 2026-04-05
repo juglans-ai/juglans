@@ -5,6 +5,7 @@ mod adapters;
 mod builtins;
 mod core;
 mod lsp;
+mod providers;
 mod registry;
 mod runtime;
 mod services;
@@ -88,26 +89,6 @@ enum Commands {
     Init { name: String },
     /// Retrieve MCP tool schemas
     Install,
-    /// Push resources to the server
-    Push {
-        /// Files or directories to push (if empty, uses workspace config)
-        paths: Vec<PathBuf>,
-        /// Force overwrite if resource already exists
-        #[arg(long)]
-        force: bool,
-        /// Preview changes without pushing
-        #[arg(long)]
-        dry_run: bool,
-        /// Filter by resource type (workflow, prompt, tool, all)
-        #[arg(long, short = 't')]
-        r#type: Option<String>,
-        /// Recursively scan directories
-        #[arg(long, short = 'r')]
-        recursive: bool,
-        /// Override workflow endpoint URL (e.g. https://agent.juglans.ai)
-        #[arg(long)]
-        endpoint: Option<String>,
-    },
     /// Validate syntax of .jg/.jgflow, .jgx files (like cargo check)
     Check {
         /// Path to check (file or directory, defaults to current directory)
@@ -126,31 +107,6 @@ enum Commands {
         #[arg(long)]
         host: Option<String>,
     },
-    /// Pull resources from the server
-    Pull {
-        /// Resource slug to pull
-        slug: String,
-        /// Resource type (prompt, workflow)
-        #[arg(long, short = 't')]
-        r#type: String,
-        /// Output directory
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-    },
-    /// List resources on the server
-    List {
-        /// Resource type to list (prompt, workflow)
-        #[arg(long, short = 't')]
-        r#type: Option<String>,
-    },
-    /// Delete a resource from the server
-    Delete {
-        /// Resource slug to delete
-        slug: String,
-        /// Resource type (prompt, workflow)
-        #[arg(long, short = 't')]
-        r#type: String,
-    },
     /// Show current account information
     Whoami {
         /// Show detailed information
@@ -160,9 +116,21 @@ enum Commands {
         #[arg(long)]
         check_connection: bool,
     },
-    /// Start bot adapter (telegram, feishu)
+    /// Start unified server: web API + all configured bot adapters
+    Serve {
+        /// Port for the web server
+        #[arg(short, long)]
+        port: Option<u16>,
+        /// Host address to bind
+        #[arg(long)]
+        host: Option<String>,
+        /// Workflow entry file (default: main.jg in project root)
+        #[arg(long)]
+        entry: Option<PathBuf>,
+    },
+    /// Start bot adapter (telegram, feishu, wechat)
     Bot {
-        /// Platform: telegram, feishu
+        /// Platform: telegram, feishu, wechat
         platform: String,
         /// Agent slug to use (overrides config default)
         #[arg(long)]
@@ -558,6 +526,9 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
                 at_base.as_deref(),
             )?;
 
+            // Macro expand: process @decorator applications
+            core::macro_expand::expand_decorators(&mut workflow_definition_obj)?;
+
             // Pre-flight validation (after imports resolved)
             let validation = WorkflowValidator::validate(&workflow_definition_obj);
             if !validation.is_valid {
@@ -781,6 +752,7 @@ async fn handle_install() -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn handle_pull(slug: &str, resource_type: &str, output_dir: Option<&Path>) -> Result<()> {
     let local_config = JuglansConfig::load()?;
     let jug0_client = Jug0Client::new(&local_config);
@@ -798,6 +770,7 @@ async fn handle_pull(slug: &str, resource_type: &str, output_dir: Option<&Path>)
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn handle_list(resource_type: Option<&str>) -> Result<()> {
     let local_config = JuglansConfig::load()?;
     let jug0_client = Jug0Client::new(&local_config);
@@ -814,6 +787,7 @@ async fn handle_list(resource_type: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn handle_delete(slug: &str, resource_type: &str) -> Result<()> {
     let local_config = JuglansConfig::load()?;
     let jug0_client = Jug0Client::new(&local_config);
@@ -1417,6 +1391,7 @@ fn handle_check(path: Option<&Path>, show_all: bool, output_format: &str) -> Res
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn handle_push(
     paths: Vec<PathBuf>,
     force: bool,
@@ -1621,6 +1596,7 @@ async fn handle_push(
     Ok(())
 }
 
+#[allow(dead_code)]
 #[derive(Default)]
 struct PushStats {
     workflows: usize,
@@ -1628,11 +1604,13 @@ struct PushStats {
     tools: usize,
 }
 
+#[allow(dead_code)]
 enum PushResult {
     Success(String),
     Skipped(String),
 }
 
+#[allow(dead_code)]
 fn should_exclude(path: &Path, exclude_patterns: &[String]) -> bool {
     let path_str = path.to_str().unwrap_or("");
     for pattern in exclude_patterns {
@@ -1646,6 +1624,7 @@ fn should_exclude(path: &Path, exclude_patterns: &[String]) -> bool {
     false
 }
 
+#[allow(dead_code)]
 fn scan_directory(
     dir: &Path,
     files: &mut Vec<PathBuf>,
@@ -1680,6 +1659,7 @@ fn scan_directory(
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn push_single_file(
     file: &Path,
     jug0_client: &Jug0Client,
@@ -1831,13 +1811,94 @@ async fn handle_bot(
             });
             adapters::feishu::start(config, project_root, agent_slug, feishu_port).await?;
         }
+        "wechat" | "weixin" => {
+            adapters::wechat::start(config, project_root, agent_override).await?;
+        }
         _ => {
             return Err(anyhow!(
-                "Unknown platform '{}'. Supported: telegram, feishu",
+                "Unknown platform '{}'. Supported: telegram, feishu, wechat",
                 platform
             ));
         }
     }
+    Ok(())
+}
+
+async fn handle_serve(
+    host: Option<String>,
+    port: Option<u16>,
+    entry: Option<PathBuf>,
+) -> Result<()> {
+    let config = JuglansConfig::load()?;
+    let current_dir = env::current_dir()?;
+    let project_root = find_project_root(&current_dir)?;
+
+    // Resolve entry workflow
+    let entry_file = entry.unwrap_or_else(|| project_root.join("main.jg"));
+    if !entry_file.exists() {
+        return Err(anyhow!(
+            "Entry workflow not found: {:?}\nCreate a main.jg in your project root, or specify --entry <file>",
+            entry_file
+        ));
+    }
+
+    let entry_slug = entry_file
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("main")
+        .to_string();
+
+    // Determine host/port
+    let final_host = host.unwrap_or_else(|| config.server.host.clone());
+    let final_port = port.unwrap_or(config.server.port);
+
+    let mut active_platforms: Vec<String> = vec![];
+
+    // Start bot adapters in background based on config
+    if let Some(ref bot) = config.bot {
+        // Telegram long-poll
+        if bot.telegram.is_some() && config.server.endpoint_url.is_none() {
+            let tg_config = config.clone();
+            let tg_root = project_root.clone();
+            let tg_slug = entry_slug.clone();
+            active_platforms.push("telegram (polling)".into());
+            tokio::spawn(async move {
+                if let Err(e) = adapters::telegram::start(tg_config, tg_root, tg_slug).await {
+                    tracing::error!("Telegram bot error: {}", e);
+                }
+            });
+        }
+
+        // WeChat long-poll
+        if bot.wechat.is_some() {
+            let wx_config = config.clone();
+            let wx_root = project_root.clone();
+            let wx_slug = Some(entry_slug.clone());
+            active_platforms.push("wechat (polling)".into());
+            tokio::spawn(async move {
+                if let Err(e) = adapters::wechat::start(wx_config, wx_root, wx_slug).await {
+                    tracing::error!("WeChat bot error: {}", e);
+                }
+            });
+        }
+    }
+
+    // Print banner
+    println!("──────────────────────────────────────────────────");
+    println!("  Juglans Serve");
+    println!("  Listening on: http://{}:{}", final_host, final_port);
+    println!("  Project: {}", project_root.display());
+    println!("  Entry: {}", entry_file.display());
+    println!("  Endpoints:");
+    println!("    POST /api/chat");
+    if !active_platforms.is_empty() {
+        println!("  Platforms: {}", active_platforms.join(", "));
+    }
+    println!("──────────────────────────────────────────────────");
+
+    // Start web server (blocks)
+    web_server::start_web_server(final_host, final_port, project_root).await?;
+
     Ok(())
 }
 
@@ -2320,24 +2381,6 @@ async fn main() -> Result<()> {
         match sub_command_enum {
             Commands::Init { name } => handle_init(name)?,
             Commands::Install => handle_install().await?,
-            Commands::Push {
-                paths,
-                force,
-                dry_run,
-                r#type,
-                recursive,
-                endpoint,
-            } => {
-                handle_push(
-                    paths.clone(),
-                    *force,
-                    *dry_run,
-                    r#type.clone(),
-                    *recursive,
-                    endpoint.clone(),
-                )
-                .await?
-            }
             Commands::Check { path, all, format } => {
                 handle_check(path.as_deref(), *all, format)?;
             }
@@ -2361,24 +2404,14 @@ async fn main() -> Result<()> {
 
                 web_server::start_web_server(final_host, final_port, root).await?;
             }
-            Commands::Pull {
-                slug,
-                r#type,
-                output,
-            } => {
-                handle_pull(slug, r#type, output.as_deref()).await?;
-            }
-            Commands::List { r#type } => {
-                handle_list(r#type.as_deref()).await?;
-            }
-            Commands::Delete { slug, r#type } => {
-                handle_delete(slug, r#type).await?;
-            }
             Commands::Whoami {
                 verbose,
                 check_connection,
             } => {
                 handle_whoami(*verbose, *check_connection).await?;
+            }
+            Commands::Serve { port, host, entry } => {
+                handle_serve(host.clone(), *port, entry.clone()).await?;
             }
             Commands::Bot {
                 platform,

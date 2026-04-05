@@ -505,9 +505,11 @@ impl<'a> JwlParser<'a> {
     /// Parse `@dotted.path(args...) \n [node_id]: body` and expand at compile time.
     /// Generates a synthetic registration node `[_deco_N]: path(args..., handler="node_id")`.
     fn parse_decorator_and_node(&mut self, wf: &mut WorkflowGraph) -> Result<()> {
+        use crate::core::graph::DecoratorApplication;
+
         self.expect(&TokenKind::At)?;
 
-        // Parse dotted path: e.g. api.post
+        // Parse dotted path: e.g. api.post or bare name: get
         let mut path = self.expect_ident_or_keyword()?;
         while matches!(self.peek_kind(), TokenKind::Dot) {
             self.advance(); // consume .
@@ -534,13 +536,31 @@ impl<'a> JwlParser<'a> {
 
         self.skip_newlines();
 
-        // Next must be [node_def]
-        if !matches!(self.peek_kind(), TokenKind::LBracket) {
+        // Next must be [node_def] or another @decorator
+        if !matches!(self.peek_kind(), TokenKind::LBracket | TokenKind::At) {
             let tok = self.peek().clone();
-            return Err(self.error_at(tok.span, "Expected [node_def] after @decorator".to_string()));
+            return Err(self.error_at(
+                tok.span,
+                "Expected [node_def] or @decorator after @decorator".to_string(),
+            ));
         }
 
-        // Peek the node_id from [node_id] before parsing (works for both nodes and function defs)
+        // If next is another @decorator, parse it first (stacking)
+        if matches!(self.peek_kind(), TokenKind::At) {
+            // Record this decorator, then parse the next one which will parse the node
+            // We need to peek ahead to find the target node ID
+            let target_id = self.peek_decorated_target_id()?;
+
+            wf.decorator_applications.push(DecoratorApplication {
+                decorator_fn: path,
+                args: deco_args,
+                target_node_id: target_id,
+            });
+
+            return self.parse_decorator_and_node(wf);
+        }
+
+        // Peek the node_id from [node_id] before parsing
         let decorated_node_id = if self.pos + 1 < self.tokens.len() {
             match &self.tokens[self.pos + 1].kind {
                 TokenKind::Ident(s) => s.clone(),
@@ -552,42 +572,64 @@ impl<'a> JwlParser<'a> {
             return Err(anyhow!("Unexpected end of file after @decorator"));
         };
 
+        // Reject dotted paths — @instance.method is no longer supported
+        if path.contains('.') {
+            return Err(anyhow!(
+                "@{} is not supported. Use @function_name(args) instead of @instance.method(args).",
+                path
+            ));
+        }
+
         // Parse the decorated node normally
         self.parse_node_def(wf)?;
 
-        // Generate synthetic registration node: [_deco_N]: path(args..., handler="node_id")
-        let deco_counter = wf
-            .node_map
-            .keys()
-            .filter(|k| k.starts_with("_deco_"))
-            .count();
-        let deco_node_id = format!("_deco_{}", deco_counter);
-
-        // Build params: positional args as arg0, arg1, ... + handler=node_id
-        let mut params = HashMap::new();
-        for (i, arg) in deco_args.iter().enumerate() {
-            params.insert(format!("arg{}", i), arg.clone());
-        }
-        params.insert("handler".to_string(), format!("\"{}\"", decorated_node_id));
-
-        let deco_node = NodeType::Task(Action {
-            name: path.clone(),
-            params,
+        // Record as DecoratorApplication for macro expand phase
+        wf.decorator_applications.push(DecoratorApplication {
+            decorator_fn: path,
+            args: deco_args,
+            target_node_id: decorated_node_id,
         });
-        self.add_node(wf, &deco_node_id, deco_node)?;
-
-        // Auto-insert edge: instance_node -> _deco_N (ensures instance is created first)
-        if let Some(dot_pos) = path.find('.') {
-            let instance_name = &path[..dot_pos];
-            if let (Some(&from_idx), Some(&to_idx)) = (
-                wf.node_map.get(instance_name),
-                wf.node_map.get(&deco_node_id),
-            ) {
-                wf.graph.add_edge(from_idx, to_idx, Edge::default());
-            }
-        }
 
         Ok(())
+    }
+
+    /// Peek ahead through stacked @decorators to find the ultimate target [node_id].
+    fn peek_decorated_target_id(&self) -> Result<String> {
+        let mut pos = self.pos;
+        while pos < self.tokens.len() {
+            match &self.tokens[pos].kind {
+                TokenKind::At => {
+                    pos += 1; // skip @
+                              // Skip decorator path and args
+                    while pos < self.tokens.len() {
+                        match &self.tokens[pos].kind {
+                            TokenKind::LBracket | TokenKind::At => break,
+                            TokenKind::Newline => {
+                                pos += 1;
+                                continue;
+                            }
+                            _ => pos += 1,
+                        }
+                    }
+                }
+                TokenKind::LBracket => {
+                    // Found the target node
+                    if pos + 1 < self.tokens.len() {
+                        if let TokenKind::Ident(s) = &self.tokens[pos + 1].kind {
+                            return Ok(s.clone());
+                        }
+                    }
+                    return Err(anyhow!("Expected identifier after '[' in decorated node"));
+                }
+                TokenKind::Newline => {
+                    pos += 1;
+                }
+                _ => {
+                    pos += 1;
+                }
+            }
+        }
+        Err(anyhow!("Could not find target node for stacked decorators"))
     }
 
     // ==================== Node definition ====================
@@ -924,20 +966,34 @@ impl<'a> JwlParser<'a> {
     fn parse_param_pairs(&mut self, context_id: &str) -> Result<HashMap<String, String>> {
         self.expect(&TokenKind::LParen)?;
         let mut params = HashMap::new();
+        let mut positional_index: usize = 0;
         self.skip_newlines();
         while !matches!(self.peek_kind(), TokenKind::RParen | TokenKind::Eof) {
-            let key = self.expect_ident_or_keyword()?;
-            self.expect(&TokenKind::Eq)?;
-            self.skip_newlines();
-            let value = self.capture_param_value()?;
-            if params.contains_key(&key) {
-                return Err(anyhow!(
-                    "Duplicate parameter '{}' in node [{}]",
-                    key,
-                    context_id
-                ));
+            // Check if this is a named parameter (ident =) or a positional argument
+            let is_named = self.is_named_param();
+
+            if is_named {
+                // Named: key=value
+                let key = self.expect_ident_or_keyword()?;
+                self.expect(&TokenKind::Eq)?;
+                self.skip_newlines();
+                let value = self.capture_param_value()?;
+                if params.contains_key(&key) {
+                    return Err(anyhow!(
+                        "Duplicate parameter '{}' in node [{}]",
+                        key,
+                        context_id
+                    ));
+                }
+                params.insert(key, value);
+            } else {
+                // Positional: capture as arg0, arg1, ...
+                let value = self.capture_param_value()?;
+                let key = format!("arg{}", positional_index);
+                params.insert(key, value);
+                positional_index += 1;
             }
-            params.insert(key, value);
+
             self.skip_newlines();
             if matches!(self.peek_kind(), TokenKind::Comma) {
                 self.advance();
@@ -946,6 +1002,17 @@ impl<'a> JwlParser<'a> {
         }
         self.expect(&TokenKind::RParen)?;
         Ok(params)
+    }
+
+    /// Check if the current position is a named parameter (ident followed by =).
+    fn is_named_param(&self) -> bool {
+        if self.pos + 1 >= self.tokens.len() {
+            return false;
+        }
+        matches!(
+            (&self.tokens[self.pos].kind, &self.tokens[self.pos + 1].kind),
+            (TokenKind::Ident(_), TokenKind::Eq)
+        )
     }
 
     // ==================== Compound block (func_body) ====================
@@ -1230,6 +1297,7 @@ impl<'a> JwlParser<'a> {
         Ok(FunctionDef {
             params,
             body: Arc::new(body),
+            annotations: HashMap::new(),
         })
     }
 
