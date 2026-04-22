@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.14] - 2026-04-22
+
+### Fixed
+
+- **Library consumers can now build from crates.io.** Moved the two `include_dir!` statics in `src/templates.rs` (`PROJECT_TEMPLATE_DIR`, `DOCS_DIR`) behind a new `cli` Cargo feature. `Cargo.toml` excludes `examples/` and `docs/` from the published tarball to keep the crate small, but `include_dir!` runs at compile time and fails on missing directories — so library consumers with `default-features = false, features = ["native"]` could not compile 0.2.13 after downloading from crates.io. The `juglans` binary requires `["native", "cli"]`; default features are `["native", "device", "cli"]` so `cargo build`/`cargo install juglans` still works end-to-end.
+
 ## [0.2.13] - 2026-04-22
 
 ### Added

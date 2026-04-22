@@ -2476,7 +2476,7 @@ dependencies = [
 
 [[package]]
 name = "juglans"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "aes",
  "anyhow",

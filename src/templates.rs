@@ -1,6 +1,10 @@
 // src/templates.rs
-
-use include_dir::{include_dir, Dir};
+//
+// TPL_TOML is a plain string and always available. The two `include_dir!`
+// statics are gated behind the `cli` feature because they compile-in the
+// `examples/` and `docs/` directories, which `Cargo.toml` excludes from
+// the published crate tarball — library consumers (default-features = false)
+// would otherwise fail to build after downloading from crates.io.
 
 // Added [server] and workspace resource configuration sections
 pub const TPL_TOML: &str = r#"[account]
@@ -39,5 +43,9 @@ port = 3000
 DEBUG = "true"
 "#;
 
-pub static PROJECT_TEMPLATE_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/examples");
-pub static DOCS_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/docs");
+#[cfg(feature = "cli")]
+pub static PROJECT_TEMPLATE_DIR: include_dir::Dir =
+    include_dir::include_dir!("$CARGO_MANIFEST_DIR/examples");
+
+#[cfg(feature = "cli")]
+pub static DOCS_DIR: include_dir::Dir = include_dir::include_dir!("$CARGO_MANIFEST_DIR/docs");
