@@ -93,29 +93,29 @@ Calling builtin tools in a Workflow:
 [step1] -> [step2] -> [step3]
 ```
 
-## Juglans and Jug0
+## Local-First Architecture
 
 ```
-┌─────────────────┐     ┌─────────────────┐
-│    Juglans      │     │      Jug0       │
-│   (Local CLI)   │────>│   (Backend)     │
-│                 │     │                 │
-│  - DSL parsing  │     │  - LLM calls    │
-│  - DAG execution│     │  - Resource     │
-│  - Local dev    │     │    storage      │
-│                 │     │  - API service  │
-└─────────────────┘     └─────────────────┘
+┌──────────────────────────────────────────┐
+│              Juglans                     │
+│            (Local Engine)                │
+│                                          │
+│  - DSL parsing (.jg / .jgx files)        │
+│  - DAG execution                         │
+│  - Tool calls: builtin / Python / MCP    │
+│  - Direct LLM provider calls             │
+│    (OpenAI, Anthropic, DeepSeek, Qwen,   │
+│     Gemini, xAI, Ollama, ...)            │
+└──────────────────────────────────────────┘
 ```
 
-- **Juglans** is the local engine: parses the DSL, executes the DAG, and manages tool calls
-- **Jug0** is the backend platform: provides the LLM API, cloud resource storage, and user management
-- During local development you can work offline with local files; for production deployment, resources are managed through Jug0
+Juglans runs entirely on your machine. It parses workflows, executes the DAG, and calls LLM providers directly using API keys you configure either in `juglans.toml` or via environment variables. There is no remote backend dependency — no cloud server, no proxy, no account required to run a workflow.
 
-Resource referencing: define agents inline, or use `owner/slug` for remote resources:
+Resource referencing: define agents inline (recommended) or import them from a library file via `libs:`:
 
 ```juglans
 [my_agent]: {
-  "model": "gpt-4o",
+  "model": "gpt-4o-mini",
   "system_prompt": "You are a helpful assistant."
 }
 
@@ -142,7 +142,7 @@ Agents are defined as inline JSON map nodes in `.jg` files. For reuse across wor
 
 ```juglans
 # agents.jg — shared agent library
-[assistant]: { "model": "gpt-4o", "system_prompt": "You are helpful." }
+[assistant]: { "model": "gpt-4o-mini", "system_prompt": "You are helpful." }
 
 # main.jg
 libs: ["./agents.jg"]
@@ -153,8 +153,8 @@ libs: ["./agents.jg"]
 
 ## Next Steps
 
-- [Workflow Syntax](./workflow-syntax.md) -- Full syntax reference
+- [Workflow Syntax](../reference/workflow-spec.md) -- Full syntax reference
 - [Agent Syntax](../reference/agent-spec.md) -- Inline agent configuration
-- [Prompt Syntax](./prompt-syntax.md) -- Template syntax
+- [Prompt Syntax](../reference/prompt-spec.md) -- Template syntax
 - [Connect AI](./connect-ai.md) -- Connecting to AI models
 - [Debugging](./debugging.md) -- Debugging and troubleshooting

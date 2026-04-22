@@ -8,7 +8,7 @@ An agent is a regular node whose body is a JSON object containing model configur
 
 ```juglans
 [my_agent]: {
-  "model": "gpt-4o",
+  "model": "gpt-4o-mini",
   "system_prompt": "You are a helpful assistant.",
   "temperature": 0.7
 }
@@ -25,7 +25,7 @@ The node ID becomes the agent's identifier. Reference it by name (without quotes
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `model` | string | No | `"gpt-4o"` | LLM model name |
+| `model` | string | No | `"gpt-4o-mini"` | LLM model name |
 | `system_prompt` | string | No | -- | System prompt content |
 | `temperature` | number | No | `0.7` | Sampling temperature (0.0 -- 2.0) |
 | `tools` | JSON array / string list | No | -- | Default tool configuration |
@@ -41,18 +41,26 @@ The LLM model to use. Any model string supported by your backend.
 
 ```juglans
 [fast_agent]: {
-  "model": "gpt-4o"
+  "model": "gpt-4o-mini"
 }
 ```
 
 Common model values:
 
+Current model lineup (April 2026):
+
 | Provider | Models |
 |---|---|
-| OpenAI | `gpt-4o`, `gpt-4-turbo`, `gpt-3.5-turbo` |
-| Anthropic | `claude-3-opus`, `claude-3-sonnet`, `claude-3-haiku` |
-| DeepSeek | `deepseek-chat`, `deepseek-coder` |
-| Local (Ollama) | `llama3`, `codellama`, `mistral` |
+| OpenAI | `gpt-5.4`, `gpt-5.4-pro`, `gpt-5.4-thinking`, `gpt-5`, `gpt-4o-mini` (note: `gpt-4o`, `gpt-4.1`, `o4-mini` were retired from the API in February 2026) |
+| Anthropic | `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5` |
+| Gemini | `gemini-3.1-pro`, `gemini-3.1-flash`, `gemini-3.1-flash-lite`, `gemini-2.5-pro` |
+| DeepSeek | `deepseek-chat` (V3.2), `deepseek-reasoner` (V3.2 thinking) |
+| Qwen | `qwen3-max`, `qwen3.5-plus`, `qwen3.5` |
+| xAI | `grok-4`, `grok-4-latest`, `grok-3` |
+| ByteDance Ark | `byteplus/seed-1-8-251228`, `byteplus/seed-2-0-lite-260228` |
+| Local (OpenAI-compatible) | set `[ai.providers.openai] base_url` to a local endpoint (Ollama, LM Studio, vLLM) and use models like `openai/llama3` |
+
+Model IDs evolve quickly — consult each provider's docs for the current catalog before pinning a production model.
 
 ### temperature
 
@@ -60,7 +68,7 @@ Controls randomness of outputs. Lower values produce more deterministic results.
 
 ```juglans
 [precise_agent]: {
-  "model": "gpt-4o",
+  "model": "gpt-4o-mini",
   "temperature": 0.0
 }
 ```
@@ -78,7 +86,7 @@ The system prompt that defines the agent's behavior.
 
 ```juglans
 [simple]: {
-  "model": "gpt-4o",
+  "model": "gpt-4o-mini",
   "system_prompt": "You are a helpful assistant."
 }
 ```
@@ -87,7 +95,7 @@ For multi-line system prompts, use standard JSON string escaping (`\n`):
 
 ```juglans
 [detailed]: {
-  "model": "gpt-4o",
+  "model": "gpt-4o-mini",
   "system_prompt": "You are a professional analyst.\n\nYour responsibilities:\n- Analyze data accurately\n- Provide clear insights\n- Use proper formatting"
 }
 ```
@@ -98,12 +106,12 @@ Default tools attached to every `chat()` request for this agent.
 
 ```juglans
 [dev_agent]: {
-  "model": "gpt-4o",
+  "model": "gpt-4o-mini",
   "tools": ["devtools"]
 }
 ```
 
-Built-in slug `"devtools"` provides 6 developer tools: `read_file`, `write_file`, `edit_file`, `glob`, `grep`, `bash`.
+Built-in slug `"devtools"` is auto-populated with every builtin that implements `schema()` — this includes the 6 developer tools (`read_file`, `write_file`, `edit_file`, `glob`, `grep`, `bash`), `http_request`, and any other schema-registered builtins.
 
 ### mcp
 
@@ -111,7 +119,7 @@ List of MCP (Model Context Protocol) server names. Servers must be configured in
 
 ```juglans
 [mcp_agent]: {
-  "model": "gpt-4o",
+  "model": "gpt-4o-mini",
   "mcp": ["filesystem", "github"]
 }
 ```
@@ -124,7 +132,7 @@ List of MCP (Model Context Protocol) server names. Servers must be configured in
 
 ```juglans
 [assistant]: {
-  "model": "gpt-4o",
+  "model": "gpt-4o-mini",
   "temperature": 0.7,
   "system_prompt": "You are a helpful, harmless, and honest AI assistant.\n\nGuidelines:\n- Be concise and clear\n- Admit when you don't know something\n- Ask clarifying questions when needed"
 }
@@ -158,7 +166,7 @@ List of MCP (Model Context Protocol) server names. Servers must be configured in
 [minimal] -> [ask]
 ```
 
-All fields are optional. Omitted fields use defaults (`model: "gpt-4o"`, `temperature: 0.7`).
+All fields are optional. Omitted fields use defaults (`model: "gpt-4o-mini"`, `temperature: 0.7`).
 
 ---
 
@@ -168,7 +176,7 @@ All fields are optional. Omitted fields use defaults (`model: "gpt-4o"`, `temper
 
 ```juglans
 [assistant]: {
-  "model": "gpt-4o",
+  "model": "gpt-4o-mini",
   "system_prompt": "You are a helpful assistant."
 }
 
@@ -180,7 +188,7 @@ All fields are optional. Omitted fields use defaults (`model: "gpt-4o"`, `temper
 
 ```juglans
 [router]: {
-  "model": "gpt-4o",
+  "model": "gpt-4o-mini",
   "temperature": 0.0,
   "system_prompt": "Classify user intent. Return JSON with 'intent' field."
 }
@@ -193,7 +201,7 @@ All fields are optional. Omitted fields use defaults (`model: "gpt-4o"`, `temper
 
 ```juglans
 [router]: {
-  "model": "gpt-4o",
+  "model": "gpt-4o-mini",
   "temperature": 0.0,
   "system_prompt": "Classify intent as 'technical' or 'general'. Return JSON."
 }
@@ -205,7 +213,7 @@ All fields are optional. Omitted fields use defaults (`model: "gpt-4o"`, `temper
 }
 
 [assistant]: {
-  "model": "gpt-4o",
+  "model": "gpt-4o-mini",
   "system_prompt": "You are a general assistant."
 }
 
@@ -233,12 +241,12 @@ Define agents in a library file and import them with `libs:`:
 ```juglans
 # agents.jg — agent library
 [assistant]: {
-  "model": "gpt-4o",
+  "model": "gpt-4o-mini",
   "system_prompt": "You are a helpful assistant."
 }
 
 [classifier]: {
-  "model": "gpt-4o",
+  "model": "gpt-4o-mini",
   "temperature": 0.0,
   "system_prompt": "Classify user intent. Return JSON."
 }

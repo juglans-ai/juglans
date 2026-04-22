@@ -16,7 +16,9 @@ juglans <COMMAND> [OPTIONS]
 | `--verbose`, `-v` | Verbose output |
 | `--dry-run` | Parse only, do not execute |
 | `--output <FILE>` | Write result to file |
-| `--output-format <FMT>` | Output format: `text` (default), `json` |
+| `--output-format <FMT>` | Output format: `text` (default), `json`, `sse` |
+| `--chat-id <ID>` | Chat session ID for multi-turn conversation |
+| `--info` | Show prompt info without executing |
 
 ## Command Summary
 
@@ -24,15 +26,12 @@ juglans <COMMAND> [OPTIONS]
 |---------|-------------|
 | `juglans <file>` | Execute .jg / .jgx file |
 | `juglans init` | Create a new project scaffold |
-| `juglans install` | Fetch MCP tool schemas |
+| `juglans install` | Install package dependencies from jgpackage.toml |
 | `juglans check` | Validate file syntax |
 | `juglans web` | Start local development web server |
-| `juglans push` | Push resources to Jug0 server |
-| `juglans pull` | Pull resources from Jug0 server |
-| `juglans list` | List remote resources |
-| `juglans delete` | Delete a remote resource |
 | `juglans whoami` | Show account and config info |
-| `juglans bot` | Start bot adapter (Telegram, Feishu) |
+| `juglans serve` | Start unified server (web API + all configured bot adapters) |
+| `juglans bot` | Start bot adapter (Telegram, Feishu, WeChat) |
 | `juglans chat` | Launch interactive chat TUI |
 | `juglans test` | Run tests (test_* nodes in .jg files) |
 | `juglans doctest` | Validate code snippets in markdown docs |
@@ -117,7 +116,7 @@ my-project/
 
 ## install
 
-Fetch MCP tool schemas defined in `juglans.toml`.
+Install package dependencies from `jgpackage.toml`.
 
 ```bash
 juglans install
@@ -206,112 +205,6 @@ juglans web --host 0.0.0.0 --port 8080
 
 ---
 
-## push
-
-Push resources to the Jug0 server.
-
-```bash
-juglans push [PATHS...] [OPTIONS]
-```
-
-| Option | Description |
-|--------|-------------|
-| `--force` | Overwrite existing resources |
-| `--dry-run` | Preview without pushing |
-| `--type <TYPE>`, `-t` | Filter: `workflow`, `agent`, `prompt`, `tool`, `all` |
-| `--recursive`, `-r` | Recursively scan directories |
-| `--endpoint <URL>` | Override workflow endpoint URL |
-
-When called without paths, uses `[workspace]` glob patterns from `juglans.toml`.
-
-**Examples:**
-
-```bash
-# Push a single file
-juglans push src/main.jg
-
-# Force overwrite
-juglans push src/prompts/greeting.jgx --force
-
-# Push all workspace resources
-juglans push
-
-# Preview what will be pushed
-juglans push --dry-run
-
-# Push only workflows
-juglans push --type workflow
-
-# Recursive directory push
-juglans push src/ -r
-```
-
----
-
-## pull
-
-Pull a resource from the Jug0 server.
-
-```bash
-juglans pull <SLUG> --type <TYPE> [OPTIONS]
-```
-
-| Option | Description |
-|--------|-------------|
-| `--type <TYPE>`, `-t` | Resource type: `prompt`, `agent`, `workflow` |
-| `--output <DIR>`, `-o` | Output directory |
-
-**Examples:**
-
-```bash
-juglans pull my-agent --type agent
-juglans pull my-prompt -t prompt --output ./src/prompts/
-```
-
----
-
-## list
-
-List resources on the Jug0 server.
-
-```bash
-juglans list [OPTIONS]
-```
-
-| Option | Description |
-|--------|-------------|
-| `--type <TYPE>`, `-t` | Filter: `prompt`, `agent`, `workflow` |
-
-**Examples:**
-
-```bash
-juglans list
-juglans list -t agent
-```
-
----
-
-## delete
-
-Delete a resource from the Jug0 server.
-
-```bash
-juglans delete <SLUG> --type <TYPE>
-```
-
-| Option | Description |
-|--------|-------------|
-| `--type <TYPE>`, `-t` | Resource type: `prompt`, `agent`, `workflow` |
-
-**Examples:**
-
-```bash
-juglans delete old-prompt --type prompt
-juglans delete my-agent -t agent
-```
-
----
-
 ## whoami
 
 Show current account and configuration information.
@@ -322,21 +215,44 @@ juglans whoami [OPTIONS]
 
 | Option | Description |
 |--------|-------------|
-| `--verbose`, `-v` | Show detailed info (MCP servers, resource paths) |
-| `--check-connection` | Test connection to Jug0 server |
+| `--verbose`, `-v` | Show detailed info (resource paths, server config) |
 
 **Examples:**
 
 ```bash
 juglans whoami
-juglans whoami -v --check-connection
+juglans whoami -v
+```
+
+---
+
+## serve
+
+Start the unified server: runs the web API **and** every bot adapter configured in `juglans.toml` (Telegram, Feishu, WeChat) in a single process.
+
+```bash
+juglans serve [OPTIONS]
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--port <PORT>`, `-p` | `3000` | Port for the web server |
+| `--host <HOST>` | `127.0.0.1` | Host address to bind |
+| `--entry <FILE>` | `main.jg` | Workflow entry file (defaults to `main.jg` in the project root) |
+
+**Examples:**
+
+```bash
+juglans serve
+juglans serve --port 8080 --host 0.0.0.0
+juglans serve --entry src/api.jg
 ```
 
 ---
 
 ## bot
 
-Start a bot adapter for messaging platforms.
+Start a single bot adapter for a messaging platform.
 
 ```bash
 juglans bot <PLATFORM> [OPTIONS]
@@ -344,15 +260,16 @@ juglans bot <PLATFORM> [OPTIONS]
 
 | Option | Description |
 |--------|-------------|
-| `PLATFORM` | `telegram` or `feishu` |
+| `PLATFORM` | `telegram`, `feishu`, or `wechat` |
 | `--agent <SLUG>` | Agent slug (overrides config default) |
-| `--port <PORT>` | Webhook port (Feishu) |
+| `--port <PORT>` | Webhook port (Feishu / WeChat) |
 
 **Examples:**
 
 ```bash
 juglans bot telegram
 juglans bot feishu --agent trader --port 9000
+juglans bot wechat
 ```
 
 ---
@@ -418,7 +335,7 @@ juglans doctest [PATH] [OPTIONS]
 
 ```bash
 juglans doctest
-juglans doctest docs/guide/workflow-syntax.md
+juglans doctest docs/reference/workflow-spec.md
 juglans doctest --format json
 ```
 

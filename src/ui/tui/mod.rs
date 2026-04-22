@@ -29,8 +29,7 @@ use crate::core::executor::WorkflowExecutor;
 use crate::core::parser::GraphParser;
 use crate::core::resolver;
 use crate::services::config::JuglansConfig;
-use crate::services::interface::JuglansRuntime;
-use crate::services::jug0::Jug0Client;
+use crate::services::local_runtime::LocalRuntime;
 use crate::services::prompt_loader::PromptRegistry;
 
 pub async fn run(mut app: App) -> Result<()> {
@@ -260,7 +259,7 @@ async fn load_agent(path: &Path) -> Result<(AgentState, String)> {
     let workflow = Some(Arc::new(wf_parsed));
 
     // Build executor
-    let runtime: Arc<dyn JuglansRuntime> = Arc::new(Jug0Client::new(&config));
+    let runtime: Arc<LocalRuntime> = Arc::new(LocalRuntime::new_with_config(&config.ai));
     let mut executor =
         WorkflowExecutor::new_with_debug(Arc::new(prompt_registry), runtime, config.debug.clone())
             .await;

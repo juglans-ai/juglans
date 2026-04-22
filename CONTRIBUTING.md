@@ -51,12 +51,19 @@ test: add parser edge case tests
 
 ```
 src/
-├── core/       # Parser, executor, validator, expression evaluator
-├── builtins/   # Built-in tools (ai, system, devtools, http, network)
-├── services/   # Config, web server, MCP client, deploy
+├── core/       # Parser, executor, validator, expression evaluator, type checker
+├── builtins/   # Built-in tools (ai, system, devtools, http, network, database, device)
+├── services/   # Config, web server, local runtime, deploy
+├── providers/  # LLM provider implementations (OpenAI, Anthropic, DeepSeek, ...)
 ├── registry/   # Package ecosystem
-├── runtime/    # Python integration
-├── adapters/   # Bot adapters (Telegram, Feishu)
+├── runtime/    # Python integration (worker pool + JSON-RPC)
+├── adapters/   # Bot adapters (Telegram, Feishu, WeChat)
+├── lsp/        # Language Server Protocol implementation
+├── wasm/       # WASM engine bindings
+├── workers/    # Subprocess workers (python_worker.py)
+├── testing/    # test_* node discovery and execution
+├── doctest.rs  # Markdown doctest runner
+├── runner.rs   # Shared run entry point used by several subcommands
 └── ui/         # Terminal REPL & TUI
 ```
 

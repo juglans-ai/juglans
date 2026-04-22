@@ -1,8 +1,8 @@
 // src/providers/llm/factory.rs
 use super::{
     anthropic::AnthropicProvider, byteplus::BytePlusProvider, chatgpt::ChatGPTProvider,
-    deepseek::DeepSeekProvider, gemini::GeminiProvider, qwen::QwenProvider, xai::XaiProvider,
-    LlmProvider,
+    deepseek::DeepSeekProvider, gemini::GeminiProvider, juglans::JuglansProvider,
+    qwen::QwenProvider, xai::XaiProvider, LlmProvider,
 };
 use dashmap::DashMap;
 use std::collections::HashMap;
@@ -26,6 +26,7 @@ pub struct ProviderFactory {
     chatgpt: Arc<ChatGPTProvider>,
     deepseek: Arc<DeepSeekProvider>,
     gemini: Arc<GeminiProvider>,
+    juglans: Arc<JuglansProvider>,
     qwen: Arc<QwenProvider>,
     xai: Arc<XaiProvider>,
     /// Extra providers registered at runtime (e.g. claude_code in server mode)
@@ -41,6 +42,7 @@ impl ProviderFactory {
             chatgpt: Arc::new(ChatGPTProvider::new()),
             deepseek: Arc::new(DeepSeekProvider::new()),
             gemini: Arc::new(GeminiProvider::new()),
+            juglans: Arc::new(JuglansProvider::new()),
             qwen: Arc::new(QwenProvider::new()),
             xai: Arc::new(XaiProvider::new()),
             extra: Arc::new(DashMap::new()),
@@ -74,6 +76,7 @@ impl ProviderFactory {
         apply("qwen", "QWEN_API_KEY", None);
         apply("byteplus", "ARK_API_KEY", Some("ARK_API_BASE"));
         apply("xai", "XAI_API_KEY", None);
+        apply("juglans", "JUGLANS_API_KEY", Some("JUGLANS_API_BASE"));
 
         Self::new()
     }
@@ -113,6 +116,7 @@ impl ProviderFactory {
                 "gemini" => self.gemini.clone(),
                 "byteplus" | "ark" => self.byteplus.clone(),
                 "xai" => self.xai.clone(),
+                "juglans" => self.juglans.clone(),
                 _ => self.chatgpt.clone(),
             };
             return (p, actual_model.to_string());

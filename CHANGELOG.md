@@ -5,6 +5,76 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.2.13] - 2026-04-22
+
+### Added
+
+- **Conversation history** — new `[history]` config section with JSONL / SQLite / in-memory backends. When enabled, each `chat()` node with a resolved `chat_id` automatically loads the tail of the thread before the LLM call and appends the turn afterwards. Persistence honors the `state` parameter (`silent` / `display_only` skip storage). `chat_id` is resolved in priority: explicit param → `reply.chat_id` (chained within a run) → `input.chat_id` (adapter-injected, e.g. `telegram:12345:agent_slug`) → stateless.
+- **`history.*` builtins** — DSL-callable primitives for inspecting and manipulating the store: `history.load`, `history.append`, `history.replace`, `history.trim`, `history.clear`, `history.stats`, `history.list_chats`.
+- **Adapter `chat_id` injection** — telegram / feishu / wechat adapters now set `input.chat_id = "{platform}:{user_id}:{agent_slug}"` automatically, so bot workflows get multi-turn memory with no DSL changes.
+- **`juglans` provider** — new LLM provider that routes through the juglans-wallet platform proxy (base URL configurable via `JUGLANS_API_BASE`). Useful when agents should run without holding LLM credentials directly.
+
+### Notes
+
+- History storage is enabled by default with the JSONL backend. Existing workflows that called `chat()` without a `chat_id` remain stateless; bot workflows automatically gain memory once they pick up this version. Override or disable with `JUGLANS_HISTORY_ENABLED=false` or `[history].enabled = false`.
+- Auto-compaction (summary / rolling / etc.) is deliberately out of scope for this release — the storage primitives are in place so users and future work can layer strategies on top.
+
+## [0.2.12] - 2026-04-15
+
+### Added
+
+- **WeChat bot adapter** — `src/adapters/wechat.rs` plus `[bot.wechat]` config section. `juglans bot wechat` now joins `telegram` and `feishu` as a supported platform.
+- **Unified `juglans serve`** — single subcommand that boots the web API and every configured bot adapter from one process (port/host/entry flags; entry defaults to `main.jg`).
+- **Decorator macro system** — internal DSL for declaring builtin tools with less boilerplate.
+
+## [0.2.11] - 2026-04-06
+
+### Changed
+
+- **`jug0` moved into this repository.** The `jug0` crate now lives alongside `juglans/` in the monorepo, but the juglans engine no longer has a compile-time or runtime dependency on it. juglans calls LLM providers (OpenAI, Anthropic, DeepSeek, Gemini, Qwen, xAI, ByteDance Ark) directly via `[ai.providers]` in `juglans.toml` or env vars.
+- Collapsed the `JuglansRuntime` trait into the concrete `LocalRuntime` struct — `LocalRuntime` is the only runtime.
+- `[account]` config section: the `api_key` field has been removed (it was a `jug0_sk_*` token that no longer has a use). The `id`/`name`/`role` fields are kept as the slot for future juglans-issued agent identity.
+- CI `cargo audit` step switched to non-blocking while upstream advisories are triaged.
+
+### Removed
+
+- `services/jug0.rs` (Jug0Client HTTP backend, ~1100 lines)
+- `services/interface.rs` (the `JuglansRuntime` trait)
+- `[jug0]` config section and `JUG0_BASE_URL` / `JUG0_API_KEY` env var overrides
+- `juglans push` / `pull` / `list` / `delete` resource sync commands
+- `@handle` remote agent invocation
+- Thin jug0 wrapper builtins: `memory_search`, `web_search`, `history`, and 6 `vector_*` tools
+- `juglans whoami --check-connection` flag
+
+### Migration
+
+- **Chat / workflow execution**: set an LLM provider API key in env or `juglans.toml`, no other changes
+- **Vector memory / RAG**: not yet supported in local mode; pin to v0.2.10 or wait for the upcoming local-store release
+- **`juglans publish`**: now reads `JUGLANS_REGISTRY_API_KEY` (or `REGISTRY_API_KEY`) instead of `account.api_key`
+
+## [0.2.10] - 2026-03-28
+
+### Added
+
+- **HTTP client** — `http_request` builtin plus `stdlib/http.jg` wrapper exposing `http.get/post/put/patch/delete/head/options` with full options (headers, params, json, data, files, auth, timeout, cookies, follow_redirects).
+- **OAuth2 token helper** — `oauth_token` builtin for acquiring access tokens.
+- **AI tool utilities** — helpers that let LLM tool-calling flows hand results back into the workflow cleanly.
+- **Expression function bridge** — workflow-defined functions are callable directly from expressions, not just as nodes.
+
+### Changed
+
+- Feature-gated the device-control builtins under the `device` cargo feature so headless ARM64 cross-compiles succeed.
+
+## [0.2.9] - 2026-03-20
+
+### Added
+
+- **Embedded stdlib** — `stdlib/*.jg` is compiled into the binary and resolvable without a checkout.
+- **`serve()` HTTP backend** — workflows can declare `serve()` as the entry node and run as an axum HTTP handler (fallback route; any URL hits the workflow).
+- **Auth token forwarding** — HTTP request headers are threaded through to nested workflow calls.
+
 ## [0.2.8] - 2026-03-12
 
 ### Added
@@ -272,6 +342,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Agent and prompt management
 - Basic builtins (chat, notify, etc.)
 
+[Unreleased]: https://github.com/juglans-ai/juglans/compare/v0.2.12...HEAD
+[0.2.12]: https://github.com/juglans-ai/juglans/compare/v0.2.11...v0.2.12
+[0.2.11]: https://github.com/juglans-ai/juglans/compare/v0.2.10...v0.2.11
+[0.2.10]: https://github.com/juglans-ai/juglans/compare/v0.2.9...v0.2.10
+[0.2.9]: https://github.com/juglans-ai/juglans/compare/v0.2.8...v0.2.9
 [0.2.8]: https://github.com/juglans-ai/juglans/compare/v0.2.7...v0.2.8
 [0.2.7]: https://github.com/juglans-ai/juglans/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/juglans-ai/juglans/compare/v0.2.5...v0.2.6

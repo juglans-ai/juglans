@@ -16,15 +16,27 @@ Open `http://localhost:3080` to view the docs.
 
 ## Workflow Runtime
 
-The root `Dockerfile` packages the pre-built `juglans` binary for running workflows via `juglans web`.
+The root `Dockerfile` packages the pre-built `juglans` binary for running workflows via `juglans serve`. Because the Dockerfile is based on `COPY juglans /` and `COPY workers/ /workers/`, it expects a **staged `docker-context/` directory** containing the Linux binary and Python workers — it does **not** build from the repo root directly.
+
+Prepare the context and build:
 
 ```bash
-# Build the binary first
-cargo build --release
+# Build the Linux binary (see note below for macOS)
+cargo build --release --target x86_64-unknown-linux-gnu
 
-# Build the Docker image
-docker build -t juglans .
+# Stage the Docker build context
+mkdir -p docker-context/workers
+cp target/x86_64-unknown-linux-gnu/release/juglans docker-context/
+cp src/workers/python_worker.py docker-context/workers/
+cp Dockerfile docker-context/
+
+# Build the image
+docker build -t juglans docker-context/
 ```
+
+The `juglans deploy` subcommand wraps this staging step if you prefer not to do it by hand.
+
+> **macOS note:** `cargo build --target x86_64-unknown-linux-gnu` on macOS requires a cross-compilation toolchain. Use [`cross`](https://github.com/cross-rs/cross) (`cross build --release --target x86_64-unknown-linux-gnu`) or configure a `Cross.toml` in the repo root. Native `cargo build` on macOS produces a Mach-O binary that will not run inside a Linux container.
 
 Run with a workspace mounted:
 
@@ -75,24 +87,32 @@ services:
     volumes:
       - ./workspace:/workspace
     environment:
-      - JUG0_BASE_URL=${JUG0_BASE_URL:-http://localhost:3000}
-      - JUG0_API_KEY=${JUG0_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - QWEN_API_KEY=${QWEN_API_KEY:-}
 ```
 
 ## Environment Variables
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `JUG0_BASE_URL` | jug0 backend URL | `http://localhost:3000` |
-| `JUG0_API_KEY` | API key for jug0 authentication | -- |
+Pass any LLM provider API key (juglans is local-first — providers are called directly):
+
+| Variable | Description |
+|----------|-------------|
+| `OPENAI_API_KEY` | OpenAI API key |
+| `ANTHROPIC_API_KEY` | Anthropic API key |
+| `DEEPSEEK_API_KEY` | DeepSeek API key |
+| `GEMINI_API_KEY` | Google Gemini API key |
+| `QWEN_API_KEY` | Alibaba Qwen API key |
+| `XAI_API_KEY` | xAI API key |
+| `ARK_API_KEY` | ByteDance Ark API key |
 
 Pass via `-e` flag or in the compose file:
 
 ```bash
 docker run -d \
   -p 8080:8080 \
-  -e JUG0_BASE_URL=https://api.juglans.ai \
-  -e JUG0_API_KEY=jug0_sk_xxx \
+  -e OPENAI_API_KEY=sk-... \
   -v $(pwd)/workspace:/workspace \
   juglans
 ```
@@ -169,8 +189,7 @@ WorkingDirectory=/opt/juglans
 ExecStart=/usr/local/bin/juglans web --host 0.0.0.0 --port 8080
 Restart=always
 RestartSec=5
-Environment=JUG0_BASE_URL=https://api.juglans.ai
-Environment=JUG0_API_KEY=jug0_sk_xxx
+EnvironmentFile=/etc/juglans/llm.env  # contains OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.
 
 [Install]
 WantedBy=multi-user.target

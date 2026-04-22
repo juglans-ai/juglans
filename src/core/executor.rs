@@ -23,7 +23,7 @@ use crate::core::instance_arena::{MethodScope, TypedSlot};
 use crate::core::parser::GraphParser;
 use crate::runtime::python::PythonRuntime;
 use crate::services::config::{DebugConfig, JuglansConfig};
-use crate::services::interface::JuglansRuntime;
+use crate::services::local_runtime::LocalRuntime;
 use crate::services::prompt_loader::PromptRegistry;
 use crate::services::tool_registry::ToolRegistry;
 
@@ -60,14 +60,14 @@ pub struct WorkflowExecutor {
 impl WorkflowExecutor {
     pub async fn new(
         prompt_registry: Arc<PromptRegistry>,
-        runtime: Arc<dyn JuglansRuntime>,
+        runtime: Arc<LocalRuntime>,
     ) -> Self {
         Self::new_with_debug(prompt_registry, runtime, DebugConfig::default()).await
     }
 
     pub async fn new_with_debug(
         prompt_registry: Arc<PromptRegistry>,
-        runtime: Arc<dyn JuglansRuntime>,
+        runtime: Arc<LocalRuntime>,
         debug_config: DebugConfig,
     ) -> Self {
         let registry_arc = BuiltinRegistry::new(prompt_registry, runtime);
@@ -1178,18 +1178,18 @@ impl WorkflowExecutor {
                     serde_json::to_string(output).unwrap_or_default()
                 );
                 info!("  ✅ Success");
-                context
-                    .set(format!("{}.output", node_id), output.clone())
-                    .unwrap();
-                context.set("output".to_string(), output.clone()).unwrap();
+                // `.ok()` instead of `.unwrap()` — the set can fail when
+                // a node is named "output" and ctx["output"] is already a
+                // non-object value from a prior node. Crashing here would
+                // kill the whole event stream, so we tolerate the miss.
+                let _ = context.set(format!("{}.output", node_id), output.clone());
+                let _ = context.set("output".to_string(), output.clone());
             }
             Ok(None) => {
                 debug!("  [Output] No primary output for [{}].", node_id);
                 info!("  ✅ Success");
-                context
-                    .set(format!("{}.output", node_id), Value::Null)
-                    .unwrap();
-                context.set("output".to_string(), Value::Null).unwrap();
+                let _ = context.set(format!("{}.output", node_id), Value::Null);
+                let _ = context.set("output".to_string(), Value::Null);
             }
             Err(e) => {
                 warn!("  [Output] Error for [{}]: {}", node_id, e);
@@ -1202,24 +1202,16 @@ impl WorkflowExecutor {
                         "node": node_id,
                     }
                 });
-                // Result model: err info lives in $output itself
-                context
-                    .set(format!("{}.output", node_id), err_value.clone())
-                    .unwrap();
-                context.set("output".to_string(), err_value).unwrap();
-                // Backward compat: keep legacy $error and $nodeid.error
-                context
-                    .set(format!("{}.error", node_id), json!(e.to_string()))
-                    .unwrap();
-                context
-                    .set(
-                        "error".to_string(),
-                        json!({
-                            "node": node_id,
-                            "message": e.to_string()
-                        }),
-                    )
-                    .unwrap();
+                let _ = context.set(format!("{}.output", node_id), err_value.clone());
+                let _ = context.set("output".to_string(), err_value);
+                let _ = context.set(format!("{}.error", node_id), json!(e.to_string()));
+                let _ = context.set(
+                    "error".to_string(),
+                    json!({
+                        "node": node_id,
+                        "message": e.to_string()
+                    }),
+                );
             }
         }
     }

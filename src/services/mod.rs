@@ -1,5 +1,4 @@
 // src/services/mod.rs
-pub mod interface;
 pub mod prompt_loader;
 pub mod tool_registry;
 
@@ -8,9 +7,9 @@ pub mod config;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod deploy;
 #[cfg(not(target_arch = "wasm32"))]
-pub mod github;
+pub mod history;
 #[cfg(not(target_arch = "wasm32"))]
-pub mod jug0;
+pub mod github;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod local_runtime;
 #[cfg(not(target_arch = "wasm32"))]

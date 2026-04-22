@@ -1,12 +1,10 @@
 // src/builtins/system.rs
 use super::Tool;
 use crate::core::context::{WorkflowContext, WorkflowEvent};
-use crate::services::interface::JuglansRuntime;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::sync::Arc;
 
 /// Parse a string into a context value, preserving large integers as strings to avoid f64 precision loss.
 fn parse_context_value(value_str: &str) -> Value {
@@ -150,13 +148,17 @@ impl Tool for Print {
 /// reply(message="content", state="context_visible") - return content directly without calling AI
 /// Used for system event handling where fixed text is needed without going through the LLM
 /// Supports state parameter for SSE/persistence control, including compound syntax input:output
-pub struct Reply {
-    runtime: Arc<dyn JuglansRuntime>,
-}
+pub struct Reply;
 
 impl Reply {
-    pub fn new(runtime: Arc<dyn JuglansRuntime>) -> Self {
-        Self { runtime }
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for Reply {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -190,32 +192,10 @@ impl Tool for Reply {
             context.emit(WorkflowEvent::Token(message.to_string()));
         }
 
-        // Persist reply message to jug0 (output_state controls reply persistence)
-        let should_persist_reply =
-            output_state == "context_visible" || output_state == "context_hidden";
-        if should_persist_reply {
-            if let Ok(Some(chat_id_val)) = context.resolve_path("reply.chat_id") {
-                if let Some(chat_id) = chat_id_val.as_str() {
-                    let _ = self
-                        .runtime
-                        .create_message(chat_id, "assistant", message, output_state)
-                        .await;
-                }
-            }
-        }
-
-        // Retroactively update original user message state using input_state
-        if let (Ok(Some(chat_id_val)), Ok(Some(umid_val))) = (
-            context.resolve_path("reply.chat_id"),
-            context.resolve_path("reply.user_message_id"),
-        ) {
-            if let (Some(chat_id), Some(umid)) = (chat_id_val.as_str(), umid_val.as_i64()) {
-                let _ = self
-                    .runtime
-                    .update_message_state(chat_id, umid as i32, input_state)
-                    .await;
-            }
-        }
+        // (Persistence to a backend was previously done here via runtime.create_message /
+        // update_message_state. Removed when juglans became local-first; reply state is
+        // now purely in-memory within the workflow context.)
+        let _ = (input_state, output_state);
 
         // Update reply.output (consistent with chat())
         let current = context

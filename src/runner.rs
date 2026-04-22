@@ -14,7 +14,6 @@ use crate::core::parser::GraphParser;
 use crate::core::resolver;
 use crate::core::validator::WorkflowValidator;
 use crate::services::config::JuglansConfig;
-use crate::services::interface::JuglansRuntime;
 use crate::services::local_runtime::LocalRuntime;
 use crate::services::prompt_loader::PromptRegistry;
 use crate::WorkflowContext;
@@ -37,7 +36,7 @@ pub struct RunBuilder {
     file_path: PathBuf,
     project_root: PathBuf,
     config: JuglansConfig,
-    runtime: Option<Arc<dyn JuglansRuntime>>,
+    runtime: Option<Arc<LocalRuntime>>,
 }
 
 impl RunBuilder {
@@ -60,8 +59,8 @@ impl RunBuilder {
         })
     }
 
-    /// Override the runtime (default: auto-detect LocalRuntime or Jug0Client).
-    pub fn runtime(mut self, rt: Arc<dyn JuglansRuntime>) -> Self {
+    /// Override the runtime (default: a LocalRuntime built from juglans.toml + env).
+    pub fn runtime(mut self, rt: Arc<LocalRuntime>) -> Self {
         self.runtime = Some(rt);
         self
     }
@@ -180,15 +179,13 @@ impl RunBuilder {
         let workflow = Arc::new(workflow);
 
         // 5. Build runtime + executor
-        let runtime: Arc<dyn JuglansRuntime> = match self.runtime {
+        if let Err(e) = crate::services::history::init_global(&self.config.history) {
+            tracing::warn!("[history] init_global failed: {}", e);
+        }
+
+        let runtime: Arc<LocalRuntime> = match self.runtime {
             Some(rt) => rt,
-            None => {
-                if has_local_llm_provider(&self.config) {
-                    Arc::new(LocalRuntime::new_with_config(&self.config.ai))
-                } else {
-                    Arc::new(crate::services::jug0::Jug0Client::new(&self.config))
-                }
-            }
+            None => Arc::new(LocalRuntime::new_with_config(&self.config.ai)),
         };
 
         let mut executor = WorkflowExecutor::new_with_debug(
@@ -210,7 +207,14 @@ impl RunBuilder {
 
         // 6. Create context — with or without event sender
         let context = match sender {
-            Some(tx) => WorkflowContext::with_sender(tx),
+            Some(tx) => {
+                let ctx = WorkflowContext::with_sender(tx);
+                // When an event sender is present (i.e. run_stream), push
+                // node-level events (NodeStart, NodeComplete) so callers
+                // can observe intermediate results and errors.
+                ctx.set_stream_node_events(true);
+                ctx
+            }
             None => WorkflowContext::new(),
         };
 
@@ -251,23 +255,6 @@ fn find_project_root(start: &Path) -> PathBuf {
             return fallback;
         }
     }
-}
-
-fn has_local_llm_provider(config: &JuglansConfig) -> bool {
-    if config.ai.has_providers() {
-        return true;
-    }
-    [
-        "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "DEEPSEEK_API_KEY",
-        "GEMINI_API_KEY",
-        "QWEN_API_KEY",
-        "ARK_API_KEY",
-        "XAI_API_KEY",
-    ]
-    .iter()
-    .any(|k| std::env::var(k).map(|v| !v.is_empty()).unwrap_or(false))
 }
 
 /// RAII guard: sets CWD on creation, restores on drop.

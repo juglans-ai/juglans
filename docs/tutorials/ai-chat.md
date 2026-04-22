@@ -1,6 +1,6 @@
 # Tutorial 6: AI Chat
 
-This chapter covers how to call AI models in workflows: using the `chat()` tool to send messages, defining inline agents, constructing dynamic messages, chaining multi-turn conversations, and obtaining structured JSON output.
+This chapter covers how to call AI models in workflows: using the `chat()` tool to send messages, defining inline agents, constructing dynamic messages, chaining multi-turn conversations, and obtaining structured JSON output. Juglans is local-first — it calls LLM providers directly using your API keys; no remote backend required.
 
 ## 6.1 chat() Basics
 
@@ -51,7 +51,7 @@ Field-by-field explanation:
 
 | Field | Purpose | Example Value |
 |------|------|--------|
-| `model` | The AI model to use | `"deepseek-chat"`, `"gpt-4o"`, `"claude-3-sonnet"` |
+| `model` | The AI model to use | `"deepseek-chat"`, `"gpt-5.4"`, `"claude-sonnet-4-6"`, `"gemini-3.1-pro"` |
 | `temperature` | Randomness control (0 = deterministic, 2 = high randomness) | `0.7` (recommended default) |
 | `system_prompt` | System prompt that defines the agent's role and behavior | `"You are a helpful assistant."` |
 
@@ -252,24 +252,24 @@ The AI returns `{"sentiment": "positive"}`, and the workflow automatically route
 
 ## 6.6 Configuration Notes
 
-`chat()` communicates with AI models through the Jug0 backend service. For `chat()` to work, you need to create a `juglans.toml` in the project root:
+`chat()` calls LLM providers directly using their API keys. The simplest setup is to set the relevant `*_API_KEY` env var:
 
-```toml
-[account]
-id = "your_user_id"
-api_key = "jug0_sk_..."
-
-[jug0]
-base_url = "http://localhost:3000"
+```bash
+export OPENAI_API_KEY="sk-..."
+# or ANTHROPIC_API_KEY, DEEPSEEK_API_KEY, GEMINI_API_KEY, QWEN_API_KEY, etc.
 ```
 
-| Field | Purpose |
-|------|------|
-| `account.id` | Jug0 account ID |
-| `account.api_key` | API key |
-| `jug0.base_url` | Jug0 service URL |
+Or define providers in `juglans.toml`:
 
-Without this configuration, `chat()` will return a connection error. See the [Jug0 Integration Guide](../integrations/jug0.md) for details.
+```toml
+[ai.providers.openai]
+api_key = "sk-..."
+
+[ai.providers.deepseek]
+api_key = "sk-..."
+```
+
+Without any provider configured, `chat()` will fail with `No API-key provided`. See [Connect AI Models](../guide/connect-ai.md) and [Configuration Reference](../reference/config.md) for full details.
 
 ## Summary
 

@@ -11,7 +11,7 @@ pub struct AccountConfig {
     pub id: String,
     pub name: String,
     pub role: Option<String>,
-    pub api_key: Option<String>,
+    // Identity slot — future juglans-issued agent ID will live here.
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -32,11 +32,6 @@ pub struct WorkspaceConfig {
     pub exclude: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct Jug0Config {
-    pub base_url: String,
-}
-
 // Server configuration section
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ServerConfig {
@@ -44,8 +39,7 @@ pub struct ServerConfig {
     pub host: String,
     #[serde(default = "default_server_port")]
     pub port: u16,
-    /// Public endpoint URL, written to jug0 when applying workflows.
-    /// Example: "https://agent.juglans.ai"
+    /// Public endpoint URL for this server. Example: "https://agent.juglans.ai"
     pub endpoint_url: Option<String>,
 }
 
@@ -159,7 +153,7 @@ pub struct TelegramBotConfig {
     pub token: String,
     #[serde(default = "default_bot_agent")]
     pub agent: String,
-    /// Execution mode: "local" (local execution) or "jug0" (SSE client), auto-detected from jug0.base_url by default
+    /// Execution mode (reserved, currently always local)
     #[serde(default)]
     pub mode: Option<String>,
 }
@@ -181,7 +175,7 @@ pub struct FeishuBotConfig {
     /// List of approvers (open_id)
     #[serde(default)]
     pub approvers: Vec<String>,
-    /// Execution mode: "local" (local execution) or "jug0" (SSE client), auto-detected from jug0.base_url by default
+    /// Execution mode (reserved, currently always local)
     #[serde(default)]
     pub mode: Option<String>,
 }
@@ -200,6 +194,67 @@ fn default_feishu_port() -> u16 {
 }
 fn default_feishu_base_url() -> String {
     "https://open.feishu.cn".to_string()
+}
+
+// Conversation history configuration
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct HistoryConfig {
+    /// Master switch. When false, chat_id is still accepted as a field but no
+    /// storage is read or written.
+    #[serde(default = "default_history_enabled")]
+    pub enabled: bool,
+
+    /// Storage backend: "jsonl" | "sqlite" | "memory" | "none".
+    #[serde(default = "default_history_backend")]
+    pub backend: String,
+
+    /// Directory for JSONL backend (one file per chat_id).
+    pub dir: Option<String>,
+
+    /// Database path for SQLite backend.
+    pub path: Option<String>,
+
+    /// Hard upper bound on messages auto-loaded per chat() call.
+    #[serde(default = "default_history_max_messages")]
+    pub max_messages: usize,
+
+    /// Soft token budget for auto-loaded history (rough estimate).
+    #[serde(default = "default_history_max_tokens")]
+    pub max_tokens: u32,
+
+    /// Days after which old messages are eligible for GC. 0 disables.
+    #[serde(default = "default_history_retention_days")]
+    pub retention_days: u32,
+}
+
+impl Default for HistoryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_history_enabled(),
+            backend: default_history_backend(),
+            dir: None,
+            path: None,
+            max_messages: default_history_max_messages(),
+            max_tokens: default_history_max_tokens(),
+            retention_days: default_history_retention_days(),
+        }
+    }
+}
+
+fn default_history_enabled() -> bool {
+    true
+}
+fn default_history_backend() -> String {
+    "jsonl".to_string()
+}
+fn default_history_max_messages() -> usize {
+    20
+}
+fn default_history_max_tokens() -> u32 {
+    8000
+}
+fn default_history_retention_days() -> u32 {
+    30
 }
 
 // Package Registry configuration
@@ -229,9 +284,6 @@ fn default_server_port() -> u16 {
 pub struct JuglansConfig {
     pub account: AccountConfig,
     pub workspace: Option<WorkspaceConfig>,
-
-    #[serde(default = "default_jug0_config")]
-    pub jug0: Jug0Config,
 
     // Web Server configuration
     #[serde(default)]
@@ -266,16 +318,14 @@ pub struct JuglansConfig {
     // AI provider configuration
     #[serde(default)]
     pub ai: AiConfig,
+
+    // Conversation history configuration
+    #[serde(default)]
+    pub history: HistoryConfig,
 }
 
 fn default_env_file() -> Vec<String> {
     vec![".env".to_string()]
-}
-
-fn default_jug0_config() -> Jug0Config {
-    Jug0Config {
-        base_url: "https://api.jug0.com".to_string(),
-    }
 }
 
 // Default implementation for ServerConfig, used when the config file is missing this section
@@ -300,7 +350,6 @@ impl JuglansConfig {
                     id: "dev_user".to_string(),
                     name: "Developer".to_string(),
                     role: Some("admin".to_string()),
-                    api_key: None,
                 },
                 workspace: Some(WorkspaceConfig {
                     id: "default_ws".to_string(),
@@ -312,7 +361,6 @@ impl JuglansConfig {
                     tools: vec![],
                     exclude: vec![],
                 }),
-                jug0: default_jug0_config(),
                 server: ServerConfig::default(),
                 env_file: default_env_file(),
                 env: Default::default(),
@@ -322,6 +370,7 @@ impl JuglansConfig {
                 paths: PathsConfig::default(),
                 registry: None,
                 ai: AiConfig::default(),
+                history: HistoryConfig::default(),
             });
         }
 
@@ -353,12 +402,6 @@ impl JuglansConfig {
 
     /// Override config fields with environment variables (for FC/Lambda and other serverless environments)
     fn apply_env_overrides(&mut self) {
-        if let Ok(v) = std::env::var("JUG0_BASE_URL") {
-            self.jug0.base_url = v;
-        }
-        if let Ok(v) = std::env::var("JUG0_API_KEY") {
-            self.account.api_key = Some(v);
-        }
         if let Ok(v) = std::env::var("SERVER_HOST") {
             self.server.host = v;
         }
@@ -390,6 +433,25 @@ impl JuglansConfig {
             if let Some(v) = feishu_app_secret {
                 feishu.app_secret = Some(v);
             }
+        }
+        // History config overrides
+        if let Ok(v) = std::env::var("JUGLANS_HISTORY_BACKEND") {
+            self.history.backend = v;
+        }
+        if let Ok(v) = std::env::var("JUGLANS_HISTORY_DIR") {
+            self.history.dir = Some(v);
+        }
+        if let Ok(v) = std::env::var("JUGLANS_HISTORY_PATH") {
+            self.history.path = Some(v);
+        }
+        if let Ok(Ok(v)) = std::env::var("JUGLANS_HISTORY_MAX_MESSAGES").map(|s| s.parse::<usize>()) {
+            self.history.max_messages = v;
+        }
+        if let Ok(Ok(v)) = std::env::var("JUGLANS_HISTORY_MAX_TOKENS").map(|s| s.parse::<u32>()) {
+            self.history.max_tokens = v;
+        }
+        if let Ok(Ok(v)) = std::env::var("JUGLANS_HISTORY_ENABLED").map(|s| s.parse::<bool>()) {
+            self.history.enabled = v;
         }
         // Telegram bot config
         if let Ok(token) = std::env::var("TELEGRAM_BOT_TOKEN") {

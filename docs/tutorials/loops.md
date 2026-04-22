@@ -21,19 +21,17 @@ Iterate over a list, executing the loop body for each element:
 Line-by-line explanation:
 
 1. `[init]` stores a string array into `items`.
-2. `[loop]` is the loop node. `foreach($item in items)` means: iterate over `items`, binding the current element to `$item` on each iteration.
+2. `[loop]` is the loop node. `foreach(item in items)` means: iterate over `items`, binding the current element to `item` on each iteration.
 3. The braces `{ ... }` contain the **loop body**, which executes once per iteration. Here there is only one node `[show]`, which prints the current fruit name.
 4. After the loop finishes, execution follows the edge to `[done]`.
 
 foreach syntax:
 
 ```text
-[node_name]: foreach($variable in collection) {
+[node_name]: foreach(variable in collection) {
     loop body (nodes + edges)
 }
 ```
-
-The `$` prefix on `$item` is optional -- `foreach(item in items)` is equally valid. However, keeping the `$` prefix is recommended for consistency with loop-scoped variable references.
 
 ## Multiple Nodes Inside a foreach Body
 
@@ -135,7 +133,7 @@ One of the core capabilities of loops is **accumulating results** across iterati
 
 Execution trace:
 
-| Iteration | $n | total (after iteration) |
+| Iteration | n | total (after iteration) |
 |------|----|---------------------|
 | 1    | 10 | 10                  |
 | 2    | 20 | 30                  |
@@ -162,7 +160,7 @@ The `append()` function appends a new element to the end of an array and returns
 
 ## Comprehensive Example
 
-A data processing pipeline: receive a batch of records, filter and summarize them.
+A data processing pipeline: receive a batch of records, count passing scores, and summarize the results.
 
 ```juglans
 [init]: records = [
@@ -176,11 +174,11 @@ A data processing pipeline: receive a batch of records, filter and summarize the
 [process]: foreach(record in records) {
   [count]: total = total + 1
   [check]: passed = passed + 1
-  [count] -> [check]
+  [count] -> [check] if record.score >= 60
 }
 
 [report]: print(
-  message="Results: " + str(passed) + "/" + str(total) + " processed"
+  message="Results: " + str(passed) + "/" + str(total) + " passed"
 )
 
 [init] -> [process] -> [report]
@@ -194,7 +192,7 @@ This workflow demonstrates a typical use of loops in real-world scenarios:
 
 ## Summary
 
-- **foreach** `[node]: foreach($item in list) { ... }` -- Iterate over a list, executing the loop body once per element
+- **foreach** `[node]: foreach(item in list) { ... }` -- Iterate over a list, executing the loop body once per element
 - **while** `[node]: while(condition) { ... }` — Repeat the loop body while the condition is true
 - The loop body is a nested subgraph that can contain multiple nodes and edges
 - Use context variables to accumulate data across iterations (counting, summing, building lists)

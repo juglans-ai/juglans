@@ -23,8 +23,13 @@ Metadata lines appear at the top of the file. Each line follows `key: value` for
 | Field | Type | Description |
 |---|---|---|
 | `slug` | string | Unique identifier (for registry) |
+| `name` | string | Display name |
+| `version` | string | Workflow version |
+| `description` | string | Human-readable description |
 | `author` | string | Author name |
 | `source` | string | Source file path |
+| `entry` | string or list | Explicit entry node ID (overrides topological inference) |
+| `exit` | string list | Explicit terminal node IDs |
 | `prompts` | string list | Prompt file glob patterns |
 | `agents` | string list | _(deprecated, silently ignored)_ |
 | `tools` | string list | Tool definition file patterns |
@@ -160,7 +165,7 @@ With multiple parameters:
 
 ```juglans
 [config]: {
-  "model": "gpt-4",
+  "model": "gpt-4o-mini",
   "temperature": 0.7
 }
 ```
@@ -252,7 +257,11 @@ When no conditional edge matches, an unconditional edge serves as the default:
 [risky] on error -> [err]
 ```
 
-The `error` variable is set in the error handler node with fields: `code`, `message`, `node`, `details`.
+The `error` variable is set in the error handler node with two fields: `node` (the failing node ID) and `message` (the error text).
+
+```json
+{"node": "risky", "message": "connection refused"}
+```
 
 ### Switch Routing
 
@@ -594,6 +603,22 @@ impl Renderable for MyType {
 
 ---
 
+## Validator Diagnostics
+
+`juglans check` reports diagnostics with stable codes. Errors fail the check; warnings are only shown with `--all`.
+
+| Code | Severity | Message |
+|------|----------|---------|
+| `W001` | Warning | No entry node specified; using first node as entry point |
+| `W002` | Warning | Node `<id>` is not reachable from entry node |
+| `W003` | Warning | No terminal nodes found (all nodes have outgoing edges) |
+| `W004` | Warning | Unknown tool `<name>` |
+| `E001` | Error | Entry node `<id>` does not exist |
+| `E002` | Error | Cycle detected involving node `<id>`. Workflows must be acyclic (DAG). |
+| `E004` | Error | Workflow contains no nodes |
+
+---
+
 ## Comments
 
 Line comments start with `#`:
@@ -620,7 +645,7 @@ Line comments start with `#`:
 | `output` | Previous node output | `output`, `output.field` |
 | Context vars | Workflow context (via assignment syntax) | `count`, `results` |
 | `reply` | Agent reply metadata | `reply.output`, `reply.status` |
-| `error` | Error info (in error handlers) | `error.message`, `error.code` |
+| `error` | Error info (in error handlers) | `error.node`, `error.message` |
 
 Variables use dot notation for nested access: `output.data.items[0].name`.
 
@@ -633,18 +658,18 @@ prompts: ["./prompts/*.jgx"]
 
 # Agent definitions
 [classifier]: {
-  "model": "gpt-4o",
+  "model": "gpt-4o-mini",
   "temperature": 0.0,
   "system_prompt": "Classify user intent as question, task, or chat. Return JSON."
 }
 
 [expert]: {
-  "model": "gpt-4o",
+  "model": "gpt-4o-mini",
   "system_prompt": "You are a knowledgeable expert."
 }
 
 [assistant]: {
-  "model": "gpt-4o",
+  "model": "gpt-4o-mini",
   "system_prompt": "You are a friendly assistant."
 }
 

@@ -68,7 +68,7 @@ libs: ["std/mcps.jg"]
 libs: ["std/mcps.jg"]
 
 [code_reviewer]: {
-  "model": "gpt-4o",
+  "model": "gpt-4o-mini",
   "system_prompt": "You are a thorough code reviewer."
 }
 
@@ -103,7 +103,7 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-@app.route('/messages', methods=['POST'])
+@app.route('/', methods=['POST'])
 def handle():
     req = request.json
     method = req.get("method")

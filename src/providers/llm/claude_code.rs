@@ -211,8 +211,8 @@ impl LlmProvider for ClaudeCodeProvider {
                 },
             );
 
-            let path = format!("/tmp/jug0_mcp_{}.json", session_id);
-            let cfg = json!({"mcpServers": {"jug0": {"type": "http", "url": format!("http://127.0.0.1:{}/mcp/{}", self.server_port, session_id)}}});
+            let path = format!("/tmp/juglans_mcp_{}.json", session_id);
+            let cfg = json!({"mcpServers": {"juglans": {"type": "http", "url": format!("http://127.0.0.1:{}/mcp/{}", self.server_port, session_id)}}});
             tokio::fs::write(&path, serde_json::to_string(&cfg)?).await?;
             Some(path)
         } else {
@@ -234,7 +234,7 @@ impl LlmProvider for ClaudeCodeProvider {
                 .arg("--mcp-config")
                 .arg(mcp_config_path.as_ref().unwrap())
                 .arg("--allowed-tools")
-                .arg("mcp__jug0__*");
+                .arg("mcp__juglans__*");
         } else {
             cmd.arg("--print")
                 .arg("--output-format")

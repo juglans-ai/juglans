@@ -15,16 +15,13 @@ mod ui;
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
-use serde_json::{json, Value};
-use std::collections::HashMap;
+use serde_json::Value;
 use std::env;
 use std::fs;
-use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
-use core::context::WorkflowContext;
 use core::executor::WorkflowExecutor;
 use core::parser::GraphParser;
 use core::prompt_parser::PromptParser;
@@ -35,11 +32,9 @@ use core::type_checker::TypeChecker;
 use core::validator::{ProjectContext, WorkflowValidator};
 use services::config::JuglansConfig;
 use services::github;
-use services::interface::JuglansRuntime;
-use services::jug0::Jug0Client;
+use services::local_runtime::LocalRuntime;
 use services::prompt_loader::PromptRegistry;
 use services::web_server;
-use ui::{render::render_markdown, render::show_shortcuts, render::show_welcome, MultilineInput};
 
 #[derive(Parser)]
 #[command(name = "juglans", author = "Juglans Team", version = env!("CARGO_PKG_VERSION"))]
@@ -112,9 +107,6 @@ enum Commands {
         /// Show detailed information
         #[arg(long, short = 'v')]
         verbose: bool,
-        /// Test connection to Jug0 server
-        #[arg(long)]
-        check_connection: bool,
     },
     /// Start unified server: web API + all configured bot adapters
     Serve {
@@ -287,7 +279,7 @@ fn resolve_import_patterns_verbose(
     resolved_output_list
 }
 
-/// Check if local LLM providers are available (direct API, no jug0 needed).
+/// Check if local LLM providers are available.
 /// Priority: [ai.providers] in juglans.toml > environment variables (fallback).
 fn has_local_llm_provider(config: &JuglansConfig) -> bool {
     // 1. Check [ai.providers] in juglans.toml
@@ -314,14 +306,10 @@ async fn build_executor(
     prompt_registry: PromptRegistry,
     workflow: Option<&Arc<core::graph::WorkflowGraph>>,
 ) -> Result<Arc<WorkflowExecutor>> {
-    let runtime: Arc<dyn JuglansRuntime> = if has_local_llm_provider(config) {
+    if has_local_llm_provider(config) {
         tracing::info!("Using local LLM provider (direct API)");
-        Arc::new(services::local_runtime::LocalRuntime::new_with_config(
-            &config.ai,
-        ))
-    } else {
-        Arc::new(Jug0Client::new(config))
-    };
+    }
+    let runtime: Arc<LocalRuntime> = Arc::new(LocalRuntime::new_with_config(&config.ai));
 
     let mut executor =
         WorkflowExecutor::new_with_debug(Arc::new(prompt_registry), runtime, config.debug.clone())
@@ -340,117 +328,6 @@ async fn build_executor(
     shared.get_registry().set_executor(Arc::downgrade(&shared));
 
     Ok(shared)
-}
-
-/// Run an interactive agent REPL loop (shared between local and remote agents).
-async fn run_agent_loop(
-    executor: Arc<WorkflowExecutor>,
-    agent_name: &str,
-    agent_slug: &str,
-    context: &WorkflowContext,
-    workflow: Option<&Arc<core::graph::WorkflowGraph>>,
-    cli_input: Option<&str>,
-    extra_chat_params: HashMap<String, String>,
-) -> Result<()> {
-    let mut input_widget = MultilineInput::new();
-
-    loop {
-        let session_input = if let Some(cmd_input) = cli_input {
-            cmd_input.to_string()
-        } else {
-            let chat_id = context
-                .resolve_path("reply.chat_id")
-                .ok()
-                .flatten()
-                .and_then(|v| v.as_str().map(|s| s.to_string()));
-
-            match input_widget.prompt(agent_name, chat_id.as_deref())? {
-                Some(input) => {
-                    let trimmed = input.trim();
-                    if trimmed.is_empty() {
-                        continue;
-                    }
-                    if trimmed == "help" {
-                        show_shortcuts();
-                        continue;
-                    }
-                    if trimmed == "exit" || trimmed == "quit" {
-                        println!("\nGoodbye!");
-                        break;
-                    }
-                    trimmed.to_string()
-                }
-                None => {
-                    println!("\nGoodbye!");
-                    break;
-                }
-            }
-        };
-
-        if session_input.is_empty() {
-            continue;
-        }
-
-        context.set("input.message".to_string(), json!(session_input.clone()))?;
-        context.set("reply.output".to_string(), json!(""))?;
-        context.set("reply.status".to_string(), json!("processing"))?;
-
-        if let Some(target_flow) = workflow {
-            println!("\n⚡ Workflow Execution...");
-            if let Err(e) = executor
-                .clone()
-                .execute_graph(target_flow.clone(), context)
-                .await
-            {
-                error!("❌ Execution Failed: {}\n", e);
-            } else {
-                println!("✓ Workflow Completed\n");
-            }
-
-            let answer = context
-                .resolve_path("reply.output")?
-                .and_then(|v| v.as_str().map(|s| s.to_string()))
-                .unwrap_or_default();
-
-            if !answer.is_empty() {
-                render_markdown(&answer);
-                println!();
-            }
-        } else {
-            let mut params = HashMap::from([
-                ("agent".to_string(), agent_slug.to_string()),
-                ("message".to_string(), session_input),
-            ]);
-            params.extend(extra_chat_params.clone());
-
-            match executor
-                .execute_tool_internal("chat", &params, context)
-                .await
-            {
-                Ok(Some(result)) => {
-                    if let Some(text) = result.as_str() {
-                        render_markdown(text);
-                        println!();
-                    } else if let Some(obj) = result.as_object() {
-                        if let Some(text) = obj.get("response").and_then(|v| v.as_str()) {
-                            render_markdown(text);
-                            println!();
-                        }
-                    }
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    error!("❌ Chat error: {}", e);
-                }
-            }
-        }
-
-        if cli_input.is_some() {
-            break;
-        }
-    }
-
-    Ok(())
 }
 
 async fn handle_file_logic(cli: &Cli) -> Result<()> {
@@ -638,58 +515,6 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
     Ok(())
 }
 
-/// Handle remote agent via @handle (e.g., `juglans @jarvis`)
-async fn handle_remote_agent(cli: &Cli, handle: &str) -> Result<()> {
-    info!("🌐 Connecting to remote agent: {}", handle);
-
-    // Load config
-    let config = JuglansConfig::load()?;
-    let jug0_client = Jug0Client::new(&config);
-
-    // Fetch agent from jug0
-    let agent_detail = jug0_client.get_agent(handle).await?;
-
-    let agent_name = agent_detail
-        .name
-        .clone()
-        .unwrap_or_else(|| handle.to_string());
-    let agent_slug = agent_detail.slug.clone();
-
-    // Show welcome
-    show_welcome(&agent_name, &agent_slug, false);
-
-    // Build executor with empty registries (remote agent, no local files)
-    let executor_ptr = build_executor(&config, PromptRegistry::new(), None).await?;
-
-    let context = WorkflowContext::new();
-    let resolved_cli_input = resolve_input_data(cli)?;
-
-    // Build extra chat parameters from remote agent config
-    let mut extra_chat_params = HashMap::new();
-    if let Some(ref model) = agent_detail.default_model {
-        extra_chat_params.insert("model".to_string(), model.clone());
-    }
-    if let Some(ref sp) = agent_detail.system_prompt {
-        extra_chat_params.insert("system_prompt".to_string(), sp.content.clone());
-    }
-    if let Some(temp) = agent_detail.temperature {
-        extra_chat_params.insert("temperature".to_string(), temp.to_string());
-    }
-
-    run_agent_loop(
-        executor_ptr,
-        &agent_name,
-        &agent_slug,
-        &context,
-        None,
-        resolved_cli_input.as_deref(),
-        extra_chat_params,
-    )
-    .await?;
-
-    Ok(())
-}
-
 fn find_project_root(start_search_path: &Path) -> Result<PathBuf> {
     let mut current_ptr = start_search_path.to_path_buf();
     if current_ptr.is_file() {
@@ -752,52 +577,7 @@ async fn handle_install() -> Result<()> {
     Ok(())
 }
 
-#[allow(dead_code)]
-async fn handle_pull(slug: &str, resource_type: &str, output_dir: Option<&Path>) -> Result<()> {
-    let local_config = JuglansConfig::load()?;
-    let jug0_client = Jug0Client::new(&local_config);
-
-    let (content, filename) = jug0_client.pull_resource(slug, resource_type).await?;
-
-    let output_path = if let Some(dir) = output_dir {
-        dir.join(&filename)
-    } else {
-        PathBuf::from(&filename)
-    };
-
-    fs::write(&output_path, &content)?;
-    println!("✅ Pulled {} to {:?}", slug, output_path);
-    Ok(())
-}
-
-#[allow(dead_code)]
-async fn handle_list(resource_type: Option<&str>) -> Result<()> {
-    let local_config = JuglansConfig::load()?;
-    let jug0_client = Jug0Client::new(&local_config);
-
-    let resources = jug0_client.list_resources(resource_type).await?;
-
-    if resources.is_empty() {
-        println!("No resources found.");
-    } else {
-        for resource in resources {
-            println!("  {} ({})", resource.slug, resource.resource_type);
-        }
-    }
-    Ok(())
-}
-
-#[allow(dead_code)]
-async fn handle_delete(slug: &str, resource_type: &str) -> Result<()> {
-    let local_config = JuglansConfig::load()?;
-    let jug0_client = Jug0Client::new(&local_config);
-
-    jug0_client.delete_resource(slug, resource_type).await?;
-    println!("✅ Deleted {} ({})", slug, resource_type);
-    Ok(())
-}
-
-async fn handle_whoami(verbose: bool, check_connection: bool) -> Result<()> {
+async fn handle_whoami(verbose: bool) -> Result<()> {
     let config = JuglansConfig::load()?;
     let config_path = if Path::new("juglans.toml").exists() {
         "./juglans.toml"
@@ -807,84 +587,19 @@ async fn handle_whoami(verbose: bool, check_connection: bool) -> Result<()> {
 
     println!("\n📋 Account Information\n");
 
-    // Try to get server user info
-    let jug0_client = Jug0Client::new(&config);
-    let server_user = if config.account.api_key.is_some()
-        && !config.account.api_key.as_ref().unwrap().is_empty()
-    {
-        match jug0_client.get_current_user().await {
-            Ok(user) => Some(user),
-            Err(e) => {
-                if verbose {
-                    println!(
-                        "\x1b[33m⚠️  Unable to fetch server user info: {}\x1b[0m\n",
-                        e
-                    );
-                }
-                None
-            }
-        }
-    } else {
-        None
-    };
-
-    // Display server user info if available
-    if let Some(user) = &server_user {
-        println!("\x1b[1m🌐 Server Account (from Jug0)\x1b[0m");
-        println!("User ID:       {}", user.id);
-        println!("Username:      {}", user.username);
-        if let Some(email) = &user.email {
-            println!("Email:         {}", email);
-        }
-        if let Some(role) = &user.role {
-            println!("Role:          {}", role);
-        }
-        if let Some(org_id) = &user.org_id {
-            println!(
-                "Organization:  {} ({})",
-                user.org_name.as_deref().unwrap_or(""),
-                org_id
-            );
-        }
-        println!();
-    }
-
-    // Local config info
     println!("\x1b[1m💻 Local Configuration\x1b[0m");
     println!("User ID:       {}", config.account.id);
     println!("Name:          {}", config.account.name);
-
     if let Some(role) = &config.account.role {
         println!("Role:          {}", role);
     }
-
-    // API Key (masked)
-    if let Some(api_key) = &config.account.api_key {
-        if api_key.is_empty() {
-            println!("API Key:       \x1b[33m⚠️  Not configured\x1b[0m");
-        } else {
-            let masked = mask_api_key(api_key);
-            let status = if server_user.is_some() {
-                "\x1b[32m✅ Valid\x1b[0m"
-            } else {
-                "\x1b[33m(not verified)\x1b[0m"
-            };
-            println!("API Key:       {} {}", masked, status);
-        }
-    } else {
-        println!("API Key:       \x1b[33m⚠️  Not configured\x1b[0m");
-    }
-
     println!();
 
-    // Workspace info
     if let Some(workspace) = &config.workspace {
         println!("Workspace:     {} ({})", workspace.id, workspace.name);
         if let Some(members) = &workspace.members {
             println!("Members:       {} user(s)", members.len());
         }
-
-        // Resource paths (verbose mode)
         if verbose {
             if !workspace.workflows.is_empty() || !workspace.prompts.is_empty() {
                 println!("\nResource Paths:");
@@ -894,33 +609,13 @@ async fn handle_whoami(verbose: bool, check_connection: bool) -> Result<()> {
                     println!("  Tools:       {}", workspace.tools.join(", "));
                 }
             }
-
             if !workspace.exclude.is_empty() {
                 println!("\nExclude:       {}", workspace.exclude.join(", "));
             }
         }
-
         println!();
     }
 
-    // Server info
-    println!("Jug0 Server:   {}", config.jug0.base_url);
-
-    // Connection test
-    if check_connection {
-        print!("Status:        ");
-        io::stdout().flush()?;
-
-        match test_connection(&config).await {
-            Ok(true) => println!("\x1b[32m✅ Connected\x1b[0m"),
-            Ok(false) => println!("\x1b[33m⚠️  Server unreachable\x1b[0m"),
-            Err(e) => println!("\x1b[31m❌ Error: {}\x1b[0m", e),
-        }
-    }
-
-    println!();
-
-    // Web server config (verbose)
     if verbose {
         println!(
             "Web Server:    {}:{}",
@@ -929,33 +624,9 @@ async fn handle_whoami(verbose: bool, check_connection: bool) -> Result<()> {
         println!();
     }
 
-    // Config file location
     println!("Config:        {}", config_path);
     println!();
-
     Ok(())
-}
-
-fn mask_api_key(key: &str) -> String {
-    if key.len() <= 12 {
-        return "***".to_string();
-    }
-    let prefix = &key[..8];
-    let suffix = &key[key.len() - 3..];
-    format!("{}...{}", prefix, suffix)
-}
-
-async fn test_connection(config: &JuglansConfig) -> Result<bool> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()?;
-
-    let health_url = format!("{}/health", config.jug0.base_url);
-
-    match client.get(&health_url).send().await {
-        Ok(response) => Ok(response.status().is_success()),
-        Err(_) => Ok(false),
-    }
 }
 
 fn handle_check(path: Option<&Path>, show_all: bool, output_format: &str) -> Result<()> {
@@ -1391,383 +1062,6 @@ fn handle_check(path: Option<&Path>, show_all: bool, output_format: &str) -> Res
     Ok(())
 }
 
-#[allow(dead_code)]
-async fn handle_push(
-    paths: Vec<PathBuf>,
-    force: bool,
-    dry_run: bool,
-    resource_type: Option<String>,
-    recursive: bool,
-    endpoint: Option<String>,
-) -> Result<()> {
-    let local_config = JuglansConfig::load()?;
-
-    // Collect files to process
-    let mut files_to_push = Vec::new();
-
-    if paths.is_empty() {
-        // No arguments: use workspace configuration
-        println!("📦 Using workspace configuration from juglans.toml");
-
-        if let Some(ref workspace) = local_config.workspace {
-            let patterns = match resource_type.as_deref() {
-                Some("workflow") => workspace.workflows.clone(),
-                Some("prompt") => workspace.prompts.clone(),
-                Some("tool") => workspace.tools.clone(),
-                Some("all") | None => {
-                    let mut all = Vec::new();
-                    all.extend(workspace.workflows.clone());
-                    all.extend(workspace.prompts.clone());
-                    all.extend(workspace.tools.clone());
-                    all
-                }
-                _ => {
-                    return Err(anyhow!(
-                        "Invalid resource type. Use: workflow, prompt, tool, all"
-                    ))
-                }
-            };
-
-            for pattern in patterns {
-                for entry in glob::glob(&pattern)? {
-                    let path = entry?;
-                    if !should_exclude(&path, &workspace.exclude) {
-                        files_to_push.push(path);
-                    }
-                }
-            }
-        } else {
-            return Err(anyhow!("No workspace configuration found in juglans.toml"));
-        }
-    } else {
-        // Arguments provided: scan specified paths
-        for path in paths {
-            if path.is_file() {
-                files_to_push.push(path);
-            } else if path.is_dir() {
-                scan_directory(&path, &mut files_to_push, recursive, &resource_type)?;
-            } else {
-                // Glob pattern
-                for entry in glob::glob(path.to_str().unwrap_or(""))? {
-                    files_to_push.push(entry?);
-                }
-            }
-        }
-    }
-
-    if files_to_push.is_empty() {
-        println!("⚠️  No files found to push.");
-        return Ok(());
-    }
-
-    // Sort files by dependency order: workflows → prompts
-    files_to_push.sort_by_key(|path| {
-        let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
-        match ext {
-            "jg" | "jgflow" => 0,    // Workflows first (no dependencies)
-            "jgx" | "jgprompt" => 1, // Prompts second
-            "json" => 2,             // Tool definitions last (local only)
-            _ => 3,
-        }
-    });
-
-    // Statistics
-    let mut stats = PushStats::default();
-    for file in &files_to_push {
-        if let Some(ext) = file.extension().and_then(|s| s.to_str()) {
-            match ext {
-                "jg" | "jgflow" => stats.workflows += 1,
-                "jgx" | "jgprompt" => stats.prompts += 1,
-                "json" => stats.tools += 1,
-                _ => {}
-            }
-        }
-    }
-
-    println!("\n📂 Found resources:");
-    if stats.workflows > 0 {
-        println!("  📄 {} workflow(s)", stats.workflows);
-    }
-    if stats.prompts > 0 {
-        println!("  📝 {} prompt(s)", stats.prompts);
-    }
-    if stats.tools > 0 {
-        println!("  🔧 {} tool definition(s)", stats.tools);
-    }
-
-    if dry_run {
-        println!("\n🔍 Dry run mode - preview only:\n");
-        for file in &files_to_push {
-            println!("  ✓ {}", file.display());
-        }
-        println!("\n📊 Total: {} file(s)", files_to_push.len());
-        println!("\nRun without --dry-run to push.");
-        return Ok(());
-    }
-
-    // Pre-push validation for workflow files
-    {
-        let mut validation_failed = false;
-        for file in &files_to_push {
-            let ext = file.extension().and_then(|s| s.to_str()).unwrap_or("");
-            if ext == "jgflow" {
-                if let Ok(content) = std::fs::read_to_string(file) {
-                    if let Ok(manifest) = GraphParser::parse_manifest(&content) {
-                        if !manifest.source.is_empty() {
-                            let source_path = file
-                                .parent()
-                                .unwrap_or(Path::new("."))
-                                .join(&manifest.source);
-                            if let Ok(source_content) = std::fs::read_to_string(&source_path) {
-                                if let Ok(graph) = GraphParser::parse(&source_content) {
-                                    let result = WorkflowValidator::validate(&graph);
-                                    if !result.is_valid {
-                                        eprint!(
-                                            "{}",
-                                            result.format_report(&file.display().to_string())
-                                        );
-                                        validation_failed = true;
-                                    } else if result.warning_count() > 0 {
-                                        eprint!(
-                                            "{}",
-                                            result.format_report(&file.display().to_string())
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        if validation_failed {
-            anyhow::bail!("Push aborted due to validation errors.");
-        }
-    }
-
-    // Execute push
-    println!("\n📤 Pushing resources...\n");
-
-    let jug0_api_ptr = Jug0Client::new(&local_config);
-    let mut success_count = 0;
-    let mut skip_count = 0;
-    let mut error_count = 0;
-    let mut workflow_slug_map: HashMap<String, String> = HashMap::new();
-
-    for file in &files_to_push {
-        match push_single_file(
-            file,
-            &jug0_api_ptr,
-            &local_config,
-            force,
-            &endpoint,
-            &mut workflow_slug_map,
-        )
-        .await
-        {
-            Ok(PushResult::Success(msg)) => {
-                println!("  ✅ {}", msg);
-                success_count += 1;
-            }
-            Ok(PushResult::Skipped(msg)) => {
-                println!("  ⚠️  {}", msg);
-                skip_count += 1;
-            }
-            Err(e) => {
-                println!("  ❌ {}: {}", file.display(), e);
-                error_count += 1;
-            }
-        }
-    }
-
-    println!("\n📊 Summary:");
-    println!("  ✅ {} succeeded", success_count);
-    if skip_count > 0 {
-        println!("  ⚠️  {} skipped", skip_count);
-    }
-    if error_count > 0 {
-        println!("  ❌ {} failed", error_count);
-    }
-
-    if error_count > 0 {
-        std::process::exit(1);
-    }
-
-    Ok(())
-}
-
-#[allow(dead_code)]
-#[derive(Default)]
-struct PushStats {
-    workflows: usize,
-    prompts: usize,
-    tools: usize,
-}
-
-#[allow(dead_code)]
-enum PushResult {
-    Success(String),
-    Skipped(String),
-}
-
-#[allow(dead_code)]
-fn should_exclude(path: &Path, exclude_patterns: &[String]) -> bool {
-    let path_str = path.to_str().unwrap_or("");
-    for pattern in exclude_patterns {
-        if glob::Pattern::new(pattern)
-            .ok()
-            .is_some_and(|p| p.matches(path_str))
-        {
-            return true;
-        }
-    }
-    false
-}
-
-#[allow(dead_code)]
-fn scan_directory(
-    dir: &Path,
-    files: &mut Vec<PathBuf>,
-    recursive: bool,
-    resource_type: &Option<String>,
-) -> Result<()> {
-    let extensions = match resource_type.as_deref() {
-        Some("workflow") => vec!["jgflow"],
-        Some("prompt") => vec!["jgx", "jgprompt"],
-        Some("tool") => vec!["json"],
-        Some("all") | None => vec!["jgflow", "jgx", "jgprompt", "json"],
-        _ => vec![],
-    };
-
-    let pattern = if recursive {
-        format!("{}/**/*", dir.display())
-    } else {
-        format!("{}/*", dir.display())
-    };
-
-    for entry in glob::glob(&pattern)? {
-        let path = entry?;
-        if path.is_file() {
-            if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
-                if extensions.contains(&ext) {
-                    files.push(path);
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
-#[allow(dead_code)]
-async fn push_single_file(
-    file: &Path,
-    jug0_client: &Jug0Client,
-    config: &JuglansConfig,
-    force: bool,
-    endpoint: &Option<String>,
-    workflow_slug_map: &mut HashMap<String, String>,
-) -> Result<PushResult> {
-    let raw_file_data = fs::read_to_string(file)?;
-    let ext_str = file.extension().and_then(|s| s.to_str()).unwrap_or("");
-    let filename = file
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("unknown");
-
-    match ext_str {
-        "jgx" | "jgprompt" => {
-            let msg = jug0_client
-                .apply_prompt(&PromptParser::parse(&raw_file_data)?, force)
-                .await?;
-            Ok(PushResult::Success(format!(
-                "prompt: {} - {}",
-                filename, msg
-            )))
-        }
-        "jg" => {
-            Ok(PushResult::Skipped(format!(
-                "workflow: {} - .jg files cannot be pushed directly. Use a .jgflow manifest with: source: \"./{}\"",
-                filename, filename
-            )))
-        }
-        "jgflow" => {
-            let mut manifest = GraphParser::parse_manifest(&raw_file_data)?;
-
-            if manifest.source.is_empty() {
-                anyhow::bail!("{}: .jgflow manifest requires a 'source' field", filename);
-            }
-
-            // Read the .jg file content referenced by source
-            let source_path = file.parent().unwrap_or(Path::new(".")).join(&manifest.source);
-            let definition = fs::read_to_string(&source_path)
-                .with_context(|| format!("Failed to read source: {}", manifest.source))?;
-
-            // Parse source .jg and apply manifest metadata
-            let mut wf = GraphParser::parse(&definition)?;
-            if manifest.slug.is_empty() {
-                manifest.slug = file
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("unnamed")
-                    .to_string();
-            }
-            manifest.apply_to(&mut wf);
-
-            // Priority: CLI --endpoint > config endpoint_url > default host:port
-            let endpoint_url = endpoint
-                .clone()
-                .or_else(|| config.server.endpoint_url.clone())
-                .map(|url| {
-                    let base = url.trim_end_matches('/');
-                    if base.ends_with("/api/chat") {
-                        base.to_string()
-                    } else {
-                        format!("{}/api/chat", base)
-                    }
-                })
-                .unwrap_or_else(|| {
-                    format!(
-                        "http://{}:{}/api/chat",
-                        config.server.host, config.server.port
-                    )
-                });
-
-            let msg = jug0_client
-                .apply_workflow(
-                    &wf,
-                    &definition,
-                    &endpoint_url,
-                    manifest.is_public,
-                    manifest.schedule.as_deref(),
-                    force,
-                )
-                .await?;
-
-            // Record slug mapping so agents can resolve workflow refs
-            if let Some(stem) = Path::new(&manifest.source)
-                .file_stem()
-                .and_then(|s| s.to_str())
-            {
-                workflow_slug_map.insert(stem.to_string(), wf.slug.clone());
-            }
-
-            Ok(PushResult::Success(format!(
-                "workflow: {} - {}",
-                filename, msg
-            )))
-        }
-        "json" => {
-            // Tool definition files - skip for now as they don't need to be uploaded
-            // They are loaded locally by workflows when needed
-            Ok(PushResult::Skipped(format!(
-                "tool: {} - Tool definitions are loaded locally, no upload needed",
-                filename
-            )))
-        }
-        _ => Err(anyhow!("Unsupported file type: {}", ext_str)),
-    }
-}
 
 async fn handle_bot(
     platform: &str,
@@ -1977,7 +1271,7 @@ async fn handle_skills(action: &SkillsAction) -> Result<()> {
                 prompts_dir.display()
             );
             println!(
-                "Use 'juglans push {}/*.jgx' to push to jug0.",
+                "Prompts in {} are loaded automatically by workflows.",
                 prompts_dir.display()
             );
         }
@@ -2068,11 +1362,14 @@ async fn handle_publish(path: Option<&Path>) -> Result<()> {
         .map(|r| r.url.as_str())
         .unwrap_or("https://jgr.juglans.ai");
 
-    let api_key = config
-        .account
-        .api_key
-        .as_deref()
-        .ok_or_else(|| anyhow!("account.api_key is required for publishing"))?;
+    let api_key = std::env::var("JUGLANS_REGISTRY_API_KEY")
+        .or_else(|_| std::env::var("REGISTRY_API_KEY"))
+        .map_err(|_| {
+            anyhow!(
+                "JUGLANS_REGISTRY_API_KEY (or REGISTRY_API_KEY) env var is required for publishing"
+            )
+        })?;
+    let api_key = api_key.as_str();
 
     let url = format!(
         "{}/api/v1/packages/{}/{}",
@@ -2322,13 +1619,7 @@ async fn handle_test(path: Option<&Path>, filter: Option<&str>, format: &str) ->
 
     // Create runtime dependencies
     let config = JuglansConfig::load()?;
-    let runtime: Arc<dyn JuglansRuntime> = if has_local_llm_provider(&config) {
-        Arc::new(services::local_runtime::LocalRuntime::new_with_config(
-            &config.ai,
-        ))
-    } else {
-        Arc::new(Jug0Client::new(&config))
-    };
+    let runtime: Arc<LocalRuntime> = Arc::new(LocalRuntime::new_with_config(&config.ai));
     let prompt_registry = Arc::new(PromptRegistry::new());
 
     let runner = TestRunner::new(runtime, prompt_registry);
@@ -2404,11 +1695,8 @@ async fn main() -> Result<()> {
 
                 web_server::start_web_server(final_host, final_port, root).await?;
             }
-            Commands::Whoami {
-                verbose,
-                check_connection,
-            } => {
-                handle_whoami(*verbose, *check_connection).await?;
+            Commands::Whoami { verbose } => {
+                handle_whoami(*verbose).await?;
             }
             Commands::Serve { port, host, entry } => {
                 handle_serve(host.clone(), *port, entry.clone()).await?;
@@ -2477,14 +1765,8 @@ async fn main() -> Result<()> {
                 juglans::doctest::run_doctest(target, format)?;
             }
         }
-    } else if let Some(ref file_path) = application_cli.file {
-        // Check if it's a @handle (remote agent)
-        let file_str = file_path.to_string_lossy();
-        if file_str.starts_with('@') {
-            handle_remote_agent(&application_cli, &file_str).await?;
-        } else {
-            handle_file_logic(&application_cli).await?;
-        }
+    } else if application_cli.file.is_some() {
+        handle_file_logic(&application_cli).await?;
     } else {
         println!("JWL Language Runtime (Multipurpose CLI)\nUse --help for command list.");
     }

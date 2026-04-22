@@ -133,12 +133,11 @@ python: ["./processors/data.py"]
 
 ## Configure Workers
 
-For high-concurrency scenarios, configure multiple Python workers in `juglans.toml`:
+For high-concurrency scenarios, configure multiple Python workers in `juglans.toml` under the `[limits]` section:
 
 ```toml
-[python]
-workers = 4        # Number of worker processes
-timeout = 30000    # Timeout per call (ms)
+[limits]
+python_workers = 4        # Number of Python worker processes
 ```
 
 ## Debugging

@@ -80,11 +80,11 @@ Code blocks that should not be validated can be marked with `ignore`:
 |---|-------|-------|----------|
 | 1 | `Duplicate node ID: X` | Two nodes in the same workflow share a name | Rename one of the nodes |
 | 2 | `Edge references undefined node: X` | An edge references a node that has not been defined | Check the node name spelling; make sure nodes are defined before edges |
-| 3 | `Unreachable node: X` | A node has no incoming edges and is not an entry node | Connect the node to the graph or remove it |
-| 4 | `Connection refused` | The Jug0 backend is not running | Start Jug0 or check the `base_url` configuration |
-| 5 | `Agent not found: X` | The agent slug does not exist | Check the spelling and ensure the corresponding file is imported via `agents:` |
+| 3 | `Node 'X' is not reachable from entry node` (W002) | A node has no path from the entry node | Connect the node to the graph or remove it |
+| 4 | `No API-key provided` | No LLM provider configured for `chat()` | Set `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`/etc., or define `[ai.providers]` in `juglans.toml` |
+| 5 | `Agent not found: X` | The agent slug does not exist | Check the spelling and ensure the corresponding file is imported via `libs:` |
 | 6 | `Tool not found: X` | An unregistered tool was called | Verify the tool name is a builtin or that the MCP server is configured |
-| 7 | `Cycle detected` | The graph contains a cycle | Review the edge definitions; DAGs do not allow cycles (use `while`/`foreach` instead) |
+| 7 | `Cycle detected involving node 'X'. Workflows must be acyclic (DAG).` (E002) | The graph contains a cycle | Review the edge definitions; DAGs do not allow cycles (use `while`/`foreach` instead) |
 | 8 | `Parse error at line N` | DSL syntax error | Check the syntax near that line: bracket matching, quote closure, parameter format |
 | 9 | `Variable not found: X` | A context variable was not set | Ensure the variable is set via assignment syntax before it is used |
 | 10 | `Timeout` | Tool execution timed out | Check the network connection or increase the timeout configuration |
@@ -148,13 +148,10 @@ Verify that the current configuration is correct:
 ```bash
 # View account and configuration info
 juglans whoami --verbose
-
-# Test the Jug0 connection
-juglans whoami --check-connection
 ```
 
 ## Next Steps
 
 - [Testing Workflows](./testing.md) -- Systematic testing methods
-- [Error Handling](./error-handling.md) -- Handling errors in workflows
+- [Error Handling](../tutorials/error-handling.md) -- Handling errors in workflows
 - [CLI Reference](../reference/cli.md) -- Complete command reference

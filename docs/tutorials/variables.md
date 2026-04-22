@@ -45,7 +45,7 @@ Breaking it down:
 juglans show.jg --input '{"user": {"name": "Bob"}}'
 ```
 
-For arrays, use numeric indices: `input.items.0` accesses the first element.
+For arrays, use bracket indexing: `input.items[0]` accesses the first element.
 
 ### What if input is missing?
 
@@ -97,7 +97,7 @@ When `[c]` runs, `output` is `"BBB"` (from `[b]`), not `"AAA"` (from `[a]`). Eac
 
 ### Named Node Output
 
-Need to access an earlier node's result? Use `$node_id.output`:
+Need to access an earlier node's result? Use `node_id.output`:
 
 ```juglans
 [step1]: print(message="hello")
@@ -114,7 +114,7 @@ world
 hello world
 ```
 
-Every node's output is also stored at `$node_id.output` and persists for the entire workflow. Use this when you need data from a node that isn't the immediate predecessor.
+Every node's output is also stored at `node_id.output` and persists for the entire workflow. Use this when you need data from a node that isn't the immediate predecessor.
 
 ## 2.3 Context Variables
 
@@ -345,14 +345,14 @@ input.name = "Alice"
 |----------|---------|-------|----------|
 | `input` | External JSON data | Entire workflow | No |
 | `output` | Last node's return value | Overwritten each step | No |
-| `$node_id.output` | Specific node's return value | Entire workflow | No |
+| `node_id.output` | Specific node's return value | Entire workflow | No |
 | context variables | Shared context storage | Entire workflow | Yes (via assignment syntax) |
 
 Key rules:
 
 1. **input** is set once at startup. Access nested fields with dot notation.
 2. **output** is the most recent node's return value. It gets overwritten every step.
-3. **$node_id.output** persists -- use it to reach back to earlier nodes.
+3. **node_id.output** persists -- use it to reach back to earlier nodes.
 4. **Context variables** are your scratch space. Use assignment syntax to set, read by name.
 5. Use **str()** when concatenating numbers with strings.
 

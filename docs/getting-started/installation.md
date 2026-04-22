@@ -27,7 +27,9 @@ irm https://juglans.ai/get-sdk.ps1 | iex
 juglans --version
 ```
 
-You should see output like `juglans 0.2.6`. If you see `command not found`, check the [Troubleshooting](#troubleshooting) section below.
+You should see output like `juglans 0.2.12`. If you see `command not found`, check the [Troubleshooting](#troubleshooting) section below.
+
+Run `juglans --help` to see all subcommands. See [CLI Commands](../reference/cli.md) for the full reference.
 
 ## Other Methods
 
@@ -51,7 +53,7 @@ sudo mv juglans /usr/local/bin/
 
 ### Build from Source
 
-Requires Rust 1.70+. If you don't have Rust, install it first:
+Requires Rust 1.80+. If you don't have Rust, install it first:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh

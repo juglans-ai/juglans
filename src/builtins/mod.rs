@@ -8,7 +8,7 @@ use tracing::debug;
 
 use crate::core::context::WorkflowContext;
 use crate::core::tool_loader::ToolResource;
-use crate::services::interface::JuglansRuntime;
+use crate::services::local_runtime::LocalRuntime;
 use crate::services::prompt_loader::PromptRegistry;
 use crate::services::tool_registry::ToolRegistry;
 
@@ -51,12 +51,11 @@ pub struct BuiltinRegistry {
     /// Back-reference to WorkflowExecutor for nested execution.
     /// Set post-construction via `set_executor()`. See struct-level docs for rationale.
     executor: RwLock<Option<std::sync::Weak<crate::core::executor::WorkflowExecutor>>>,
-    runtime: Arc<dyn JuglansRuntime>,
     _prompt_registry: Arc<PromptRegistry>,
 }
 
 impl BuiltinRegistry {
-    pub fn new(prompts: Arc<PromptRegistry>, runtime: Arc<dyn JuglansRuntime>) -> Arc<Self> {
+    pub fn new(prompts: Arc<PromptRegistry>, runtime: Arc<LocalRuntime>) -> Arc<Self> {
         let mut tool_map: HashMap<String, Arc<Box<dyn Tool>>> = HashMap::new();
 
         macro_rules! reg {
@@ -72,7 +71,7 @@ impl BuiltinRegistry {
         reg!(system::Timer);
         reg!(system::Notify);
         reg!(system::Print);
-        reg!(system::Reply::new(runtime.clone()));
+        reg!(system::Reply::new());
         reg!(system::SetContext);
         reg!(system::FeishuWebhook);
         reg!(system::FeishuSend);
@@ -91,16 +90,7 @@ impl BuiltinRegistry {
         reg!(devtools::Bash);
         // "sh" alias: backward compatible with old sh(cmd=...) syntax
         tool_map.insert("sh".to_string(), Arc::new(Box::new(devtools::Bash)));
-        reg!(ai::Prompt::new(prompts.clone(), runtime.clone()));
-        reg!(ai::MemorySearch::new(runtime.clone()));
-        reg!(ai::WebSearch::new(runtime.clone()));
-        reg!(ai::History::new(runtime.clone()));
-        reg!(ai::VectorCreateSpace::new(runtime.clone()));
-        reg!(ai::VectorUpsert::new(runtime.clone()));
-        reg!(ai::VectorSearch::new(runtime.clone()));
-        reg!(ai::VectorListSpaces::new(runtime.clone()));
-        reg!(ai::VectorDeleteSpace::new(runtime.clone()));
-        reg!(ai::VectorDelete::new(runtime.clone()));
+        reg!(ai::Prompt::new(prompts.clone()));
 
         // Testing tools
         reg!(testing::Config);
@@ -144,10 +134,18 @@ impl BuiltinRegistry {
         reg!(database::DbTables);
         reg!(database::DbColumns);
 
+        // Conversation history
+        reg!(history::HistoryLoad);
+        reg!(history::HistoryAppend);
+        reg!(history::HistoryReplace);
+        reg!(history::HistoryTrim);
+        reg!(history::HistoryClear);
+        reg!(history::HistoryStats);
+        reg!(history::HistoryListChats);
+
         let registry_arc = Arc::new(Self {
             tools: RwLock::new(tool_map),
             executor: RwLock::new(None),
-            runtime: runtime.clone(),
             _prompt_registry: prompts.clone(),
         });
 
@@ -243,11 +241,6 @@ impl BuiltinRegistry {
         self.executor.read().ok()?.as_ref()?.upgrade()
     }
 
-    /// Get runtime reference (for injecting execution tokens, etc.)
-    pub fn get_runtime(&self) -> Arc<dyn JuglansRuntime> {
-        self.runtime.clone()
-    }
-
     /// Execute nested workflow (called by Chat tool)
     pub async fn execute_nested_workflow(
         &self,
@@ -327,6 +320,7 @@ pub mod database;
 #[cfg(feature = "device")]
 pub mod device;
 pub mod devtools;
+pub mod history;
 pub mod http;
 pub mod http_client;
 pub mod network;

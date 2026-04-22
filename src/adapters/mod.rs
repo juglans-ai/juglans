@@ -6,7 +6,6 @@ pub mod telegram;
 pub mod wechat;
 
 use anyhow::{anyhow, Result};
-use futures::StreamExt;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
@@ -18,8 +17,6 @@ use crate::core::context::{WorkflowContext, WorkflowEvent};
 use crate::core::executor::WorkflowExecutor;
 use crate::core::parser::GraphParser;
 use crate::services::config::JuglansConfig;
-use crate::services::interface::JuglansRuntime;
-use crate::services::jug0::Jug0Client;
 use crate::services::local_runtime::LocalRuntime;
 use crate::services::prompt_loader::PromptRegistry;
 
@@ -51,171 +48,6 @@ pub trait ToolExecutor: Send + Sync {
     async fn execute(&self, tool_name: &str, args: Value) -> Result<String>;
 }
 
-/// No-op tool executor (for adapters without platform-specific tools, e.g. Telegram)
-pub struct NoopToolExecutor;
-
-#[async_trait::async_trait]
-impl ToolExecutor for NoopToolExecutor {
-    async fn execute(&self, tool_name: &str, _args: Value) -> Result<String> {
-        Ok(format!(
-            "Tool '{}' is not available in this context",
-            tool_name
-        ))
-    }
-}
-
-/// Chat via jug0 (SSE client mode).
-///
-/// Sends message to jug0 /api/chat and reads the SSE stream:
-/// - content events -> concatenated into reply text
-/// - tool_call events -> invoke tool_executor to run tools -> POST /tool-result
-pub async fn chat_via_jug0(
-    config: &JuglansConfig,
-    agent_slug: &str,
-    message: &PlatformMessage,
-    tool_executor: &dyn ToolExecutor,
-) -> Result<BotReply> {
-    let jug0_base = config.jug0.base_url.trim_end_matches('/');
-    let chat_url = format!("{}/api/chat", jug0_base);
-
-    let body = json!({
-        "chat_id": format!("@{}", agent_slug),
-        "messages": [{"type": "text", "role": "user", "content": &message.text}],
-        "variables": {
-            "platform": &message.platform,
-            "platform_user_id": &message.platform_user_id,
-            "platform_chat_id": &message.platform_chat_id,
-        },
-        "stream": true,
-    });
-
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(&chat_url)
-        .header("X-API-KEY", config.account.api_key.as_deref().unwrap_or(""))
-        .header("Accept", "text/event-stream")
-        .json(&body)
-        .send()
-        .await?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        return Err(anyhow!("jug0 chat request failed: {} {}", status, text));
-    }
-
-    let mut reply_text = String::new();
-
-    // Parse SSE using eventsource-stream
-    use eventsource_stream::Eventsource;
-    let mut stream = resp.bytes_stream().eventsource();
-
-    while let Some(event_result) = stream.next().await {
-        let event = match event_result {
-            Ok(e) => e,
-            Err(e) => {
-                warn!("[SSE] Parse error: {}", e);
-                continue;
-            }
-        };
-
-        let event_type = event.event.as_str();
-
-        match event_type {
-            "" | "message" => {
-                // Default event = content token
-                if let Ok(data) = serde_json::from_str::<Value>(&event.data) {
-                    if let Some(text) = data["text"].as_str() {
-                        reply_text.push_str(text);
-                    }
-                }
-            }
-            "tool_call" => {
-                // Client tool bridge: execute tools and return results
-                if let Ok(data) = serde_json::from_str::<Value>(&event.data) {
-                    let call_id = data["call_id"].as_str().unwrap_or("").to_string();
-                    let tools = data["tools"].as_array().cloned().unwrap_or_default();
-
-                    info!(
-                        "🔧 [Tool Bridge] Received {} tool call(s), call_id: {}",
-                        tools.len(),
-                        call_id
-                    );
-
-                    let mut results = Vec::new();
-                    for tool in &tools {
-                        let tool_name = tool["name"]
-                            .as_str()
-                            .or_else(|| tool["function"]["name"].as_str())
-                            .unwrap_or("unknown");
-                        let args_str = tool["arguments"]
-                            .as_str()
-                            .or_else(|| tool["function"]["arguments"].as_str())
-                            .unwrap_or("{}");
-                        let tool_call_id = tool["id"].as_str().unwrap_or("").to_string();
-                        let args: Value = serde_json::from_str(args_str).unwrap_or(json!({}));
-
-                        info!("🔧 [Tool Bridge] Executing: {}({})", tool_name, args_str);
-
-                        let content = match tool_executor.execute(tool_name, args).await {
-                            Ok(result) => result,
-                            Err(e) => {
-                                error!("🔧 [Tool Bridge] {} failed: {}", tool_name, e);
-                                format!("Error: {}", e)
-                            }
-                        };
-
-                        results.push(json!({
-                            "tool_call_id": tool_call_id,
-                            "content": content,
-                        }));
-                    }
-
-                    // POST /tool-result
-                    let result_url = format!("{}/api/chat/tool-result", jug0_base);
-                    let result_resp = client
-                        .post(&result_url)
-                        .header("X-API-KEY", config.account.api_key.as_deref().unwrap_or(""))
-                        .json(&json!({
-                            "call_id": call_id,
-                            "results": results,
-                        }))
-                        .send()
-                        .await;
-
-                    match result_resp {
-                        Ok(r) => info!("🔧 [Tool Bridge] tool-result response: {}", r.status()),
-                        Err(e) => error!("🔧 [Tool Bridge] Failed to send tool-result: {}", e),
-                    }
-                }
-            }
-            "error" => {
-                let msg = if let Ok(data) = serde_json::from_str::<Value>(&event.data) {
-                    data["message"].as_str().unwrap_or(&event.data).to_string()
-                } else {
-                    event.data.clone()
-                };
-                error!("[SSE] Error event: {}", msg);
-                if reply_text.is_empty() {
-                    reply_text = format!("Error: {}", msg);
-                }
-            }
-            "meta" | "done" => {
-                debug!("[SSE] {}: {}", event_type, event.data);
-            }
-            _ => {
-                debug!("[SSE] Unknown event type '{}': {}", event_type, event.data);
-            }
-        }
-    }
-
-    if reply_text.is_empty() {
-        reply_text = "(No response)".to_string();
-    }
-
-    Ok(BotReply { text: reply_text })
-}
-
 /// Reuse core logic from web_server handle_chat, without the SSE/HTTP parts:
 /// 1. Load agent -> create executor
 /// 2. Create WorkflowContext, set $input.message
@@ -243,12 +75,8 @@ pub async fn run_agent_for_message(
     let wf_content = fs::read_to_string(&wf_path)
         .map_err(|e| anyhow!("Workflow File Error: {} (tried {:?})", e, wf_path))?;
 
-    // 2. Create runtime + executor (prefer local providers if configured)
-    let runtime: Arc<dyn JuglansRuntime> = if config.ai.has_providers() {
-        Arc::new(LocalRuntime::new_with_config(&config.ai))
-    } else {
-        Arc::new(Jug0Client::new(config))
-    };
+    // 2. Create runtime + executor
+    let runtime: Arc<LocalRuntime> = Arc::new(LocalRuntime::new_with_config(&config.ai));
 
     let mut prompt_registry = PromptRegistry::new();
     let _ = prompt_registry.load_from_paths(&[
@@ -296,9 +124,22 @@ pub async fn run_agent_for_message(
         .get_registry()
         .set_executor(Arc::downgrade(&executor));
 
+    // Initialize the global conversation-history store from config (idempotent).
+    if let Err(e) = crate::services::history::init_global(&config.history) {
+        warn!("[history] init_global failed: {}", e);
+    }
+
     // 3. Create context + event channel (for collecting tokens)
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<WorkflowEvent>();
     let ctx = WorkflowContext::with_sender(tx.clone());
+
+    // Derive a namespaced chat_id for history storage. Keeps different
+    // platforms / users / agents on separate threads so a telegram chat
+    // and a wechat chat for the same slug never collide.
+    let derived_chat_id = format!(
+        "{}:{}:{}",
+        message.platform, message.platform_chat_id, agent_slug
+    );
 
     // Set standardized event input
     ctx.set("input.platform".into(), json!(message.platform))
@@ -309,8 +150,7 @@ pub async fn run_agent_for_message(
         .ok();
     ctx.set("input.user_id".into(), json!(message.platform_user_id))
         .ok();
-    ctx.set("input.chat_id".into(), json!(message.platform_chat_id))
-        .ok();
+    ctx.set("input.chat_id".into(), json!(derived_chat_id)).ok();
     ctx.set("input.text".into(), json!(message.text)).ok();
     ctx.set("input.message".into(), json!(message.text)).ok(); // backward compat
     ctx.set(

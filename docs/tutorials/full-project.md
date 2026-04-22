@@ -35,11 +35,10 @@ Agents are defined as inline JSON map nodes directly in `main.jg` -- no separate
 
 ## 9.3 Defining Agents (Inline)
 
-Agents are defined directly in `main.jg` as inline JSON map nodes. We will define three agents:
+Agents are defined directly in `main.jg` as inline JSON map nodes. We will define two agents:
 
 - **classifier** -- `temperature: 0.0` because classification tasks require deterministic output
 - **qa** -- `temperature: 0.3` because technical Q&A favors accuracy
-- **summarizer** -- `temperature: 0.5` for balanced summarization
 
 These definitions appear in section 9.5 as part of the complete workflow.
 
@@ -117,11 +116,11 @@ prompts: ["./prompts/*.jgx"]
 [handle_task]: chat(agent=qa, message="Help the user complete this task: " + user_message)
 [handle_chat]: chat(agent=qa, message="Respond casually to: " + user_message)
 
-# Step 5: Fallback node
-[fallback]: print(message="Unknown intent, routing to QA")
+# Step 5: Fallback node (also initializes intent so downstream formatting has a value)
+[fallback]: intent = "unknown"
 
 # Step 6: Error handling
-[error_handler]: print(message="Classification failed: " + error.message)
+[error_handler]: intent = "unknown", print(message="Classification failed: " + error.message)
 
 # Step 7: Format output
 [format]: response = output
@@ -312,6 +311,8 @@ curl -X POST http://localhost:8080/api/chat \
   -H "Content-Type: application/json" \
   -d '{"message": "What is Rust?"}'
 ```
+
+Note: `serve()` is fallback-based. Any request path is routed into the workflow unless you pattern-match on `input.path`, so the `/api/chat` path above is illustrative -- any URL under the host will reach the same workflow entry.
 
 ## 9.8 Tutorial Series Review
 

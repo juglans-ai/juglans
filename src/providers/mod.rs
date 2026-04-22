@@ -1,4 +1,4 @@
-// LLM providers layer (migrated from jug0 crate)
+// LLM providers layer
 // Allow upstream clippy warnings in provider implementations
 #[allow(
     clippy::new_without_default,

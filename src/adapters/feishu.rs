@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tracing::{error, info, warn};
 
-use super::{chat_via_jug0, run_agent_for_message, PlatformMessage, ToolExecutor};
+use super::{run_agent_for_message, PlatformMessage, ToolExecutor};
 use crate::services::config::JuglansConfig;
 
 /// Feishu Bot shared state
@@ -24,8 +24,6 @@ struct FeishuState {
     base_url: String,
     /// Cached tenant_access_token
     access_token: Mutex<Option<(String, std::time::Instant)>>,
-    /// Whether to execute via jug0 SSE mode (thin client mode)
-    use_jug0: bool,
     /// Set of processed event IDs (Feishu at-least-once deduplication)
     processed_events: DashSet<String>,
 }
@@ -37,8 +35,6 @@ struct FeishuToolExecutor {
     app_secret: String,
     base_url: String,
     approvers: Vec<String>,
-    jug0_base_url: String,
-    jug0_api_key: String,
     platform_chat_id: String,
     platform_user_id: String,
 }
@@ -54,8 +50,6 @@ impl FeishuToolExecutor {
             app_secret: state.app_secret.clone(),
             base_url: state.base_url.clone(),
             approvers,
-            jug0_base_url: state.config.jug0.base_url.clone(),
-            jug0_api_key: state.config.account.api_key.clone().unwrap_or_default(),
             platform_chat_id: String::new(),
             platform_user_id: String::new(),
         }
@@ -78,8 +72,6 @@ impl FeishuToolExecutor {
             app_secret: handler.app_secret.clone(),
             base_url: handler.base_url.clone(),
             approvers,
-            jug0_base_url: handler.config.jug0.base_url.clone(),
-            jug0_api_key: handler.config.account.api_key.clone().unwrap_or_default(),
             platform_chat_id: msg.platform_chat_id.clone(),
             platform_user_id: msg.platform_user_id.clone(),
         }
@@ -96,8 +88,6 @@ impl ToolExecutor for FeishuToolExecutor {
             obj.insert("_app_secret".into(), json!(self.app_secret));
             obj.insert("_base_url".into(), json!(self.base_url));
             obj.insert("_approvers".into(), json!(self.approvers));
-            obj.insert("_jug0_base_url".into(), json!(self.jug0_base_url));
-            obj.insert("_jug0_api_key".into(), json!(self.jug0_api_key));
             obj.insert("_chat_id".into(), json!(self.platform_chat_id));
             obj.insert("_user_id".into(), json!(self.platform_user_id));
         }
@@ -121,8 +111,6 @@ bill_utils._context = {{
     "app_secret": _sys.get("_app_secret"),
     "base_url": _sys.get("_base_url", "https://open.larksuite.com"),
     "approvers": _sys.get("_approvers", []),
-    "jug0_base_url": _sys.get("_jug0_base_url", "http://localhost:3000"),
-    "jug0_api_key": _sys.get("_jug0_api_key", ""),
 }}
 
 func = getattr(bill_utils, "{}")
@@ -184,7 +172,6 @@ pub struct FeishuWebhookHandler {
     app_secret: String,
     base_url: String,
     access_token: Mutex<Option<(String, std::time::Instant)>>,
-    use_jug0: bool,
     processed_events: DashSet<String>,
 }
 
@@ -197,12 +184,6 @@ impl FeishuWebhookHandler {
         let base_url = bot_config.base_url.clone();
         let agent_slug = bot_config.agent.clone();
 
-        let use_jug0 = match bot_config.mode.as_deref() {
-            Some("local") => false,
-            Some("jug0") => true,
-            _ => !config.jug0.base_url.is_empty(),
-        };
-
         Some(Self {
             config: config.clone(),
             project_root: project_root.to_path_buf(),
@@ -211,7 +192,6 @@ impl FeishuWebhookHandler {
             app_secret,
             base_url,
             access_token: Mutex::new(None),
-            use_jug0,
             processed_events: DashSet::new(),
         })
     }
@@ -326,16 +306,7 @@ impl FeishuWebhookHandler {
             platform: "feishu".into(),
         };
 
-        let result = if self.use_jug0 {
-            let tool_executor = FeishuToolExecutor::from_handler(self, &platform_msg);
-            chat_via_jug0(
-                &self.config,
-                &self.agent_slug,
-                &platform_msg,
-                &tool_executor,
-            )
-            .await
-        } else {
+        let result = {
             let tool_executor = FeishuToolExecutor::from_handler(self, &platform_msg);
             run_agent_for_message(
                 &self.config,
@@ -516,18 +487,7 @@ async fn start_event_mode(
     info!("   Agent: {}", agent_slug);
     info!("   App ID: {}", app_id);
     info!("   API Base: {}", base_url);
-
-    // Execution mode: prefer [bot.feishu] mode, otherwise auto-detect based on jug0 base_url
-    let use_jug0 = match bot_config.mode.as_deref() {
-        Some("local") => false,
-        Some("jug0") => true,
-        _ => !config.jug0.base_url.is_empty(),
-    };
-    if use_jug0 {
-        info!("   Mode: SSE client (via jug0 at {})", config.jug0.base_url);
-    } else {
-        info!("   Mode: local execution");
-    }
+    info!("   Mode: local execution");
 
     let state = Arc::new(FeishuState {
         config,
@@ -537,7 +497,6 @@ async fn start_event_mode(
         app_secret,
         base_url,
         access_token: Mutex::new(None),
-        use_jug0,
         processed_events: DashSet::new(),
     });
 
@@ -774,17 +733,8 @@ async fn handle_message_event(state: &FeishuState, event: &Value) -> Result<()> 
         platform: "feishu".into(),
     };
 
-    // Execute agent -- choose local execution or SSE client based on mode
-    let result = if state.use_jug0 {
-        let tool_executor = FeishuToolExecutor::with_message(state, &platform_msg);
-        chat_via_jug0(
-            &state.config,
-            &state.agent_slug,
-            &platform_msg,
-            &tool_executor,
-        )
-        .await
-    } else {
+    // Execute agent locally
+    let result = {
         let tool_executor = FeishuToolExecutor::with_message(state, &platform_msg);
         run_agent_for_message(
             &state.config,

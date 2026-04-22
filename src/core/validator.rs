@@ -434,6 +434,14 @@ impl WorkflowValidator {
             "vector_list_spaces",
             "vector_delete_space",
             "vector_delete",
+            // Conversation history
+            "history.load",
+            "history.append",
+            "history.replace",
+            "history.trim",
+            "history.clear",
+            "history.stats",
+            "history.list_chats",
         ]
         .iter()
         .copied()

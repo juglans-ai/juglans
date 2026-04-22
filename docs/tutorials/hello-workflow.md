@@ -164,4 +164,4 @@ This chapter covered the fundamentals of Juglans workflows:
 - **Tools** are the actual behavior of nodes: `print` outputs text, `notify` sends notifications, assignment syntax writes to the context
 - **Entry nodes** are automatically determined by topological sort -- nodes with in-degree 0 are entry points, no extra declarations needed
 
-Next chapter: [Tutorial 2: Variables & Data Flow]() -- learn about `input`, `output`, context variables, and how to pass data between nodes.
+Next chapter: [Tutorial 2: Variables & Data Flow](./variables.md) -- learn about `input`, `output`, context variables, and how to pass data between nodes.

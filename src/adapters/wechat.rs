@@ -16,7 +16,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
-use super::{chat_via_jug0, run_agent_for_message, NoopToolExecutor, PlatformMessage};
+use super::{run_agent_for_message, PlatformMessage};
 use crate::services::config::JuglansConfig;
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -198,6 +198,66 @@ fn load_sync_buf(project_root: &Path, account_id: &str) -> Option<String> {
     fs::read_to_string(path).ok()
 }
 
+// ── Pending-QR persistence (external controller hook) ────────────────────────
+//
+// While a QR login is in flight we write two files so external tools (e.g.
+// juglans-wallet) can show the QR to an end-user and observe progress:
+//   .juglans/wechat/qr.pending.txt   — raw QR payload (the string the WeChat
+//                                      app scans); external tools can render
+//                                      it as an image
+//   .juglans/wechat/qr.pending.json  — { qrcode_id, status, created_at,
+//                                      expires_at }
+// Files are deleted once login is confirmed. Expiry is a soft hint — the
+// source of truth is the iLink poll loop.
+
+const QR_PENDING_LIFETIME_SECS: i64 = 240;
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PendingQrMeta {
+    qrcode_id: String,
+    status: String,
+    created_at: String,
+    expires_at: String,
+}
+
+fn write_pending_qr(
+    project_root: &Path,
+    qrcode_id: &str,
+    qrcode_payload: &str,
+    status: &str,
+) -> Result<()> {
+    let dir = wechat_state_dir(project_root);
+    fs::create_dir_all(&dir)?;
+    fs::write(dir.join("qr.pending.txt"), qrcode_payload)?;
+    let now = chrono::Utc::now();
+    let meta = PendingQrMeta {
+        qrcode_id: qrcode_id.to_string(),
+        status: status.to_string(),
+        created_at: now.to_rfc3339(),
+        expires_at: (now + chrono::Duration::seconds(QR_PENDING_LIFETIME_SECS)).to_rfc3339(),
+    };
+    fs::write(
+        dir.join("qr.pending.json"),
+        serde_json::to_string_pretty(&meta)?,
+    )?;
+    Ok(())
+}
+
+fn update_pending_qr_status(project_root: &Path, status: &str) -> Result<()> {
+    let path = wechat_state_dir(project_root).join("qr.pending.json");
+    let body = fs::read_to_string(&path)?;
+    let mut meta: PendingQrMeta = serde_json::from_str(&body)?;
+    meta.status = status.to_string();
+    fs::write(&path, serde_json::to_string_pretty(&meta)?)?;
+    Ok(())
+}
+
+fn clear_pending_qr(project_root: &Path) {
+    let dir = wechat_state_dir(project_root);
+    let _ = fs::remove_file(dir.join("qr.pending.txt"));
+    let _ = fs::remove_file(dir.join("qr.pending.json"));
+}
+
 // ── Context Token Store ──────────────────────────────────────────────────────
 
 type ContextTokenStore = Arc<RwLock<HashMap<String, String>>>;
@@ -362,7 +422,7 @@ fn save_media_file(project_root: &Path, data: &[u8], filename: &str) -> Result<S
 
 // ── QR Login ─────────────────────────────────────────────────────────────────
 
-async fn qr_login(http: &reqwest::Client) -> Result<LoginResult> {
+async fn qr_login(http: &reqwest::Client, workspace: &Path) -> Result<LoginResult> {
     // Step 1: Get QR code
     let qr_url = format!(
         "{}ilink/bot/get_bot_qrcode?bot_type={}",
@@ -387,6 +447,12 @@ async fn qr_login(http: &reqwest::Client) -> Result<LoginResult> {
 
     // Render QR code in terminal
     render_qr_terminal(&qrcode_url);
+
+    // Persist QR to workspace so external controllers (e.g. juglans-wallet)
+    // can surface it to end-users without sharing the terminal.
+    if let Err(e) = write_pending_qr(workspace, &qrcode, &qrcode_url, "awaiting_scan") {
+        warn!("[wechat] could not persist pending QR: {}", e);
+    }
 
     // Step 2: Poll for QR status
     let mut current_base_url = FIXED_QR_BASE_URL.to_string();
@@ -443,6 +509,7 @@ async fn qr_login(http: &reqwest::Client) -> Result<LoginResult> {
                     info!("[wechat] QR code scanned, waiting for confirmation...");
                     println!("👀 已扫码，在微信继续操作...");
                     scanned_printed = true;
+                    let _ = update_pending_qr_status(workspace, "scanned");
                 }
             }
             Some("scaned_but_redirect") => {
@@ -479,6 +546,11 @@ async fn qr_login(http: &reqwest::Client) -> Result<LoginResult> {
                 scanned_printed = false;
                 println!("🔄 新二维码已生成，请重新扫描\n");
                 render_qr_terminal(&qrcode_url);
+                if let Err(e) =
+                    write_pending_qr(workspace, &qrcode, &qrcode_url, "awaiting_scan")
+                {
+                    warn!("[wechat] could not persist refreshed QR: {}", e);
+                }
             }
             Some("confirmed") => {
                 let bot_id = status
@@ -493,6 +565,8 @@ async fn qr_login(http: &reqwest::Client) -> Result<LoginResult> {
 
                 println!("\n✅ 与微信连接成功！");
                 info!("[wechat] Login confirmed: account_id={}", bot_id);
+                let _ = update_pending_qr_status(workspace, "confirmed");
+                clear_pending_qr(workspace);
 
                 return Ok(LoginResult {
                     bot_token,
@@ -703,8 +777,6 @@ pub async fn start(
         })
         .unwrap_or_else(|| "default".to_string());
 
-    let use_jug0 = false;
-
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
         .build()?;
@@ -719,7 +791,7 @@ pub async fn start(
         None => {
             info!("[wechat] No saved account, starting QR login...");
             println!("📱 微信 Bot 启动中...");
-            let result = qr_login(&http).await?;
+            let result = qr_login(&http, &workspace).await?;
             let normalized_id = normalize_account_id(&result.account_id);
 
             save_account(
@@ -920,15 +992,7 @@ pub async fn start(
                 platform: "wechat".into(),
             };
 
-            let reply = if use_jug0 {
-                match chat_via_jug0(&config, &agent_slug, &platform_msg, &NoopToolExecutor).await {
-                    Ok(r) => r.text,
-                    Err(e) => {
-                        error!("[wechat] jug0 chat error: {}", e);
-                        format!("Error: {}", e)
-                    }
-                }
-            } else {
+            let reply =
                 match run_agent_for_message(&config, &workspace, &agent_slug, &platform_msg, None)
                     .await
                 {
@@ -937,8 +1001,7 @@ pub async fn start(
                         error!("[wechat] Workflow error: {}", e);
                         format!("Error: {}", e)
                     }
-                }
-            };
+                };
 
             // Send reply
             let context_token = {

@@ -5,118 +5,160 @@
 <h1 align="center">Juglans</h1>
 
 <p align="center">
-  AI workflow orchestration DSL — compiler, runtime & CLI
+  <b>The graph topology <i>is</i> the program.</b><br/>
+  A Rust-native DSL for AI agent workflows — where the DAG you draw is the DAG you run.
 </p>
 
 <p align="center">
   <a href="https://github.com/juglans-ai/juglans/actions"><img src="https://github.com/juglans-ai/juglans/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://github.com/juglans-ai/juglans/releases"><img src="https://img.shields.io/github/v/release/juglans-ai/juglans" alt="Release" /></a>
   <a href="https://github.com/juglans-ai/juglans/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License" /></a>
+  <img src="https://img.shields.io/badge/rust-1.80%2B-orange.svg" alt="Rust 1.80+" />
 </p>
 
 ---
 
-Juglans is a declarative workflow language for building and orchestrating AI agent pipelines. Write `.jg` files to define DAG-based workflows, `.jgagent` for agent configs, and `.jgx` for reusable prompt templates.
+Others write code to draw graphs. Juglans writes graphs as code. Your workflow file is a directed acyclic graph of typed nodes and edges — the compiler parses it, validates it, and runs it. No DAG-builder boilerplate, no state-machine glue, no Python harness.
+
+```juglans
+# router.jg — classify user input, then branch
+
+[assistant]: { "model": "gpt-4o-mini", "temperature": 0.0, "system_prompt": "Classify user input. Return JSON with key 'intent' set to 'question' or 'task'." }
+
+[classify]: chat(agent=assistant, message=input.query, format="json")
+[answer]:   print(message="Answering: " + input.query)
+[execute]:  print(message="Executing: " + input.query)
+[fallback]: print(message="I did not understand.")
+
+[assistant] -> [classify]
+
+[classify] -> switch output.intent {
+    "question": [answer]
+    "task":     [execute]
+    default:    [fallback]
+}
+```
+
+```bash
+juglans router.jg --input '{"query": "What is a DAG?"}'
+```
+
+That file IS the architecture diagram. The branching, routing, and convergence are explicit in the syntax.
+
+## Why Juglans?
+
+| Approach | Problem Juglans solves |
+|---|---|
+| Airflow / Prefect | Python code generates the DAG; the graph is a second-class artifact. |
+| LangGraph / CrewAI | State machines between agents; no true topological composition. |
+| Terraform | Declarative graph, but no control flow, no functions, no AI. |
+| BPMN / XML | Verbose, not composable, no runtime. |
+| **Juglans** | **Graph topology is the program** — composable, verifiable, executable in one step. |
 
 ## Features
 
-- **Declarative DAG workflows** — conditional edges, switch routing, loops, error handling, function definitions
-- **AI-native builtins** — `chat()`, `p()` (prompt render), memory, history
-- **80+ expression functions** — `len`, `map`, `filter`, `reduce`, `zip`, `sorted`, `group_by`, ...
-- **Lambda expressions** — `filter($list, x => x > 10)`
-- **Python interop** — call pandas, sklearn, any Python module directly
-- **MCP integration** — connect external tools via Model Context Protocol
-- **Package ecosystem** — publish & install reusable workflow packages
-- **Web server** — built-in Axum server with SSE streaming
-- **Docker deployment** — `juglans deploy` for one-command containerization
-- **Cross-platform** — macOS, Linux, Windows + WASM support
+- **Declarative DAG** — conditional edges, `switch` routing, `foreach` / `while` loops, `on error` handlers, `[name(params)]: { ... }` function definitions
+- **Inline agents** — agents are JSON map nodes defined alongside the workflow that uses them, no separate file
+- **100+ expression functions** — Python-like syntax: `len`, `map`, `filter`, `reduce`, `sort_by`, `group_by`, `zip`, `regex_*`, `json`, `uuid`, date helpers, lambdas
+- **Embedded HTTP backend** — `serve()` turns a workflow into an Axum handler; every URL hits the workflow as an axum fallback
+- **Native LLM providers** — OpenAI, Anthropic, DeepSeek, Google Gemini, Qwen, xAI, ByteDance Ark (no broker, no proxy)
+- **Python ecosystem bridge** — `python: ["pandas", "sklearn"]` and call modules directly, with object references for non-serializable types
+- **MCP integration** — plug in any Model Context Protocol server as a tool source
+- **Package registry** — `juglans pack` / `publish` / `add` to share reusable libraries
+- **Bot adapters** — Telegram, Feishu, WeChat — one flag to turn a workflow into a chatbot
+- **Cross-platform** — macOS, Linux, Windows, and WASM (full engine runs in the browser)
 
-## Quick Install
+## Install
 
 ```bash
+# Prebuilt binary (recommended) — latest GitHub release
 curl -fsSL https://raw.githubusercontent.com/juglans-ai/juglans/main/install.sh | sh
+
+# From source — requires Rust 1.80+
+git clone https://github.com/juglans-ai/juglans.git
+cd juglans && cargo install --path .
 ```
 
-## Hello World
+Verify with `juglans --version`.
 
-```yaml
-# hello.jg
-[hello]: print(message="Hello, World!")
-```
+## 30-Second Quick Start
 
 ```bash
-juglans hello.jg
+cat > hello.jg <<'EOF'
+[greet]: print(message="Hello, " + input.name + "!")
+[done]:  print(message="Workflow complete.")
+[greet] -> [done]
+EOF
+
+juglans hello.jg --input '{"name": "World"}'
 ```
 
-## AI Chat Workflow
-
-```yaml
-# chat.jg
-[greet]: chat(message="Say hello in 3 languages")
-[format]: chat(message="Format as a numbered list: " + output)
-[greet] -> [format]
-```
-
-## Conditional Routing
-
-```yaml
-# router.jg
-entry: [classify]
-exit: [reply]
-
-[classify]: chat(message=input.message, format="json")
-[save]: intent = $classify.output.intent
-
-[handle_question]: chat(message="Answer: " + input.message)
-[handle_task]: chat(message="Execute: " + input.message)
-[reply]: print(value=output)
-
-[classify] -> [save]
-[save] if intent == "question" -> [handle_question]
-[save] if intent == "task" -> [handle_task]
-[save] -> [handle_question]
-
-[handle_question] -> [reply]
-[handle_task] -> [reply]
-```
-
-## Agent Config
-
-```yaml
-# analyst.jgagent
-slug: "analyst"
-name: "Data Analyst"
-model: "claude-sonnet-4-20250514"
-system_prompt: "You are a data analyst. Answer questions with data-driven insights."
-tools: ["devtools"]
-```
-
-```bash
-juglans analyst.jgagent --message "Analyze the CSV in ./data/"
-```
+Next: read the [Quick Start guide](docs/getting-started/quickstart.md) and [Tutorial 1](docs/tutorials/hello-workflow.md).
 
 ## CLI
 
 ```bash
-juglans <file>                    # Execute .jg / .jgagent / .jgx
-juglans check [path]              # Validate syntax
-juglans web --port 8080           # Local dev server (SSE)
-juglans deploy                    # Docker deployment
-juglans pack / publish            # Package management
-juglans chat                      # Interactive TUI
+# Run & validate
+juglans <file>              # Execute a .jg or .jgx file
+juglans check [path]        # Validate syntax (like cargo check)
+juglans test [path]         # Run test_* nodes across the project
+juglans doctest [path]      # Validate code blocks in markdown docs
+
+# Dev loop
+juglans web       --port 3000      # Local HTTP server with SSE streaming
+juglans serve     --port 3000      # Unified web API + all configured bot adapters
+juglans chat      --agent path.jg  # Interactive TUI
+juglans cron      file --schedule  # Run on a cron schedule
+juglans lsp                        # Language Server Protocol
+juglans bot       <platform>       # Telegram / Feishu / WeChat adapter
+
+# Packages
+juglans init <name>       # Scaffold a new project
+juglans install           # Install jgpackage.toml dependencies
+juglans add <pkg>         # Add a package dependency
+juglans remove <pkg>      # Remove a package dependency
+juglans pack              # Build a .tar.gz archive
+juglans publish           # Publish to the registry
+juglans skills            # Sync Agent Skills from GitHub
+
+# Deploy & account
+juglans deploy    [--tag] [--push]  # Build a Docker image and run it
+juglans whoami                      # Show current account info
+```
+
+Run `juglans --help` or `juglans <cmd> --help` for every flag.
+
+## Architecture
+
+```
+┌────────────────────────────────────────────────────────┐
+│                      Juglans CLI                        │
+├────────────────────────────────────────────────────────┤
+│     .jg Parser                       .jgx Parser        │
+│          │                                │             │
+│          ▼                                ▼             │
+│  ┌──────────────────────────────────────────────┐       │
+│  │           Workflow Executor (DAG)             │       │
+│  │    cycles check · variable resolve · run      │       │
+│  └──────────────────────┬────────────────────────┘       │
+│           ┌─────────────┼─────────────┬─────────┐       │
+│           ▼             ▼             ▼         ▼       │
+│       Builtins    LLM Providers   MCP Tools  Python     │
+│      (chat, p,     (OpenAI,      (filesystem, (pandas,  │
+│       bash, db,    Anthropic,     github,     sklearn,  │
+│       http, ...)   DeepSeek...)   browser)    numpy)    │
+└────────────────────────────────────────────────────────┘
 ```
 
 ## Documentation
 
-- [Getting Started](https://docs.juglans.dev/getting-started/)
-- [Workflow Guide](https://docs.juglans.dev/guide/)
-- [Builtin Reference](https://docs.juglans.dev/reference/)
-- [Python Integration](https://docs.juglans.dev/integrations/python.html)
-- [MCP Integration](https://docs.juglans.dev/integrations/mcp.html)
+- **Official docs** — <https://docs.juglans.dev>
+- **In-repo mdbook source** — [`docs/SUMMARY.md`](docs/SUMMARY.md)
+- **Learning path** — [Getting Started](docs/getting-started/) → [Tutorials](docs/tutorials/) → [Reference](docs/reference/)
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
+Issues, PRs, and discussions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for build steps and code conventions.
 
 ## License
 

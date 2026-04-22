@@ -32,13 +32,13 @@ What it checks:
 
 ## juglans test -- Automated Testing
 
-`juglans test` provides automated testing capabilities for AI workflows. See the [juglans test design document](./juglans-test.md) for details.
+`juglans test` discovers and runs workflow-embedded tests. Any node whose ID starts with `test_` is treated as a test case: the executor runs it as a subgraph (along with its dependencies) and collects the result.
 
 Core capabilities:
 
-- **Node-level testing** -- Test individual nodes in isolation with automatic dependency mocking
-- **Semantic assertions** -- Use AI to evaluate output quality (rather than exact string matching)
-- **Snapshot regression** -- Record each execution result and automatically detect changes
+- **Test discovery** -- Scans `.jg` files for nodes prefixed with `test_` and executes each as an isolated subgraph
+- **Multiple output formats** -- Report results as human-readable `text`, machine-readable `json`, or CI-friendly `junit` XML via `--format`
+- **Standard exit codes** -- Exit 0 when all tests pass, non-zero on failure, suitable for CI pipelines
 
 ## Manual Testing
 
@@ -150,5 +150,5 @@ Both commands are suitable for direct use in CI pipelines with no additional con
 ## Next Steps
 
 - [Debugging](./debugging.md) -- Debugging tips
-- [Error Handling](./error-handling.md) -- Handling errors in workflows
+- [Error Handling](../tutorials/error-handling.md) -- Handling errors in workflows
 - [CLI Reference](../reference/cli.md) -- Complete command reference

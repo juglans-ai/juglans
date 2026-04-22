@@ -36,8 +36,7 @@ use crate::core::prompt_parser::PromptParser;
 use crate::core::resolver;
 use crate::core::validator::WorkflowValidator;
 use crate::services::config::JuglansConfig;
-use crate::services::interface::JuglansRuntime;
-use crate::services::jug0::Jug0Client;
+use crate::services::local_runtime::LocalRuntime;
 use crate::services::prompt_loader::PromptRegistry;
 
 use crate::adapters::feishu::FeishuWebhookHandler;
@@ -97,7 +96,7 @@ fn log_file_change(_path: &Path, rel: &Path, ext: &str) {
     }
 }
 
-// --- API Models (Jug0 compatible) ---
+// --- API Models ---
 
 #[derive(Serialize)]
 pub struct PromptApiModel {
@@ -127,7 +126,6 @@ struct WebState {
     pub start_datetime: DateTime<Utc>,
     pub host: String,
     pub port: u16,
-    pub jug0_base_url: String,
     /// Pending client tool calls waiting for frontend results
     #[allow(clippy::type_complexity)]
     pub pending_tool_calls:
@@ -168,10 +166,10 @@ pub enum ChatIdInput {
     Handle(String),
 }
 
-// Jug0-compatible chat request structure
+// Chat request structure
 #[derive(Deserialize, Clone)]
 pub struct ChatRequest {
-    // jug0 standard fields
+    // Standard chat protocol fields
     /// Chat ID: UUID for existing chat, or @handle to start with workflow
     pub chat_id: Option<ChatIdInput>,
     pub messages: Option<Vec<MessagePart>>,
@@ -188,7 +186,7 @@ pub struct ChatRequest {
     pub variables: Option<Value>,
     /// Message state: context_visible | context_hidden | display_only | silent
     pub state: Option<String>,
-    /// User message ID from jug0 (used in workflow mode to retroactively update user message state)
+    /// User message ID (used in workflow mode to retroactively update user message state)
     pub user_message_id: Option<i32>,
     /// Whether to push internal tool execution events to the SSE stream (default false, backward compat)
     pub stream_tool_events: Option<bool>,
@@ -427,7 +425,7 @@ async fn handle_serve_request(
         }
     };
 
-    let runtime: Arc<dyn JuglansRuntime> = Arc::new(Jug0Client::new(&config));
+    let runtime: Arc<LocalRuntime> = Arc::new(LocalRuntime::new_with_config(&config.ai));
 
     let mut prompt_registry = PromptRegistry::new();
     let _ = prompt_registry.load_from_paths(&[
@@ -958,7 +956,6 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
 <span class="label">Project Root:</span> {}
 <span class="label">Started:</span>      {}
 <span class="label">Uptime:</span>       {}
-<span class="label">Jug0 API:</span>     {}
 </pre>
 
 <h2>Prompts ({} found)</h2>
@@ -978,7 +975,7 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
     GET  /               - This dashboard
     GET  /api/prompts    - List prompts
     GET  /api/workflows  - List workflows (with validation)
-    POST /api/chat       - Chat endpoint (jug0 compatible)
+    POST /api/chat       - Chat endpoint (SSE streaming)
 </pre>
 
 </body>
@@ -988,7 +985,6 @@ async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
         state.project_root.display(),
         state.start_datetime.format("%Y-%m-%d %H:%M:%S UTC"),
         uptime,
-        state.jug0_base_url,
         prompt_registry.keys().len(),
         prompts_html,
         workflow_summary,
@@ -1011,6 +1007,13 @@ pub async fn start_web_server(
 ) -> anyhow::Result<()> {
     let config = JuglansConfig::load().ok();
 
+    // Initialize conversation-history store (idempotent).
+    if let Some(ref cfg) = config {
+        if let Err(e) = crate::services::history::init_global(&cfg.history) {
+            tracing::warn!("[history] init_global failed: {}", e);
+        }
+    }
+
     // Scan for serve() workflow
     let serve_workflow = discover_serve_workflow(&project_root);
 
@@ -1020,10 +1023,6 @@ pub async fn start_web_server(
         start_datetime: Utc::now(),
         host: host.clone(),
         port,
-        jug0_base_url: config
-            .as_ref()
-            .map(|c| c.jug0.base_url.clone())
-            .unwrap_or_else(|| "N/A".to_string()),
         pending_tool_calls: Arc::new(Mutex::new(HashMap::new())),
         serve_workflow: serve_workflow.clone(),
     });
@@ -1087,7 +1086,7 @@ pub async fn start_web_server(
     info!("✨ Juglans Web Services Initialized");
     info!("📡 Listening on: http://{}", addr);
     info!("📂 Project Root: {:?}", project_root);
-    info!("🔌 Endpoints (Jug0 Compatible):");
+    info!("🔌 Endpoints:");
     info!("   - GET  /api/prompts");
     info!("   - GET  /api/workflows");
     info!("   - POST /api/chat");
@@ -1249,27 +1248,17 @@ async fn list_local_workflows(
 }
 
 async fn handle_chat(
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Extension(state): Extension<Arc<WebState>>,
     Json(req): Json<ChatRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>, Json<Value>> {
-    // Extract X-Execution-Token if present (forwarded from jug0)
-    let execution_token = headers
-        .get("X-Execution-Token")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
-
-    if execution_token.is_some() {
-        info!("🔐 [Web] Received X-Execution-Token from jug0, will use for subsequent jug0 calls");
-    }
-
     // Resolve @handle to workflow slug
     let handle_slug = match &req.chat_id {
         Some(ChatIdInput::Handle(h)) => Some(h.strip_prefix('@').unwrap_or(h).to_string()),
         _ => None,
     };
 
-    // Extract workflow slug (jug0-compatible format)
+    // Extract workflow slug
     // Priority: @handle > agent.slug > agent.id > default
     let workflow_slug = if let Some(slug) = handle_slug {
         slug
@@ -1283,7 +1272,7 @@ async fn handle_chat(
         "default".to_string()
     };
 
-    // Extract user message (jug0-compatible messages array format)
+    // Extract user message from messages array
     let message_text = if let Some(ref msgs) = req.messages {
         // Get the last user/text message
         msgs.iter()
@@ -1340,17 +1329,7 @@ async fn handle_chat(
 
     let config = JuglansConfig::load().map_err(|e| Json(json!({"error": e.to_string()})))?;
 
-    // Select runtime: [ai.providers] → LocalRuntime, otherwise → Jug0Client
-    let runtime: Arc<dyn JuglansRuntime> = if config.ai.has_providers() {
-        Arc::new(crate::services::local_runtime::LocalRuntime::new_with_config(&config.ai))
-    } else {
-        let jug0_client = Jug0Client::new(&config);
-        if let Some(ref token) = execution_token {
-            jug0_client.set_execution_token(Some(token.clone()));
-            debug!("🔐 [Web] Injected execution token into Jug0Client");
-        }
-        Arc::new(jug0_client)
-    };
+    let runtime: Arc<LocalRuntime> = Arc::new(LocalRuntime::new_with_config(&config.ai));
 
     let mut prompt_registry = PromptRegistry::new();
     let _ = prompt_registry.load_from_paths(&[
@@ -1667,7 +1646,7 @@ async fn handle_chat(
         }
     });
 
-    // SSE event format aligned with Jug0 (using standard SSE event types)
+    // SSE event format (standard SSE event types)
     // Uses async_stream for yield-style done event after channel closes
     let pending_calls = state.pending_tool_calls.clone();
     let sse_stream = async_stream::stream! {
@@ -1676,7 +1655,7 @@ async fn handle_chat(
 
         while let Some(event) = rx_stream.next().await {
             yield Ok::<Event, std::convert::Infallible>(match event {
-                // Token stream: content format consistent with jug0
+                // Token stream: content events
                 WorkflowEvent::Token(t) => {
                     Event::default().data(json!({ "type": "content", "text": t }).to_string())
                 }
@@ -1805,7 +1784,6 @@ struct InlineServerState {
     routes: Vec<InlineRoute>,
     workflow: Arc<WorkflowGraph>,
     executor: Arc<WorkflowExecutor>,
-    runtime: Arc<dyn crate::services::interface::JuglansRuntime>,
 }
 
 /// Start a minimal HTTP server for serve() builtin.
@@ -1814,7 +1792,6 @@ pub async fn start_inline_server(
     routes: Vec<InlineRoute>,
     workflow: Arc<WorkflowGraph>,
     executor: Arc<WorkflowExecutor>,
-    runtime: Arc<dyn crate::services::interface::JuglansRuntime>,
     port: u16,
 ) -> anyhow::Result<()> {
     let route_summary: Vec<String> = routes
@@ -1826,7 +1803,6 @@ pub async fn start_inline_server(
         routes,
         workflow,
         executor,
-        runtime,
     });
 
     let app = Router::new()
@@ -1943,22 +1919,6 @@ async fn handle_inline_sse(
     body: Value,
     query: HashMap<String, String>,
 ) -> Response {
-    // Extract auth tokens for jug0 API calls
-    if let Some(token) = headers
-        .get("X-Execution-Token")
-        .and_then(|v| v.to_str().ok())
-    {
-        // Path 1: jug0 forwarding → use execution token
-        state.runtime.set_execution_token(Some(token.to_string()));
-    } else if let Some(bearer) = headers
-        .get("Authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-    {
-        // Path 2: direct frontend connection → use JWT bearer token
-        state.runtime.set_bearer_token(Some(bearer.to_string()));
-    }
-
     let (tx, rx) = mpsc::unbounded_channel::<WorkflowEvent>();
     let ctx = WorkflowContext::with_sender(tx);
 
@@ -2059,22 +2019,6 @@ async fn handle_inline_json(
     body: Value,
     query: HashMap<String, String>,
 ) -> Response {
-    // Extract auth tokens for jug0 API calls
-    if let Some(token) = headers
-        .get("X-Execution-Token")
-        .and_then(|v| v.to_str().ok())
-    {
-        // Path 1: jug0 forwarding → use execution token
-        state.runtime.set_execution_token(Some(token.to_string()));
-    } else if let Some(bearer) = headers
-        .get("Authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-    {
-        // Path 2: direct frontend connection → use JWT bearer token
-        state.runtime.set_bearer_token(Some(bearer.to_string()));
-    }
-
     let (tx, _rx) = mpsc::unbounded_channel::<WorkflowEvent>();
     let ctx = WorkflowContext::with_sender(tx);
 

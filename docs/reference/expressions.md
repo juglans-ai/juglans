@@ -10,12 +10,12 @@ Complete reference for the Juglans Expression Language (JEL). Covers variables, 
 
 | Variable | Source | Writable | Scope | Example |
 |----------|--------|----------|-------|---------|
-| `input` | CLI `--input` JSON or API body | No | Entire workflow | `input.name`, `input.items.0` |
+| `input` | CLI `--input` JSON or API body | No | Entire workflow | `input.name`, `input.items[0]` |
 | `output` | Return value of the last executed node | No | Overwritten each step | `output`, `output.text` |
 | Context vars | Assignment syntax | Yes | Entire workflow | `count`, `user.name` |
-| `reply` | AI response metadata | No | After `chat()` | `reply.content`, `reply.tokens` |
-| `error` | Set when `on error` triggers | No | Error path | `error.message`, `error.node` |
-| `$node_id.output` | Specific node's output | No | Entire workflow | `$classify.output` |
+| `reply` | AI response metadata | No | After `chat()` | `reply.output`, `reply.chat_id` |
+| `error` | Set when `on error` triggers | No | Error path | `error.node`, `error.message` |
+| `node_id.output` | Specific node's output | No | Entire workflow | `classify.output` |
 
 ### input
 
@@ -42,7 +42,7 @@ Access nested fields with dot notation. Arrays use numeric indices:
 ```text
 input              # Entire object
 input.name         # "Alice"
-input.items.0      # 1 (first element)
+input.items[0]     # 1 (first element)
 input.user.address.city   # Deep nesting
 ```
 
@@ -88,15 +88,14 @@ Metadata from the most recent AI response (after `chat()`).
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `reply.content` | string | Reply content |
-| `reply.tokens` | number | Tokens used |
-| `reply.model` | string | Model used |
-| `reply.finish_reason` | string | Finish reason |
+| `reply.output` | string | Accumulated AI response text |
 | `reply.chat_id` | string | Conversation session ID |
+| `reply.status` | string | Latest `notify()` status message |
+| `reply.user_message_id` | integer | ID of the user message that triggered execution (web server only) |
 
 ```juglans
 [ask]: chat(agent="assistant", message=input.query)
-[log]: print(message="Tokens: " + str(reply.tokens))
+[log]: print(message="Response: " + reply.output)
 [ask] -> [log]
 ```
 
@@ -449,6 +448,10 @@ Use parentheses to override precedence:
 | `hex(n)` | `hex(int) -> str` | Integer to hex string (`"0x2a"`) |
 | `bin(n)` | `bin(int) -> str` | Integer to binary string (`"0b101010"`) |
 | `oct(n)` | `oct(int) -> str` | Integer to octal string (`"0o52"`) |
+| `is_ok(x)` | `is_ok(value) -> bool` | Rust-style result check: true unless `x` is null or `{err: ...}` |
+| `is_err(x)` | `is_err(value) -> bool` | Rust-style result check: true when `x` is null or `{err: ...}` |
+| `unwrap_or(x, fallback)` | `unwrap_or(value, value) -> value` | Return `x` unless it is null or `{err: ...}`, in which case return `fallback` |
+| `review(x, prompt?)` | `review(value, str?) -> bool` | Interactive CLI review gate — prints `x` and prompts the user for y/n |
 
 ```juglans
 [misc]: name = default(input.name, "anonymous"), msg = format("Hello {}, you have {} items", "Alice", 5), id = uuid()

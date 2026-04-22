@@ -5,10 +5,10 @@
 > Others write code to draw graphs. We write graphs as code.
 
 ```juglans
-[classifier]: { "model": "gpt-4o", "temperature": 0.0, "system_prompt": "Classify intent. Return JSON." }
-[qa]: { "model": "gpt-4o", "system_prompt": "Answer questions accurately." }
-[executor]: { "model": "gpt-4o", "system_prompt": "Execute tasks step by step." }
-[reviewer]: { "model": "gpt-4o", "system_prompt": "Review and improve responses." }
+[classifier]: { "model": "gpt-4o-mini", "temperature": 0.0, "system_prompt": "Classify intent. Return JSON." }
+[qa]: { "model": "gpt-4o-mini", "system_prompt": "Answer questions accurately." }
+[executor]: { "model": "gpt-4o-mini", "system_prompt": "Execute tasks step by step." }
+[reviewer]: { "model": "gpt-4o-mini", "system_prompt": "Review and improve responses." }
 
 [classify]: chat(agent=classifier, format="json")
 [answer]: chat(agent=qa, message=input.query)
@@ -60,13 +60,11 @@ In the era of AI agents, **how agents interact** — who talks to whom, in what 
 ## Quick Install
 
 ```bash
-# macOS
-brew tap juglans-ai/tap && brew install juglans
+# Prebuilt binary (recommended) — latest GitHub release
+curl -fsSL https://raw.githubusercontent.com/juglans-ai/juglans/main/install.sh | sh
 
-# macOS & Linux
-curl -fsSL https://juglans.ai/get-sdk | sh
-
-# From source
+# From source (requires git clone first, Rust 1.80+)
+git clone https://github.com/juglans-ai/juglans.git && cd juglans
 cargo install --path .
 ```
 
@@ -114,9 +112,10 @@ juglans hello.jg
 │  └────────────────────┬────────────────────┘    │
 │         ┌─────────────┼─────────────┐           │
 │         ▼             ▼             ▼           │
-│    Builtins       Jug0 API      MCP Tools       │
-│  (chat, print,   (LLM calls)   (filesystem,    │
-│   bash, etc.)                    browser)       │
+│    Builtins      LLM Providers   MCP Tools      │
+│  (chat, print,    (OpenAI,      (filesystem,    │
+│   bash, etc.)    Anthropic,      browser)       │
+│                  DeepSeek...)                   │
 └─────────────────────────────────────────────────┘
 ```
 

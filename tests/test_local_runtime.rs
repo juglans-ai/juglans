@@ -1,9 +1,8 @@
 /// Integration test: LocalRuntime with DeepSeek provider
 ///
 /// Run with:
-///   source ../jug0/.env && cargo test --test test_local_runtime -- --nocapture
-use juglans::services::interface::{ChatRequest, JuglansRuntime};
-use juglans::services::local_runtime::LocalRuntime;
+///   DEEPSEEK_API_KEY=... cargo test --test test_local_runtime -- --nocapture
+use juglans::services::local_runtime::{ChatOutput, ChatRequest, LocalRuntime};
 use serde_json::json;
 
 #[tokio::test]
@@ -25,17 +24,13 @@ async fn test_deepseek_chat() {
             "parts": [{"type": "text", "content": "Say 'hello juglans' and nothing else."}],
         })],
         tools: None,
-        chat_id: None,
         token_sender: None,
-        meta_sender: None,
-        state: None,
-        history: None,
         tool_handler: None,
     };
 
     let result = runtime.chat(req).await;
     match result {
-        Ok(juglans::services::interface::ChatOutput::Final { text, .. }) => {
+        Ok(ChatOutput::Final { text, .. }) => {
             println!("DeepSeek response: {}", text);
             assert!(
                 text.to_lowercase().contains("hello") || text.to_lowercase().contains("juglans"),

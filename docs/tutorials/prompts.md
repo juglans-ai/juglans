@@ -7,7 +7,7 @@ This chapter covers how to manage prompt templates using `.jgx` files, and how t
 Consider a workflow with a hardcoded prompt:
 
 ```juglans
-[assistant]: { "model": "gpt-4o", "system_prompt": "You are a helpful assistant." }
+[assistant]: { "model": "gpt-4o-mini", "system_prompt": "You are a helpful assistant." }
 
 [ask]: chat(agent=assistant, message="You are a senior code reviewer. Please review the following code and provide feedback on: 1) correctness 2) performance 3) readability. Code: " + input.code)
 [show]: print(message=output)
@@ -335,7 +335,7 @@ Score: 95 points
 ```juglans
 prompts: ["./prompts/*.jgx"]
 
-[assistant]: { "model": "gpt-4o", "system_prompt": "You are a helpful assistant." }
+[assistant]: { "model": "gpt-4o-mini", "system_prompt": "You are a helpful assistant." }
 
 [render]: p(slug="tone", topic=input.topic, audience=input.audience)
 [ask]: chat(agent=assistant, message=output)
@@ -357,7 +357,7 @@ Execution flow:
 ```juglans
 prompts: ["./prompts/*.jgx"]
 
-[assistant]: { "model": "gpt-4o", "system_prompt": "You are a helpful assistant." }
+[assistant]: { "model": "gpt-4o-mini", "system_prompt": "You are a helpful assistant." }
 
 [ask]: chat(agent=assistant, message=p(slug="tone", topic=input.topic, audience="expert"))
 [show]: print(message=output)
@@ -374,7 +374,7 @@ In complex scenarios, you can combine prompts from multiple templates:
 ```juglans
 prompts: ["./prompts/*.jgx"]
 
-[assistant]: { "model": "gpt-4o", "system_prompt": "You are a helpful assistant." }
+[assistant]: { "model": "gpt-4o-mini", "system_prompt": "You are a helpful assistant." }
 
 [sys]: p(slug="tone", topic=input.topic, audience="expert")
 [save_sys]: sys_prompt = output
@@ -385,7 +385,7 @@ prompts: ["./prompts/*.jgx"]
 [assistant] -> [sys] -> [save_sys] -> [user_msg] -> [ask] -> [show]
 ```
 
-`[system]` renders the role-setting template, `[user_msg]` renders the checklist template, and the two are concatenated before being sent to the AI.
+`[sys]` renders the role-setting template, `[user_msg]` renders the checklist template, and the two are concatenated before being sent to the AI.
 
 ## Summary
 

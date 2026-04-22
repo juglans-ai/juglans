@@ -18,11 +18,15 @@ Start the server:
 
 ```bash
 juglans web
-# Server listens on http://127.0.0.1:8080
+# Server listens on http://127.0.0.1:3000 by default
 
-curl http://localhost:8080/api/hello
+curl http://localhost:3000/api/hello
 # {"message": "Hello from Juglans!"}
 ```
+
+> **Port note:** The local dev default is `3000`. The official Docker image launches with `--port 8080` as its container port, so when running in Docker you'll typically publish `8080:8080`. Set `[server] port` in `juglans.toml` or pass `--port` to override either.
+
+The node ID (`[hello]`) is **not** the URL path. `serve()` registers the workflow as an Axum **fallback handler**, meaning every incoming URL is routed into the same workflow regardless of path. Use `input.path` / `input.route` inside the workflow to dispatch — see [Routing](#routing) below.
 
 ## Routing
 
@@ -60,7 +64,7 @@ The web server injects these variables before workflow execution:
 ## Start the Server
 
 ```bash
-# Default: http://127.0.0.1:8080
+# Default: http://127.0.0.1:3000
 juglans web
 
 # Custom host and port
@@ -72,10 +76,10 @@ Or configure in `juglans.toml`:
 ```toml
 [server]
 host = "127.0.0.1"
-port = 8080
+port = 3000
 ```
 
-On startup, the server scans all `**/*.jg` files. If a workflow contains `serve()`, it is registered as the catch-all HTTP handler. Only one `serve()` workflow is supported.
+On startup, the server scans all `**/*.jg` files. If a workflow contains `serve()`, it is registered as the **Axum fallback handler**, meaning every request URL hits this single workflow. Only one `serve()` workflow is supported. Perform path-based dispatch inside the workflow using `input.route` or `input.path`.
 
 ## SSE Streaming
 
@@ -92,7 +96,7 @@ When a `chat()` node runs inside a `serve()` workflow, its output streams back t
 Call with SSE-capable client:
 
 ```bash
-curl -N -X POST http://localhost:8080/api/chat \
+curl -N -X POST http://localhost:3000/api/chat \
   -H "Content-Type: application/json" \
   -d '{"question": "Explain recursion"}'
 ```

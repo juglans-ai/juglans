@@ -59,11 +59,7 @@ pub use core::renderer::JwlRenderer;
 pub use core::executor::WorkflowExecutor;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use services::interface::JuglansRuntime;
-
-#[cfg(not(target_arch = "wasm32"))]
-pub use services::interface::ChatOutput;
-pub use services::jug0::Jug0Client;
+pub use services::local_runtime::{ChatOutput, ChatRequest, ChatToolHandler, LocalRuntime};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use services::prompt_loader::PromptRegistry;

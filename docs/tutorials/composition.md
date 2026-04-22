@@ -38,7 +38,7 @@ Functions let you encapsulate repeated logic into a reusable unit.
 Line-by-line explanation:
 
 1. `[log(msg)]` -- defines a function named `log` that accepts one parameter `msg`. The `(msg)` inside the brackets is the parameter list.
-2. `: print(message="[LOG] " + $msg)` -- the function body. This is a single-step function that directly binds a tool call. `$msg` references the passed parameter.
+2. `: print(message="[LOG] " + msg)` -- the function body. This is a single-step function that directly binds a tool call. `msg` references the passed parameter.
 3. `[step1]: log(msg="Step 1 started")` -- calls the function. The syntax is identical to calling a built-in tool: `function_name(param=value)`.
 4. Function definitions **do not** appear in the DAG; they are simply callable templates.
 
@@ -62,7 +62,7 @@ Functions can accept any number of parameters:
 [step1] -> [step2] -> [done]
 ```
 
-Parameters are accessed within the function body via `$parameter_name`. All parameters must be provided when calling.
+All parameters must be provided when calling.
 
 ### Multi-Step Functions
 
@@ -121,7 +121,7 @@ Function calls are used in node positions, with the same syntax as tool calls:
 When a function is called, the engine:
 
 1. Looks up the function definition named `check`.
-2. Binds the parameter `item="database"` to `$item` in the function body.
+2. Binds the parameter `item="database"` to `item` in the function body.
 3. Executes the function body.
 4. Stores the function body's output in `output`, available to subsequent nodes.
 
@@ -228,10 +228,9 @@ A typical library file (`utils.jg`) contains only function definitions:
 
 ```text
 # utils.jg
-slug: "utils"
 
-[log(msg)]: print(message="[LOG] " + $msg)
-[format_name(first, last)]: full_name = $first + " " + $last
+[log(msg)]: print(message="[LOG] " + msg)
+[format_name(first, last)]: full_name = first + " " + last
 ```
 
 ### List-Style Import
@@ -250,10 +249,7 @@ Line-by-line explanation:
 1. `libs: ["./utils.jg"]` -- list-style library import. You can import multiple libraries at once: `libs: ["./utils.jg", "./math.jg"]`.
 2. `utils.log(msg="Starting")` -- calls a function from the library, in the format `namespace.function_name(params)`.
 
-**Namespace rules** (list-style):
-
-1. If the library file declares a `slug`, the slug is used as the namespace.
-2. Otherwise, the filename (without extension) is used as the namespace.
+**Namespace rule** (list-style): Library namespaces use the file name stem (e.g. `utils.jg` → namespace `utils`).
 
 ### Object-Style Import
 
@@ -267,7 +263,7 @@ libs: {
 [step1]: u.log(msg="Custom namespace")
 ```
 
-`u` is the namespace you specify, overriding both the file's slug and filename.
+`u` is the namespace you specify, overriding the default filename-stem namespace.
 
 ### Importing Multiple Libraries
 
@@ -289,7 +285,9 @@ Beyond functions, Juglans supports Rust-style struct definitions with `impl` blo
 
 ### Struct + impl Block
 
-`impl` blocks group methods for a struct. Methods with `self` are instance methods; methods without `self` are associated functions (static methods):
+`impl` blocks group methods for a struct. Methods with `self` are instance methods; methods without `self` are associated functions (static methods).
+
+The snippet below is a **concept sketch** showing the shape of struct + impl declarations; it is not a complete runnable workflow:
 
 ```text
 [Config]: {
@@ -303,7 +301,7 @@ impl Config {
 }
 ```
 
-Usage:
+Usage (concept sketch):
 
 ```text
 [d]: Config.defaults()

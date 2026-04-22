@@ -4,13 +4,13 @@ Common errors, their causes, and solutions.
 
 ---
 
-### 1. No entry node found
+### 1. No entry node specified (warning)
 
-**Error:** `No entry node found (no node with in-degree 0)`
+**Warning:** `No entry node specified; using first node as entry point` (W001)
 
-**Cause:** Every node in the workflow has at least one incoming edge, so topological sort cannot determine a starting point.
+**Cause:** The workflow does not explicitly declare an entry node. This is a warning, not a fatal error — Juglans falls back to the first node in file order and continues execution.
 
-**Solution:** Ensure at least one node has no incoming edges — that node will be the entry point:
+**Solution:** Either ignore the warning, or make the entry explicit by ensuring one node has no incoming edges so the topological sort picks it unambiguously:
 
 ```juglans
 [start]: chat(agent="assistant", message="Hello")
@@ -20,47 +20,35 @@ Common errors, their causes, and solutions.
 
 ### 2. Unreachable node
 
-**Error:** `Node 'process' is unreachable from entry`
+**Warning:** `Node 'process' is not reachable from entry node` (W002)
 
-**Cause:** A node exists in the workflow but has no incoming edge from any reachable node (determined by topological sort from nodes with in-degree 0).
+**Cause:** A node exists in the workflow but has no path from the entry node, so it will never execute.
 
 **Solution:** Add an edge connecting it to the graph, or remove the unused node.
 
 ---
 
-### 3. Configuration file not found
+### 3. API key not configured
 
-**Error:** `juglans.toml not found`
+**Error:** `No API-key provided` or `401 Unauthorized`
 
-**Cause:** No `juglans.toml` in the current directory or parent directories.
-
-**Solution:**
-
-```bash
-# Create a project with config
-juglans init my-project
-
-# Or specify config path
-JUGLANS_CONFIG=/path/to/juglans.toml juglans workflow.jg
-```
-
----
-
-### 4. API key not configured
-
-**Error:** `API key not configured` or `401 Unauthorized`
-
-**Cause:** `account.api_key` is missing from config and `JUGLANS_API_KEY` is not set.
+**Cause:** No LLM provider configured. juglans is local-first and calls providers directly using their API keys.
 
 **Solution:**
 
 ```bash
-# Set via environment variable
-export JUGLANS_API_KEY="jug0_sk_..."
+# Set any one (or more) provider API key
+export OPENAI_API_KEY="sk-..."
+export ANTHROPIC_API_KEY="sk-ant-..."
+export DEEPSEEK_API_KEY="sk-..."
+export QWEN_API_KEY="sk-..."
+export GEMINI_API_KEY="..."
+export ARK_API_KEY="..."        # ByteDance / BytePlus Ark
+export XAI_API_KEY="xai-..."
 
-# Or add to juglans.toml
-# [account]
-# api_key = "jug0_sk_..."
+# Or add to juglans.toml (optional since v0.2.5)
+# [ai.providers.openai]
+# api_key = "sk-..."
 ```
 
 ---
@@ -112,7 +100,7 @@ Ensure the agent is defined as an inline JSON map node in the same `.jg` file, o
 
 ```juglans
 # Define inline
-[my_agent]: { "model": "gpt-4o", "system_prompt": "..." }
+[my_agent]: { "model": "gpt-4o-mini", "system_prompt": "..." }
 [ask]: chat(agent=my_agent, message=input.query)
 
 # Or import from library
@@ -142,9 +130,9 @@ juglans check workflow.jg
 
 ---
 
-### 9. Circular dependency detected
+### 8. Cycle detected
 
-**Error:** `Circular dependency detected: [A] -> [B] -> [A]`
+**Error:** `Cycle detected involving node 'process'. Workflows must be acyclic (DAG)` (E002)
 
 **Cause:** Edges form a cycle in the DAG. Juglans requires acyclic graphs (use `foreach`/`while` for loops).
 
@@ -210,13 +198,15 @@ http_timeout_secs = 300
 
 **Error:** `Address already in use (port 3000)`
 
-**Cause:** Another process is using the port when starting `juglans web`.
+**Cause:** Another process is using the port when starting `juglans web` (or the unified `juglans serve`, which wraps web, bot adapters, and cron triggers).
 
 **Solution:**
 
 ```bash
 # Use a different port
 juglans web --port 8081
+# or
+juglans serve --port 8081
 
 # Or find and stop the conflicting process
 lsof -i :3000
@@ -242,4 +232,22 @@ pip install pandas scikit-learn
 # Adjust worker count if needed in juglans.toml
 # [limits]
 # python_workers = 2
+```
+
+---
+
+### 15. Registry publish unauthorized
+
+**Error:** `401 Unauthorized` or `missing registry API key` from `juglans publish`
+
+**Cause:** The registry client could not find a publish credential in the environment or config.
+
+**Solution:** Export one of the accepted environment variables before running `juglans publish`:
+
+```bash
+export JUGLANS_REGISTRY_API_KEY="jgr_..."
+# or (legacy alias)
+export REGISTRY_API_KEY="jgr_..."
+
+juglans publish
 ```

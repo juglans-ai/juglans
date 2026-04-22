@@ -128,7 +128,6 @@ impl Tool for Serve {
         let executor = registry
             .get_executor()
             .ok_or_else(|| anyhow!("serve(): WorkflowExecutor not available"))?;
-        let runtime = registry.get_runtime();
         let workflow = context
             .get_root_workflow()
             .ok_or_else(|| anyhow!("serve(): no root workflow found"))?;
@@ -158,7 +157,7 @@ impl Tool for Serve {
             .unwrap_or(8080);
 
         // Start server (blocks indefinitely)
-        crate::services::web_server::start_inline_server(routes, workflow, executor, runtime, port)
+        crate::services::web_server::start_inline_server(routes, workflow, executor, port)
             .await?;
 
         Ok(None) // never reached

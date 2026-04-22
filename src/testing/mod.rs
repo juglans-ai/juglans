@@ -19,7 +19,7 @@ use crate::core::context::WorkflowContext;
 use crate::core::executor::WorkflowExecutor;
 use crate::core::graph::{self, WorkflowGraph};
 use crate::core::parser::GraphParser;
-use crate::services::interface::JuglansRuntime;
+use crate::services::local_runtime::LocalRuntime;
 use crate::services::prompt_loader::PromptRegistry;
 
 /// Result of a single test case
@@ -56,11 +56,11 @@ impl FileTestResult {
 
 /// Main test runner
 pub struct TestRunner {
-    runtime: Arc<dyn JuglansRuntime>,
+    runtime: Arc<LocalRuntime>,
 }
 
 impl TestRunner {
-    pub fn new(runtime: Arc<dyn JuglansRuntime>, _prompt_registry: Arc<PromptRegistry>) -> Self {
+    pub fn new(runtime: Arc<LocalRuntime>, _prompt_registry: Arc<PromptRegistry>) -> Self {
         Self { runtime }
     }
 

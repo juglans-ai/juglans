@@ -4,15 +4,9 @@
 
 Searched by priority (first found wins):
 
-1. `./juglans.toml` -- project directory
+1. `./juglans.toml` -- project directory (or any ancestor)
 2. `~/.config/juglans/juglans.toml` -- user configuration
 3. `/etc/juglans/juglans.toml` -- system configuration
-
-Override via environment variable:
-
-```bash
-JUGLANS_CONFIG=/path/to/juglans.toml juglans ...
-```
 
 ## Complete Configuration Example
 
@@ -21,7 +15,6 @@ JUGLANS_CONFIG=/path/to/juglans.toml juglans ...
 id = "user_123"
 name = "John Doe"
 role = "admin"
-api_key = "jug0_sk_..."
 
 [workspace]
 id = "ws_default"
@@ -33,13 +26,26 @@ prompts = ["src/prompts/**/*.jgx"]
 tools = ["src/tools/**/*.json"]
 exclude = ["**/*.backup", "**/test_*"]
 
-[jug0]
-base_url = "http://localhost:3000"
-
 [server]
 host = "127.0.0.1"
 port = 3000
 endpoint_url = "https://agent.juglans.ai"
+
+# LLM providers — juglans is local-first; configure at least one provider
+[ai.providers.openai]
+api_key = "${OPENAI_API_KEY}"
+
+[ai.providers.anthropic]
+api_key = "${ANTHROPIC_API_KEY}"
+
+[ai.providers.deepseek]
+api_key = "${DEEPSEEK_API_KEY}"
+
+[ai.providers.qwen]
+api_key = "${QWEN_API_KEY}"
+
+[ai]
+default_model = "gpt-4o-mini"
 
 [debug]
 show_nodes = false
@@ -81,6 +87,9 @@ agent = "default"
 port = 9000
 base_url = "https://open.feishu.cn"
 
+[bot.wechat]
+agent = "default"
+
 [registry]
 url = "https://jgr.juglans.ai"
 ```
@@ -89,16 +98,13 @@ url = "https://jgr.juglans.ai"
 
 ## [account]
 
-User account credentials.
+User account information. Identity slot — future juglans-issued agent IDs will live here.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `id` | string | Yes | | User ID |
 | `name` | string | Yes | | Display name |
 | `role` | string | No | | Role (e.g., `admin`, `user`) |
-| `api_key` | string | No | | Jug0 API key (prefix `jug0_sk_`) |
-
-`api_key` can be overridden by `JUGLANS_API_KEY` environment variable.
 
 ---
 
@@ -111,7 +117,7 @@ Workspace for multi-user collaboration and batch resource management.
 | `id` | string | Yes | | Workspace ID |
 | `name` | string | Yes | | Workspace name |
 | `members` | string[] | No | `[]` | Member user IDs |
-| `agents` | string[] | No | `[]` | Agent file glob patterns |
+| `agents` | string[] | No | `[]` | _(deprecated — prefer inline agent map nodes in `.jg` files)_ |
 | `workflows` | string[] | No | `[]` | Workflow file glob patterns |
 | `prompts` | string[] | No | `[]` | Prompt file glob patterns |
 | `tools` | string[] | No | `[]` | Tool file glob patterns |
@@ -119,17 +125,38 @@ Workspace for multi-user collaboration and batch resource management.
 
 Resource paths support glob: `*` matches filenames, `**` matches directories recursively.
 
-Used by `juglans push` (without arguments) for batch operations.
-
 ---
 
-## [jug0]
+## [ai]
 
-Jug0 backend server connection.
+LLM provider configuration. juglans calls providers directly using their respective APIs — no remote backend involved. Configure at least one provider here, or set the corresponding `*_API_KEY` environment variable.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `base_url` | string | No | `https://api.jug0.com` | API base URL |
+| `default_model` | string | No | | Default model used when an agent node does not specify one |
+
+```toml
+[ai]
+default_model = "gpt-4o-mini"
+
+[ai.providers.<name>]
+api_key = "..."
+base_url = "..."  # optional, for OpenAI-compatible endpoints
+```
+
+Supported provider names: `openai`, `anthropic`, `deepseek`, `gemini`, `qwen`, `byteplus`, `xai`.
+
+You can also configure providers entirely via env vars without a `juglans.toml`:
+
+| Env Var | Provider |
+|---|---|
+| `OPENAI_API_KEY` | openai |
+| `ANTHROPIC_API_KEY` | anthropic |
+| `DEEPSEEK_API_KEY` | deepseek |
+| `GEMINI_API_KEY` | gemini |
+| `QWEN_API_KEY` | qwen |
+| `BYTEPLUS_API_KEY` | byteplus |
+| `XAI_API_KEY` | xai |
 
 ---
 
@@ -141,7 +168,7 @@ Local web server configuration (for `juglans web`).
 |-------|------|----------|---------|-------------|
 | `host` | string | No | `127.0.0.1` | Bind address |
 | `port` | u16 | No | `3000` | Port number |
-| `endpoint_url` | string | No | | Public endpoint URL for Jug0 registration |
+| `endpoint_url` | string | No | | Public endpoint URL for this server |
 
 ---
 
@@ -206,11 +233,8 @@ All string values in `juglans.toml` support `${VAR_NAME}` syntax. Variables are 
 ```toml
 env_file = [".env"]
 
-[account]
-api_key = "${JUG0_API_KEY}"
-
-[jug0]
-base_url = "${API_BASE}"
+[ai.providers.openai]
+api_key = "${OPENAI_API_KEY}"
 ```
 
 If a variable is not set, it is replaced with an empty string.
@@ -283,7 +307,45 @@ Bot adapter configuration for messaging platforms.
 | `port` | u16 | `9000` | Webhook listener port |
 | `base_url` | string | `https://open.feishu.cn` | API base (`https://open.larksuite.com` for Lark) |
 | `approvers` | string[] | `[]` | Approver open_ids |
-| `mode` | string | (auto) | `"local"` or `"jug0"` |
+
+### [bot.wechat]
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `agent` | string | `"default"` | Agent slug to use |
+
+---
+
+## [history]
+
+Conversation history storage for `chat()`. When enabled, each `chat()` node with a resolved `chat_id` automatically loads the tail of the thread before the LLM call and appends the user/assistant turn afterwards. `chat_id` is resolved in this priority order: explicit `chat_id=` parameter → `reply.chat_id` (chained within a run) → `input.chat_id` (adapter-injected, e.g. `telegram:12345:my_agent`).
+
+Persistence honors the `state` parameter — `state="silent"` or `state="display_only"` skips storage.
+
+```toml
+[history]
+enabled = true            # master switch
+backend = "jsonl"         # jsonl | sqlite | memory | none
+dir = ".juglans/history"  # jsonl: one file per chat_id
+# path = ".juglans/history.db"  # sqlite path
+max_messages = 20         # cap auto-loaded messages per call
+max_tokens = 8000         # soft token budget (rough 4-char ≈ 1-token estimate)
+retention_days = 30       # eligible-for-GC age (0 disables)
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `true` | When false, `chat_id` still works as a field but nothing is stored or loaded |
+| `backend` | string | `"jsonl"` | `jsonl`, `sqlite`, `memory`, `none` |
+| `dir` | string | `.juglans/history` | Directory for the JSONL backend (one `.jsonl` per `chat_id`) |
+| `path` | string | `.juglans/history.db` | DB file path for the SQLite backend |
+| `max_messages` | uint | `20` | Hard upper bound on messages auto-loaded per `chat()` call |
+| `max_tokens` | uint | `8000` | Soft token budget (estimate) |
+| `retention_days` | uint | `30` | Days after which old messages are eligible for GC (0 = never) |
+
+Environment overrides: `JUGLANS_HISTORY_BACKEND`, `JUGLANS_HISTORY_DIR`, `JUGLANS_HISTORY_PATH`, `JUGLANS_HISTORY_MAX_MESSAGES`, `JUGLANS_HISTORY_MAX_TOKENS`, `JUGLANS_HISTORY_ENABLED`.
+
+Programmatic access from workflows is exposed via the [`history.*` builtins](./builtins.md#conversation-history-history).
 
 ---
 
@@ -297,16 +359,19 @@ Package registry configuration.
 | `port` | u16 | | Server port (when running registry locally) |
 | `data_dir` | string | | Server data directory |
 
+To publish packages, set `JUGLANS_REGISTRY_API_KEY` (or `REGISTRY_API_KEY`) in your environment.
+
 ---
 
 ## Environment Variables
 
-| Variable | Description | Overrides |
-|----------|-------------|-----------|
-| `JUGLANS_API_KEY` | API key | `account.api_key` |
-| `JUGLANS_CONFIG` | Config file path | Search order |
-| `JUGLANS_LOG_LEVEL` | Log level: `debug`, `info`, `warn`, `error` | `logging.level` |
-| `JUGLANS_JUG0_URL` | Jug0 API address | `jug0.base_url` |
+| Variable | Description |
+|----------|-------------|
+| `JUGLANS_LOG_LEVEL` | Log level: `debug`, `info`, `warn`, `error` |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `DEEPSEEK_API_KEY` / `GEMINI_API_KEY` / `QWEN_API_KEY` / `BYTEPLUS_API_KEY` / `XAI_API_KEY` | LLM provider API keys (alternative to `[ai.providers]`) |
+| `JUGLANS_REGISTRY_API_KEY` / `REGISTRY_API_KEY` | Package registry credential for `juglans publish` |
+| `SERVER_HOST` / `SERVER_PORT` | Override `[server]` host/port |
+| `TELEGRAM_BOT_TOKEN` / `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | Bot adapter overrides |
 
 ---
 
@@ -315,28 +380,29 @@ Package registry configuration.
 **Project config** (`./juglans.toml`) -- committed to version control, no secrets:
 
 ```toml
-[jug0]
-base_url = "http://localhost:3000"
-
 [server]
 port = 8080
+
+[ai.providers.openai]
+api_key = "${OPENAI_API_KEY}"
 
 [[mcp_servers]]
 name = "filesystem"
 base_url = "http://localhost:3001/mcp/filesystem"
 ```
 
-**User config** (`~/.config/juglans/juglans.toml`) -- personal settings and secrets:
+**User config** (`~/.config/juglans/juglans.toml`) -- personal settings:
 
 ```toml
 [account]
 id = "my_user_id"
 name = "My Name"
-api_key = "jug0_sk_secret"
+role = "developer"
 ```
 
-Environment variables override both:
+Or just set everything in `.env`:
 
 ```bash
-export JUGLANS_API_KEY="jug0_sk_..."
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
 ```

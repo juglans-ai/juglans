@@ -6,6 +6,7 @@ pub mod claude_code;
 pub mod deepseek;
 pub mod factory;
 pub mod gemini;
+pub mod juglans;
 pub mod mcp_types;
 pub mod openai;
 pub mod qwen;

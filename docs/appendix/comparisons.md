@@ -58,6 +58,15 @@ In Airflow, this requires a BranchPythonOperator with a custom callable. In Lang
 - You want a single binary with no runtime dependencies (no Python env, no JVM)
 - You need SSE streaming, bot adapters, or MCP tool integration out of the box
 
+## Juglans-Only Differentiators
+
+A few capabilities set Juglans apart from every tool in the comparison matrix:
+
+- **WASM engine** -- The core runtime compiles to `cdylib` and runs in the browser, so the same workflow file executes identically on the CLI, server, and web.
+- **Type system** -- A static type checker validates node inputs/outputs across the DAG before execution, catching wiring mistakes that runtime-only tools miss.
+- **Class system** -- First-class `class` definitions let workflows share typed schemas and structured state instead of opaque dictionaries.
+- **LSP server** -- `juglans lsp` ships a Language Server Protocol implementation so editors get diagnostics, hover, and completion for `.jg` files out of the box.
+
 **Choose something else when:**
 
 - **Python script** -- one-off data analysis or quick prototyping

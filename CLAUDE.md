@@ -23,11 +23,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 3. Load imported resources (prompts via glob patterns)
 4. Build WorkflowExecutor with:
    - PromptRegistry (from .jgx files)
-   - JuglansRuntime (Jug0Client or custom implementation)
+   - LocalRuntime (LLM provider direct calls)
 5. Execute DAG:
    - Traverse graph (petgraph)
    - Resolve variables (input, output, reply, etc.)
-   - Call tools (builtin, MCP, or Jug0 API)
+   - Call tools (builtin, Python, MCP)
    - Update WorkflowContext
 ```
 
@@ -45,14 +45,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `expr_eval.rs` - Tree-walking expression evaluator with 30+ built-in functions
 
 **src/services/**
-- `jug0.rs` - Jug0 API client (push/pull/list/delete resources)
+- `local_runtime.rs` - The juglans runtime: calls LLM providers directly via the providers layer. Hosts `LocalRuntime` (the only runtime), `ChatRequest`, `ChatOutput`, `ChatToolHandler`. juglans is local-first; there is no remote backend dependency.
 - `mcp.rs` - Model Context Protocol client for tool integration
 - `web_server.rs` - Local development server (Axum) with SSE streaming and client tool bridge (`/api/chat/tool-result`)
 - `config.rs` - juglans.toml configuration loader
 - `prompt_loader.rs` - Resource registry with glob loading
 
 **src/builtins/**
-- `ai.rs` - chat() (with `state` parameter, client tool bridge, terminal tool detection), p() (prompt render), memory_search(), history() tools
+- `ai.rs` - chat() (with `state` parameter, client tool bridge, terminal tool detection), p() (prompt render)
 - `system.rs` - notify(), reply(), timer(), feishu_webhook() tools (set_context is internal-only, users write assignment syntax)
 - `devtools.rs` - Developer tools: read_file(), write_file(), edit_file(), glob(), grep(), bash() (also aliased as "sh")
 - `http.rs` - serve() (HTTP entry point marker), response() (HTTP response builder) for web server backend
@@ -79,7 +79,6 @@ For each node:
      - Python tools
      - MCP tools (filesystem, web-browser)
      - Client bridge tools
-     - Jug0 API calls
   3. Update WorkflowContext
    ↓
 Output final context
@@ -136,12 +135,6 @@ juglans prompt.jgx --input '{"name": "Alice"}'
 juglans check
 juglans check ./workflows/ --all --format json
 
-# Resource management (requires Jug0 backend)
-juglans push workflow.jg --force
-juglans pull my-workflow --type workflow
-juglans list --type agent
-juglans delete my-prompt --type prompt
-
 # Local dev server
 juglans web --port 8080
 ```
@@ -153,14 +146,17 @@ juglans web --port 8080
 ```toml
 [account]
 id = "user_id"
-api_key = "jug0_sk_..."
-
-[jug0]
-base_url = "http://localhost:3000"
+name = "Developer"
+role = "admin"
 
 [server]
 host = "127.0.0.1"
 port = 8080
+
+# LLM providers (juglans is local-first — configure at least one provider here
+# or set OPENAI_API_KEY / ANTHROPIC_API_KEY / DEEPSEEK_API_KEY / QWEN_API_KEY / etc. in env)
+[ai.providers.openai]
+api_key = "sk-..."
 
 # Optional MCP servers
 [mcp.filesystem]
@@ -205,7 +201,7 @@ The CLI searches for config in: `./juglans.toml` → `~/.config/juglans/juglans.
 3. **Python tools** - Transparent Python ecosystem calls via subprocess worker
 4. **MCP tools** - External processes via stdio/SSE (filesystem, web-browser)
 5. **Client bridge tools** - Unresolved tools forwarded to frontend via SSE `tool_call` events; results returned via `/api/chat/tool-result`
-6. **Custom tools** - Runtime-provided via JuglansRuntime trait
+6. **Custom tools** - Project-provided via the `tools:` glob in workflow metadata
 
 Resolution order: Builtin (including devtools) → Python → MCP → Client Bridge (automatic fallback)
 
@@ -322,7 +318,7 @@ docs/
 ├── getting-started/     # Installation, quickstart
 ├── guide/               # Concepts, syntax guides
 ├── reference/           # CLI, config, builtins
-├── integrations/        # Jug0, MCP, web server
+├── integrations/        # MCP, web server, Python
 └── examples/            # Tutorial-style examples
 
 examples/

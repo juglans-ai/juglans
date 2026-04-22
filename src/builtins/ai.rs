@@ -13,9 +13,297 @@ use tracing::{debug, error, info, warn};
 use crate::core::context::WorkflowContext;
 use crate::core::graph::WorkflowGraph;
 use crate::core::prompt_parser::PromptParser;
-use crate::services::interface::ChatOutput;
-use crate::services::interface::{ChatRequest, ChatToolHandler, JuglansRuntime};
+use crate::services::local_runtime::{ChatOutput, ChatRequest, ChatToolHandler, LocalRuntime};
 use crate::services::prompt_loader::PromptRegistry;
+
+/// Rough token estimate (4 chars ≈ 1 token). Good enough for history
+/// budget accounting; real tokenization is provider-specific.
+fn estimate_tokens(s: &str) -> u32 {
+    ((s.len() + 3) / 4) as u32
+}
+
+// ─── Native MCP support for `chat(mcp=…)` ────────────────────────────
+//
+// Minimal MCP (Model Context Protocol) client. When a chat() call
+// includes `mcp={"server_name": "http://..."}` or the expanded form
+// `{"server_name": {"url": "...", "token": "..."}}`, the chat builtin:
+//
+//   1. For each server, performs a JSON-RPC `initialize` + `tools/list`
+//      handshake (`McpHttpServer::discover`), captures any returned
+//      `mcp-session-id` header, and converts the MCP tool definitions
+//      into OpenAI function-calling schemas. Tool names are prefixed
+//      with the server name (e.g. `wallet.list_positions`).
+//   2. Appends those schemas to the existing `tools=` array so the LLM
+//      sees a single flat tools list.
+//   3. Wraps the chat's base tool handler in `McpAwareToolHandler`,
+//      which intercepts any LLM tool call whose name begins with a
+//      registered `server.` prefix and dispatches it via `tools/call`
+//      on that server. Non-MCP calls fall through to the base handler.
+//
+// This replaces the legacy `libs: ["std/mcps.jg"]` + `mcps.MCP(…)` +
+// `on_tool=[mcps.handle]` DSL-side implementation. `std/mcps.jg` still
+// works for backward compatibility.
+#[derive(Debug)]
+struct McpHttpServer {
+    client: reqwest::Client,
+    url: String,
+    token: Option<String>,
+    session_id: Option<String>,
+}
+
+impl McpHttpServer {
+    fn auth_headers(&self) -> reqwest::header::HeaderMap {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::ACCEPT,
+            "application/json, text/event-stream".parse().unwrap(),
+        );
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            "application/json".parse().unwrap(),
+        );
+        if let Some(ref t) = self.token {
+            if let Ok(v) = format!("Bearer {}", t).parse() {
+                headers.insert(reqwest::header::AUTHORIZATION, v);
+            }
+        }
+        if let Some(ref sid) = self.session_id {
+            if let Ok(v) = sid.parse() {
+                headers.insert("mcp-session-id", v);
+            }
+        }
+        headers
+    }
+
+    /// Perform `initialize` + `tools/list` against an MCP server and
+    /// return (session handle, prefixed OpenAI schemas). Called once
+    /// per chat() invocation.
+    async fn discover(
+        prefix: String,
+        url: String,
+        token: Option<String>,
+    ) -> Result<(Self, Vec<Value>)> {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()?;
+
+        let mut server = Self {
+            client,
+            url,
+            token,
+            session_id: None,
+        };
+
+        // Step 1: initialize handshake — server may return a session id
+        // in the `mcp-session-id` response header (Streamable HTTP
+        // profile) or in the JSON body. We check the header first.
+        let init_body = json!({
+            "jsonrpc": "2.0",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "juglans", "version": env!("CARGO_PKG_VERSION")}
+            },
+            "id": "init"
+        });
+        let init_resp = server
+            .client
+            .post(&server.url)
+            .headers(server.auth_headers())
+            .json(&init_body)
+            .send()
+            .await
+            .with_context(|| format!("MCP `{}` initialize failed", prefix))?;
+
+        if let Some(sid) = init_resp
+            .headers()
+            .get("mcp-session-id")
+            .and_then(|v| v.to_str().ok())
+        {
+            server.session_id = Some(sid.to_string());
+        }
+        // Drain the body even though we only care about the headers —
+        // some servers stall if the body isn't consumed.
+        let _ = init_resp.text().await.ok();
+
+        // Step 2: tools/list
+        let list_body = json!({
+            "jsonrpc": "2.0",
+            "method": "tools/list",
+            "id": "discover"
+        });
+        let list_resp = server
+            .client
+            .post(&server.url)
+            .headers(server.auth_headers())
+            .json(&list_body)
+            .send()
+            .await
+            .with_context(|| format!("MCP `{}` tools/list failed", prefix))?;
+        let list_value: Value = list_resp
+            .json()
+            .await
+            .with_context(|| format!("MCP `{}` tools/list: bad JSON", prefix))?;
+
+        let mcp_tools = list_value
+            .get("result")
+            .and_then(|r| r.get("tools"))
+            .and_then(|t| t.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        let schemas: Vec<Value> = mcp_tools
+            .iter()
+            .filter_map(|t| {
+                let name = t.get("name").and_then(|v| v.as_str())?;
+                let description = t
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let parameters = t
+                    .get("inputSchema")
+                    .or_else(|| t.get("input_schema"))
+                    .cloned()
+                    .unwrap_or(json!({"type": "object", "properties": {}}));
+                Some(json!({
+                    "type": "function",
+                    "function": {
+                        "name": format!("{}.{}", prefix, name),
+                        "description": description,
+                        "parameters": parameters
+                    }
+                }))
+            })
+            .collect();
+
+        Ok((server, schemas))
+    }
+
+    /// Dispatch an LLM tool call to this MCP server. `tool_name` is
+    /// already unprefixed (the `server.` segment has been stripped).
+    async fn call(&self, tool_name: &str, arguments_json: &str) -> Result<String> {
+        let arguments: Value =
+            serde_json::from_str(arguments_json).unwrap_or(Value::Object(Default::default()));
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {"name": tool_name, "arguments": arguments},
+            "id": "call"
+        });
+        let resp = self
+            .client
+            .post(&self.url)
+            .headers(self.auth_headers())
+            .json(&body)
+            .send()
+            .await
+            .with_context(|| format!("MCP tools/call `{}` transport error", tool_name))?;
+        let value: Value = resp
+            .json()
+            .await
+            .with_context(|| format!("MCP tools/call `{}` bad JSON", tool_name))?;
+
+        // Happy path: result.content[0].text
+        if let Some(text) = value
+            .pointer("/result/content/0/text")
+            .and_then(|v| v.as_str())
+        {
+            return Ok(text.to_string());
+        }
+        // Error path: error.message
+        if let Some(err) = value.pointer("/error/message").and_then(|v| v.as_str()) {
+            return Err(anyhow!("MCP tool `{}` error: {}", tool_name, err));
+        }
+        // Fallback: whole result as JSON string
+        Ok(value
+            .get("result")
+            .map(|r| r.to_string())
+            .unwrap_or_else(|| value.to_string()))
+    }
+}
+
+/// Wraps an inner `ChatToolHandler` with MCP-aware dispatch. Any tool
+/// call whose name contains a `.` and whose prefix matches a registered
+/// MCP server is routed to that server via `tools/call`. Everything
+/// else falls through to the inner handler (declarative map, on_tool
+/// node, default workflow handler, etc).
+struct McpAwareToolHandler {
+    dispatcher: Arc<HashMap<String, Arc<McpHttpServer>>>,
+    inner: Arc<dyn ChatToolHandler>,
+}
+
+#[async_trait]
+impl ChatToolHandler for McpAwareToolHandler {
+    async fn handle_tool_call(&self, tool_name: &str, arguments_json: &str) -> Result<String> {
+        if let Some(dot_idx) = tool_name.find('.') {
+            let prefix = &tool_name[..dot_idx];
+            let inner_name = &tool_name[dot_idx + 1..];
+            if let Some(server) = self.dispatcher.get(prefix) {
+                return server.call(inner_name, arguments_json).await;
+            }
+        }
+        self.inner.handle_tool_call(tool_name, arguments_json).await
+    }
+
+    fn take_pending_tools(&self) -> Option<Vec<Value>> {
+        self.inner.take_pending_tools()
+    }
+}
+
+/// Parse the user-facing `mcp=` parameter into `(prefix, url, token)`
+/// triples. Accepts three shapes:
+///
+///   - `{"wallet": "http://..."}`                          (shorthand)
+///   - `{"wallet": {"url": "http://..."}}`
+///   - `{"wallet": {"url": "http://...", "token": "..."}}`
+///
+/// Also tolerates the whole value being wrapped in `{"output": {...}}`
+/// (when the map comes through as another node's output).
+fn parse_mcp_param(raw: &str) -> Result<Vec<(String, String, Option<String>)>> {
+    let parsed: Value = serde_json::from_str(raw)
+        .with_context(|| format!("chat(mcp=…): expected JSON object, got: {}", raw))?;
+    let obj = parsed
+        .get("output")
+        .and_then(|v| v.as_object())
+        .cloned()
+        .or_else(|| parsed.as_object().cloned())
+        .ok_or_else(|| anyhow!("chat(mcp=…): must be a JSON object"))?;
+
+    let mut servers = Vec::new();
+    for (prefix, value) in obj {
+        if prefix.contains('.') {
+            return Err(anyhow!(
+                "chat(mcp=…): server name `{}` cannot contain a dot",
+                prefix
+            ));
+        }
+        let (url, token) = match value {
+            Value::String(url) => (url, None),
+            Value::Object(ref m) => {
+                let url = m
+                    .get("url")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow!("chat(mcp=…) `{}`: missing `url`", prefix))?
+                    .to_string();
+                let token = m
+                    .get("token")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                (url, token)
+            }
+            _ => {
+                return Err(anyhow!(
+                    "chat(mcp=…) `{}`: must be a URL string or an object with `url`/`token`",
+                    prefix
+                ))
+            }
+        };
+        servers.push((prefix, url, token));
+    }
+    Ok(servers)
+}
 
 lazy_static! {
     static ref TEMPLATE_VAR_RE: Regex = Regex::new(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}").unwrap();
@@ -23,12 +311,12 @@ lazy_static! {
 
 pub struct Chat {
     _prompt_registry: Arc<PromptRegistry>,
-    runtime: Arc<dyn JuglansRuntime>,
+    runtime: Arc<LocalRuntime>,
     builtin_registry: Option<Weak<super::BuiltinRegistry>>,
 }
 
 impl Chat {
-    pub fn new(prompt_registry: Arc<PromptRegistry>, runtime: Arc<dyn JuglansRuntime>) -> Self {
+    pub fn new(prompt_registry: Arc<PromptRegistry>, runtime: Arc<LocalRuntime>) -> Self {
         Self {
             _prompt_registry: prompt_registry,
             runtime,
@@ -270,7 +558,7 @@ impl WorkflowToolHandler {
             .context
             .emit_tool_call_and_wait(uuid::Uuid::new_v4().to_string(), vec![call], 120)
             .await?;
-        // Store dynamic tools from frontend for jug0.rs to pick up
+        // Store dynamic tools from frontend for the next chat() invocation
         if let Some(ref t) = tools {
             if !t.is_empty() {
                 info!(
@@ -794,7 +1082,7 @@ impl Tool for Chat {
         // Handler map for declarative tool definitions (tool_name → node_name)
         let mut tool_handler_map: Option<HashMap<String, String>> = None;
 
-        let custom_tools_json_schema = if let Some(schema_raw) = tools_json_str {
+        let mut custom_tools_json_schema = if let Some(schema_raw) = tools_json_str {
             // Parse tools: supports inline JSON, single reference (@slug), multiple references ([slugs]),
             // or declarative map format {"tool_name": {"description": "...", "params": {...}, "handler": "node"}}
             let parsed: Vec<Value> = if let Some(slug) = schema_raw.strip_prefix('@') {
@@ -962,7 +1250,74 @@ impl Tool for Chat {
 
         let history_param = params.get("history").map(|s| s.as_str());
 
-        // Build message buffer: prepend history messages if provided as JSON array
+        // Resolve chat_id (4-tier): explicit param → reply.chat_id (in-run
+        // chain) → input.chat_id (adapter-injected) → None. An empty or
+        // "[Missing:...]" explicit value means "caller deliberately cleared
+        // the id" and falls through to None; this lets a node explicitly
+        // opt out of persistence without needing a separate flag.
+        let active_chat_id: Option<String> = if let Some(explicit_id) = params.get("chat_id") {
+            if explicit_id.starts_with("[Missing:") || explicit_id.trim().is_empty() {
+                debug!("Explicit chat_id empty/missing, treating as stateless.");
+                None
+            } else {
+                Some(explicit_id.clone())
+            }
+        } else {
+            let from_reply = context
+                .resolve_path("reply.chat_id")
+                .ok()
+                .flatten()
+                .and_then(|v| v.as_str().map(|s| s.to_string()));
+            let from_input = context
+                .resolve_path("input.chat_id")
+                .ok()
+                .flatten()
+                .and_then(|v| v.as_str().map(|s| s.to_string()));
+            from_reply.or(from_input)
+        };
+
+        // Auto-load history when:
+        //   - history param not explicitly supplied by the caller
+        //   - should_persist (state allows it)
+        //   - a chat_id was resolved
+        //   - a global store is configured
+        let auto_loaded_history: Vec<Value> = if history_param.is_none()
+            && should_persist
+            && active_chat_id.is_some()
+        {
+            if let Some(store) = crate::services::history::global_store() {
+                let cid = active_chat_id.as_deref().unwrap();
+                let cfg = crate::services::history::global_config();
+                match store.load(cid, cfg.max_messages).await {
+                    Ok(msgs) => {
+                        debug!(
+                            "│   Loaded {} prior messages for chat_id={}",
+                            msgs.len(),
+                            cid
+                        );
+                        msgs.into_iter()
+                            .map(|m| {
+                                json!({
+                                    "type": "text",
+                                    "role": m.role,
+                                    "content": m.content,
+                                })
+                            })
+                            .collect()
+                    }
+                    Err(e) => {
+                        warn!("│   history.load failed for {}: {}", cid, e);
+                        Vec::new()
+                    }
+                }
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+
+        // Build message buffer. Explicit `history` param wins over auto-load.
         let mut chat_messages_buffer: Vec<Value> = if let Some(history_str) = history_param {
             if let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(history_str) {
                 arr.into_iter()
@@ -980,7 +1335,7 @@ impl Tool for Chat {
                 Vec::new()
             }
         } else {
-            Vec::new()
+            auto_loaded_history
         };
 
         // Append current user message
@@ -989,33 +1344,6 @@ impl Tool for Chat {
             "role": "user",
             "content": user_message_body
         }));
-
-        let active_session_id = if let Some(explicit_id) = params.get("chat_id") {
-            if explicit_id.starts_with("[Missing:") || explicit_id.trim().is_empty() {
-                debug!("Explicit chat_id parameter invalid or empty, treating as None.");
-                None
-            } else {
-                debug!("Using explicit chat_id from parameters: {}", explicit_id);
-                Some(explicit_id.clone())
-            }
-        } else if should_persist {
-            if let Ok(Some(ctx_val)) = context.resolve_path("reply.chat_id") {
-                if let Some(ctx_str) = ctx_val.as_str() {
-                    debug!("Inheriting chat_id from context: {}", ctx_str);
-                    Some(ctx_str.to_string())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            debug!(
-                "Non-persist state ({}): Starting fresh session.",
-                input_state
-            );
-            None
-        };
 
         let final_agent_config = if let Some(ref agent_obj) = inline_agent {
             // Inline agent map: extract config from JSON object
@@ -1052,7 +1380,7 @@ impl Tool for Chat {
                 "temperature": final_temp,
             })
         } else {
-            // Plain string: treat as remote agent slug (jug0)
+            // Plain string: treat as agent slug to be resolved by the runtime
             debug!("│   Using remote agent: {}", agent_param);
             let mut base_config = json!({ "slug": agent_param });
             if let Some(map) = base_config.as_object_mut() {
@@ -1127,7 +1455,7 @@ impl Tool for Chat {
             None
         };
         let meta_sender = context.get_meta_sender_adapter();
-        let effective_meta_sender = if should_stream { meta_sender } else { None };
+        let _effective_meta_sender = if should_stream { meta_sender } else { None };
 
         // Read tool_event parameter: "silent" (default), "info", "verbose"
         // Backward compat: stream_tool_events=true → verbose
@@ -1151,9 +1479,56 @@ impl Tool for Chat {
             context.set_tool_event_level(tool_event_level);
         }
 
+        // ── Native `chat(mcp=…)` discovery ──
+        //
+        // If the caller passed an `mcp` parameter, handshake with each
+        // declared server (initialize + tools/list), convert the
+        // discovered tools into prefixed OpenAI schemas, append them to
+        // `custom_tools_json_schema`, and build a dispatcher the
+        // handler wrapper will use below.
+        let mcp_dispatcher: Option<Arc<HashMap<String, Arc<McpHttpServer>>>> =
+            if let Some(mcp_raw) = params.get("mcp") {
+                let servers = parse_mcp_param(mcp_raw)?;
+                if servers.is_empty() {
+                    None
+                } else {
+                    info!(
+                        "│   mcp: discovering {} server(s): {:?}",
+                        servers.len(),
+                        servers.iter().map(|(p, _, _)| p).collect::<Vec<_>>()
+                    );
+                    let mut dispatch = HashMap::new();
+                    let mut discovered_schemas: Vec<Value> = Vec::new();
+                    for (prefix, url, token) in servers {
+                        let (server, schemas) =
+                            McpHttpServer::discover(prefix.clone(), url, token).await?;
+                        info!(
+                            "│     mcp/{}: {} tool(s)",
+                            prefix,
+                            schemas.len()
+                        );
+                        discovered_schemas.extend(schemas);
+                        dispatch.insert(prefix, Arc::new(server));
+                    }
+                    // Merge into the flat `custom_tools_json_schema` the
+                    // runtime sees. If the user also passed explicit
+                    // `tools=`, MCP tools are appended after those.
+                    custom_tools_json_schema = Some(match custom_tools_json_schema.take() {
+                        Some(mut existing) => {
+                            existing.extend(discovered_schemas);
+                            existing
+                        }
+                        None => discovered_schemas,
+                    });
+                    Some(Arc::new(dispatch))
+                }
+            } else {
+                None
+            };
+
         // Create tool execution callback — tool_call handled within SSE stream, no tool loop needed
         // Priority: map handler (from declarative tools) > on_tool=[node] > on_tool_call=path > default
-        let handler: Arc<dyn ChatToolHandler> = if let Some(map) = tool_handler_map.take() {
+        let base_handler: Arc<dyn ChatToolHandler> = if let Some(map) = tool_handler_map.take() {
             // Declarative map format: tools={"name": {..., "handler": "node"}}
             let workflow = context
                 .get_current_workflow()
@@ -1212,17 +1587,24 @@ impl Tool for Chat {
             })
         };
 
+        // If `mcp=` was declared, wrap the base handler so any tool call
+        // with a `server.` prefix gets routed to the matching MCP server
+        // before the inner handler sees it.
+        let handler: Arc<dyn ChatToolHandler> = match mcp_dispatcher {
+            Some(dispatcher) => Arc::new(McpAwareToolHandler {
+                dispatcher,
+                inner: base_handler,
+            }),
+            None => base_handler,
+        };
+
         let api_result = self
             .runtime
             .chat(ChatRequest {
                 agent_config: final_agent_config,
                 messages: chat_messages_buffer,
                 tools: custom_tools_json_schema,
-                chat_id: active_session_id.clone(),
                 token_sender: effective_token_sender,
-                meta_sender: effective_meta_sender,
-                state: Some(state_raw.clone()),
-                history: history_param.map(|s| s.to_string()),
                 tool_handler: Some(handler),
             })
             .await?;
@@ -1240,7 +1622,13 @@ impl Tool for Chat {
                 debug!("│   ✓ Response completed (session: {})", chat_id);
 
                 if should_persist {
-                    context.set("reply.chat_id".to_string(), json!(chat_id))?;
+                    // Prefer the resolved active_chat_id over the provider's
+                    // per-request id so subsequent nodes in the same run
+                    // stay on the same stored thread.
+                    let exposed_chat_id = active_chat_id
+                        .clone()
+                        .unwrap_or_else(|| chat_id.clone());
+                    context.set("reply.chat_id".to_string(), json!(exposed_chat_id))?;
 
                     let current_display_buffer = context
                         .resolve_path("reply.output")
@@ -1250,6 +1638,29 @@ impl Tool for Chat {
                         .unwrap_or_default();
                     let new_display_buffer = format!("{}{}", current_display_buffer, text);
                     context.set("reply.output".to_string(), json!(new_display_buffer))?;
+
+                    // Persist user+assistant turn to the configured store.
+                    // Only when (a) we resolved a chat_id, (b) the global
+                    // store is configured, and (c) this wasn't a one-shot
+                    // history-override call (explicit `history` param).
+                    let explicit_history = params.get("history").is_some();
+                    if let (Some(ref cid), false) = (active_chat_id.as_ref(), explicit_history) {
+                        if let Some(store) = crate::services::history::global_store() {
+                            use crate::services::history::ChatMessage;
+                            let user_msg = ChatMessage::new("user", user_message_body.clone())
+                                .with_tokens(estimate_tokens(user_message_body));
+                            let asst_msg = ChatMessage::new("assistant", text.clone())
+                                .with_tokens(estimate_tokens(&text));
+                            if let Err(e) = store.append(cid, user_msg).await {
+                                warn!("│   history.append(user) failed: {}", e);
+                            }
+                            if let Err(e) = store.append(cid, asst_msg).await {
+                                warn!("│   history.append(assistant) failed: {}", e);
+                            } else {
+                                debug!("│   Persisted turn to chat_id={}", cid);
+                            }
+                        }
+                    }
                 }
 
                 if requested_format_mode == "json" {
@@ -1306,382 +1717,13 @@ impl Tool for Chat {
     }
 }
 
-pub struct MemorySearch {
-    runtime: Arc<dyn JuglansRuntime>,
-}
-
-impl MemorySearch {
-    pub fn new(runtime: Arc<dyn JuglansRuntime>) -> Self {
-        Self { runtime }
-    }
-}
-
-#[async_trait]
-impl Tool for MemorySearch {
-    fn name(&self) -> &str {
-        "jug0.memory_search"
-    }
-
-    async fn execute(
-        &self,
-        params: &HashMap<String, String>,
-        _context: &WorkflowContext,
-    ) -> Result<Option<Value>> {
-        let query_text = params
-            .get("query")
-            .ok_or_else(|| anyhow!("MemorySearch: 'query' parameter is required."))?;
-
-        let limit_val: u64 = params
-            .get("limit")
-            .and_then(|l| l.parse().ok())
-            .unwrap_or(5);
-
-        info!(
-            "🧠 Executing Semantic Memory Search: '{}' (limit: {})",
-            query_text, limit_val
-        );
-
-        let search_results = self.runtime.search_memories(query_text, limit_val).await?;
-
-        Ok(Some(json!(search_results)))
-    }
-}
-
-// ─── Web Search Builtin ─────────────────────────────────
-
-pub struct WebSearch {
-    runtime: Arc<dyn JuglansRuntime>,
-}
-
-impl WebSearch {
-    pub fn new(runtime: Arc<dyn JuglansRuntime>) -> Self {
-        Self { runtime }
-    }
-}
-
-#[async_trait]
-impl Tool for WebSearch {
-    fn name(&self) -> &str {
-        "jug0.web_search"
-    }
-
-    async fn execute(
-        &self,
-        params: &HashMap<String, String>,
-        _context: &WorkflowContext,
-    ) -> Result<Option<Value>> {
-        let query = params
-            .get("query")
-            .ok_or_else(|| anyhow!("web_search: 'query' parameter is required."))?;
-
-        info!("🔍 Executing Web Search: '{}'", query);
-
-        let result = self.runtime.web_search(query).await?;
-        Ok(Some(result))
-    }
-}
-
-// ─── Vector Builtins ─────────────────────────────────────
-
-pub struct VectorCreateSpace {
-    runtime: Arc<dyn JuglansRuntime>,
-}
-
-impl VectorCreateSpace {
-    pub fn new(runtime: Arc<dyn JuglansRuntime>) -> Self {
-        Self { runtime }
-    }
-}
-
-#[async_trait]
-impl Tool for VectorCreateSpace {
-    fn name(&self) -> &str {
-        "jug0.vector_create_space"
-    }
-
-    async fn execute(
-        &self,
-        params: &HashMap<String, String>,
-        _context: &WorkflowContext,
-    ) -> Result<Option<Value>> {
-        let space = params
-            .get("space")
-            .ok_or_else(|| anyhow!("vector_create_space: 'space' parameter is required."))?;
-
-        let model = params.get("model").map(|s| s.as_str());
-        let public = params
-            .get("public")
-            .map(|v| v == "true" || v == "1")
-            .unwrap_or(false);
-
-        info!(
-            "📦 Creating vector space: '{}' (model: {:?}, public: {})",
-            space, model, public
-        );
-
-        let result = self
-            .runtime
-            .vector_create_space(space, model, public)
-            .await?;
-
-        Ok(Some(result))
-    }
-}
-
-pub struct VectorUpsert {
-    runtime: Arc<dyn JuglansRuntime>,
-}
-
-impl VectorUpsert {
-    pub fn new(runtime: Arc<dyn JuglansRuntime>) -> Self {
-        Self { runtime }
-    }
-}
-
-#[async_trait]
-impl Tool for VectorUpsert {
-    fn name(&self) -> &str {
-        "jug0.vector_upsert"
-    }
-
-    async fn execute(
-        &self,
-        params: &HashMap<String, String>,
-        _context: &WorkflowContext,
-    ) -> Result<Option<Value>> {
-        let space = params
-            .get("space")
-            .ok_or_else(|| anyhow!("vector_upsert: 'space' parameter is required."))?;
-
-        let points_str = params
-            .get("points")
-            .ok_or_else(|| anyhow!("vector_upsert: 'points' parameter is required."))?;
-
-        let points: Vec<Value> = serde_json::from_str(points_str)
-            .map_err(|e| anyhow!("vector_upsert: invalid JSON in 'points': {}", e))?;
-
-        let model = params.get("model").map(|s| s.as_str());
-
-        info!(
-            "📥 Vector upsert: {} points into space '{}' (model: {:?})",
-            points.len(),
-            space,
-            model
-        );
-
-        let result = self.runtime.vector_upsert(space, points, model).await?;
-
-        Ok(Some(result))
-    }
-}
-
-pub struct VectorSearch {
-    runtime: Arc<dyn JuglansRuntime>,
-}
-
-impl VectorSearch {
-    pub fn new(runtime: Arc<dyn JuglansRuntime>) -> Self {
-        Self { runtime }
-    }
-}
-
-#[async_trait]
-impl Tool for VectorSearch {
-    fn name(&self) -> &str {
-        "jug0.vector_search"
-    }
-
-    async fn execute(
-        &self,
-        params: &HashMap<String, String>,
-        _context: &WorkflowContext,
-    ) -> Result<Option<Value>> {
-        let query = params
-            .get("query")
-            .ok_or_else(|| anyhow!("vector_search: 'query' parameter is required."))?;
-
-        let space = params.get("space").map(|s| s.as_str()).unwrap_or("default");
-
-        let limit: u64 = params
-            .get("limit")
-            .and_then(|l| l.parse().ok())
-            .unwrap_or(5);
-
-        let model = params.get("model").map(|s| s.as_str());
-
-        info!(
-            "🔍 Vector search: '{}' in space '{}' (limit: {}, model: {:?})",
-            query, space, limit, model
-        );
-
-        let results = self
-            .runtime
-            .vector_search(space, query, limit, model)
-            .await?;
-
-        Ok(Some(json!(results)))
-    }
-}
-
-pub struct VectorListSpaces {
-    runtime: Arc<dyn JuglansRuntime>,
-}
-
-impl VectorListSpaces {
-    pub fn new(runtime: Arc<dyn JuglansRuntime>) -> Self {
-        Self { runtime }
-    }
-}
-
-#[async_trait]
-impl Tool for VectorListSpaces {
-    fn name(&self) -> &str {
-        "jug0.vector_list_spaces"
-    }
-
-    async fn execute(
-        &self,
-        _params: &HashMap<String, String>,
-        _context: &WorkflowContext,
-    ) -> Result<Option<Value>> {
-        info!("📋 Vector list spaces");
-        let results = self.runtime.vector_list_spaces().await?;
-        Ok(Some(json!(results)))
-    }
-}
-
-pub struct VectorDeleteSpace {
-    runtime: Arc<dyn JuglansRuntime>,
-}
-
-impl VectorDeleteSpace {
-    pub fn new(runtime: Arc<dyn JuglansRuntime>) -> Self {
-        Self { runtime }
-    }
-}
-
-#[async_trait]
-impl Tool for VectorDeleteSpace {
-    fn name(&self) -> &str {
-        "jug0.vector_delete_space"
-    }
-
-    async fn execute(
-        &self,
-        params: &HashMap<String, String>,
-        _context: &WorkflowContext,
-    ) -> Result<Option<Value>> {
-        let space = params
-            .get("space")
-            .ok_or_else(|| anyhow!("vector_delete_space: 'space' parameter is required."))?;
-
-        info!("🗑️ Vector delete space: '{}'", space);
-        let result = self.runtime.vector_delete_space(space).await?;
-        Ok(Some(result))
-    }
-}
-
-pub struct VectorDelete {
-    runtime: Arc<dyn JuglansRuntime>,
-}
-
-impl VectorDelete {
-    pub fn new(runtime: Arc<dyn JuglansRuntime>) -> Self {
-        Self { runtime }
-    }
-}
-
-#[async_trait]
-impl Tool for VectorDelete {
-    fn name(&self) -> &str {
-        "jug0.vector_delete"
-    }
-
-    async fn execute(
-        &self,
-        params: &HashMap<String, String>,
-        _context: &WorkflowContext,
-    ) -> Result<Option<Value>> {
-        let space = params
-            .get("space")
-            .ok_or_else(|| anyhow!("vector_delete: 'space' parameter is required."))?;
-
-        let ids_raw = params
-            .get("ids")
-            .ok_or_else(|| anyhow!("vector_delete: 'ids' parameter is required."))?;
-
-        // Support JSON array or comma-separated string
-        let ids: Vec<String> = if ids_raw.trim_start().starts_with('[') {
-            serde_json::from_str(ids_raw)
-                .unwrap_or_else(|_| ids_raw.split(',').map(|s| s.trim().to_string()).collect())
-        } else {
-            ids_raw.split(',').map(|s| s.trim().to_string()).collect()
-        };
-
-        info!(
-            "🗑️ Vector delete {} point(s) from space '{}'",
-            ids.len(),
-            space
-        );
-        let result = self.runtime.vector_delete(space, ids).await?;
-        Ok(Some(result))
-    }
-}
-
-pub struct History {
-    runtime: Arc<dyn JuglansRuntime>,
-}
-
-impl History {
-    pub fn new(runtime: Arc<dyn JuglansRuntime>) -> Self {
-        Self { runtime }
-    }
-}
-
-#[async_trait]
-impl Tool for History {
-    fn name(&self) -> &str {
-        "jug0.history"
-    }
-
-    async fn execute(
-        &self,
-        params: &HashMap<String, String>,
-        _context: &WorkflowContext,
-    ) -> Result<Option<Value>> {
-        let chat_id = params
-            .get("chat_id")
-            .ok_or_else(|| anyhow!("history() requires 'chat_id' parameter"))?;
-
-        let include_all = params
-            .get("include_all")
-            .map(|v| v.to_lowercase() == "true")
-            .unwrap_or(false);
-
-        info!(
-            "📚 Fetching chat history for: {} (include_all: {})",
-            chat_id, include_all
-        );
-
-        let messages = self
-            .runtime
-            .fetch_chat_history(chat_id, include_all)
-            .await?;
-
-        info!("📚 Retrieved {} messages", messages.len());
-
-        Ok(Some(json!(messages)))
-    }
-}
-
 pub struct Prompt {
     registry: Arc<PromptRegistry>,
-    runtime: Arc<dyn JuglansRuntime>,
 }
 
 impl Prompt {
-    pub fn new(registry: Arc<PromptRegistry>, runtime: Arc<dyn JuglansRuntime>) -> Self {
-        Self { registry, runtime }
+    pub fn new(registry: Arc<PromptRegistry>) -> Self {
+        Self { registry }
     }
 
     fn render_template_verbose(
@@ -1721,15 +1763,35 @@ impl Tool for Prompt {
         params: &HashMap<String, String>,
         context: &WorkflowContext,
     ) -> Result<Option<Value>> {
-        let target_slug = params
-            .get("slug")
-            .or_else(|| params.get("file"))
-            .ok_or_else(|| anyhow!("Prompt Tool: 'slug' parameter is required."))?;
-
-        let template_raw_string = if let Some(local_content) = self.registry.get(target_slug) {
-            local_content.clone()
+        // `file=` takes priority over `slug=`: it reads the template
+        // directly from disk relative to the workflow's project root.
+        // The `SetCwd` guard in runner.rs:113 has already chdir'd us
+        // into that root before execution, so a plain relative path
+        // resolves naturally. This is the preferred form — it avoids
+        // the pre-populated `PromptRegistry` and the `prompts:` header
+        // entirely. `slug=` is kept as a legacy path for workflows
+        // that still declare prompt globs in their header.
+        let template_raw_string = if let Some(file_path) = params.get("file") {
+            std::fs::read_to_string(file_path).map_err(|e| {
+                anyhow!(
+                    "Prompt Tool: failed to read prompt file '{}': {}",
+                    file_path,
+                    e
+                )
+            })?
+        } else if let Some(slug) = params.get("slug") {
+            self.registry.get(slug).cloned().ok_or_else(|| {
+                anyhow!(
+                    "Prompt Tool: prompt slug '{}' not found in local registry. \
+                     Use p(file=\"path/to/template.jgx\") or add the file to a \
+                     `prompts:` glob in your .jg workflow.",
+                    slug
+                )
+            })?
         } else {
-            self.runtime.fetch_prompt(target_slug).await?
+            return Err(anyhow!(
+                "Prompt Tool: 'file' or 'slug' parameter is required"
+            ));
         };
 
         let finalized_output = match PromptParser::parse(&template_raw_string) {

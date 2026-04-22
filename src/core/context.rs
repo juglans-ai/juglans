@@ -93,7 +93,7 @@ pub enum WorkflowEvent {
     Token(String),
     Status(String),
     Error(String),
-    /// Meta info — forward jug0 meta events to frontend (chat_id, user_message_id, etc.)
+    /// Meta info — forward backend meta events to frontend (chat_id, user_message_id, etc.)
     Meta(Value),
     /// Client tool call — sent to frontend for execution, awaits result via result_tx
     #[cfg(not(target_arch = "wasm32"))]

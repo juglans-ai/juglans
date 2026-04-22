@@ -75,7 +75,7 @@ inputs:
   rate: 0.95
   enabled: true
   tags: ["ai", "ml"]
-  config: {"model": "gpt-4", "temperature": 0.7}
+  config: {"model": "gpt-4o-mini", "temperature": 0.7}
 ---
 Hello {{ name }}, count={{ count }}.
 ```
@@ -532,7 +532,7 @@ prompts: ["./prompts/*.jgx"]
 ```juglans
 prompts: ["./prompts/*.jgx"]
 
-[analyst]: { "model": "gpt-4o", "system_prompt": "You are a data analyst." }
+[analyst]: { "model": "gpt-4o-mini", "system_prompt": "You are a data analyst." }
 
 [render]: p(slug="data-analysis", data=input.data, focus=input.focus)
 [respond]: chat(agent=analyst, message=output)
@@ -547,7 +547,7 @@ The `p()` call can be used directly as a parameter value:
 ```juglans
 prompts: ["./prompts/*.jgx"]
 
-[assistant]: { "model": "gpt-4o", "system_prompt": "You are a helpful assistant." }
+[assistant]: { "model": "gpt-4o-mini", "system_prompt": "You are a helpful assistant." }
 
 [ask]: chat(
   agent=assistant,

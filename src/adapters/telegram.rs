@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{error, info};
 
-use super::{chat_via_jug0, run_agent_for_message, PlatformMessage};
+use super::{run_agent_for_message, PlatformMessage};
 use crate::services::config::JuglansConfig;
 
 // ======================================================================
@@ -24,7 +24,6 @@ pub struct TelegramWebhookHandler {
     project_root: PathBuf,
     agent_slug: String,
     token: String,
-    use_jug0: bool,
     processed_updates: DashSet<i64>,
 }
 
@@ -35,18 +34,11 @@ impl TelegramWebhookHandler {
         let token = bot_config.token.clone();
         let agent_slug = bot_config.agent.clone();
 
-        let use_jug0 = match bot_config.mode.as_deref() {
-            Some("local") => false,
-            Some("jug0") => true,
-            _ => !config.jug0.base_url.is_empty(),
-        };
-
         Some(Self {
             config: config.clone(),
             project_root: project_root.to_path_buf(),
             agent_slug,
             token,
-            use_jug0,
             processed_updates: DashSet::new(),
         })
     }
@@ -106,7 +98,6 @@ impl TelegramWebhookHandler {
         let project_root = self.project_root.clone();
         let agent_slug = self.agent_slug.clone();
         let token = self.token.clone();
-        let use_jug0 = self.use_jug0;
 
         tokio::spawn(async move {
             let base_url = format!("https://api.telegram.org/bot{}", token);
@@ -119,18 +110,9 @@ impl TelegramWebhookHandler {
                 .send()
                 .await;
 
-            let result = if use_jug0 {
-                chat_via_jug0(
-                    &config,
-                    &agent_slug,
-                    &platform_msg,
-                    &super::NoopToolExecutor,
-                )
-                .await
-            } else {
+            let result =
                 run_agent_for_message(&config, &project_root, &agent_slug, &platform_msg, None)
-                    .await
-            };
+                    .await;
 
             match result {
                 Ok(reply) => {

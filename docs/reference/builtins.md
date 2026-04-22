@@ -48,7 +48,7 @@ Composite syntax: `state="input_state:output_state"` controls input and output i
 
 ```juglans
 [assistant]: {
-  "model": "gpt-4o",
+  "model": "gpt-4o-mini",
   "system_prompt": "You are a helpful assistant."
 }
 
@@ -68,7 +68,7 @@ libs: ["./agents.jg"]
 
 ```juglans
 [classifier]: {
-  "model": "gpt-4o",
+  "model": "gpt-4o-mini",
   "temperature": 0.0,
   "system_prompt": "Classify intent. Return JSON."
 }
@@ -79,7 +79,7 @@ libs: ["./agents.jg"]
 
 ```juglans
 [analyst]: {
-  "model": "gpt-4o",
+  "model": "gpt-4o-mini",
   "system_prompt": "You are a data analyst."
 }
 
@@ -95,47 +95,16 @@ Render a Prompt template (`.jgx` file). Template variables use `{{ name }}` synt
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `slug` | string | Yes | - | Prompt slug (or `file` alias) |
+| `file` | string | Conditional | - | Path to a `.jgx` template file (preferred) |
+| `slug` | string | Conditional | - | Prompt slug (legacy; requires the file to be registered via `prompts:` glob) |
 | `...` | any | No | - | Template variable key-value pairs |
 
-**Example:**
-
-```juglans
-[prompt]: p(slug="greeting", name="Alice", language="Chinese")
-```
-
----
-
-### memory_search()
-
-Search for relevant content in memory storage (semantic/RAG search via Jug0).
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `query` | string | Yes | - | Search query text |
-| `limit` | number | No | `5` | Maximum number of results |
+Exactly one of `file` or `slug` must be provided. `file` is the preferred form and avoids the need for a `prompts:` header declaration.
 
 **Example:**
 
 ```juglans
-[search]: memory_search(query=input.question, limit=5)
-```
-
----
-
-### history()
-
-Fetch chat history for a conversation session.
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `chat_id` | string | Yes | - | Conversation session ID |
-| `include_all` | boolean | No | `false` | Include hidden/silent messages |
-
-**Example:**
-
-```juglans
-[msgs]: history(chat_id=reply.chat_id, include_all="true")
+[prompt]: p(file="./prompts/greeting.jgx", name="Alice", language="Chinese")
 ```
 
 ---
@@ -167,10 +136,26 @@ Send a status notification. Updates `reply.status` and displays in console/UI.
 | `status` | string | No | - | Status text (updates `reply.status`) |
 | `message` | string | No | `""` | Notification message |
 
+**Output:**
+
+```json
+{"status": "sent", "content": "<message>"}
+```
+
 **Example:**
 
 ```juglans
 [start]: notify(status="Starting workflow...")
+```
+
+---
+
+### set_context() (internal)
+
+Assignment syntax (`variable = value`) compiles to an internal `set_context` tool. Users should write assignments, not call `set_context` directly:
+
+```juglans
+[init]: count = 0, status = "ready"
 ```
 
 ---
@@ -274,7 +259,7 @@ Send an HTTP request. Recommended over `fetch_url()`.
 **Output:**
 
 ```json
-{"status": 200, "ok": true, "data": {...}}
+{"status": 200, "ok": true, "data": {...}, "headers": {"content-type": "application/json"}}
 ```
 
 **Example:**
@@ -718,113 +703,6 @@ Regex search of file contents. Recursively searches files and returns matching l
 
 ---
 
-## Vector Tools
-
-Vector storage and search tools for building RAG pipelines. Backed by Jug0 vector API.
-
-### vector_create_space()
-
-Create a new vector space.
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `space` | string | Yes | - | Space name |
-| `model` | string | No | - | Embedding model override |
-| `public` | boolean | No | `false` | Whether the space is publicly accessible |
-
-**Example:**
-
-```juglans
-[create]: vector_create_space(space="knowledge-base", public="true")
-```
-
----
-
-### vector_upsert()
-
-Insert or update vector points in a space.
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `space` | string | Yes | - | Space name |
-| `points` | array | Yes | - | Array of point objects (JSON) |
-| `model` | string | No | - | Embedding model override |
-
-**Example:**
-
-```juglans
-[store]: vector_upsert(
-  space="docs",
-  points=[{"id": "doc1", "content": "Hello world"}]
-)
-```
-
----
-
-### vector_search()
-
-Search for similar vectors in a space.
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `query` | string | Yes | - | Search query text |
-| `space` | string | No | `"default"` | Space name |
-| `limit` | number | No | `5` | Maximum number of results |
-| `model` | string | No | - | Embedding model override |
-
-**Example:**
-
-```juglans
-[results]: vector_search(query=input.question, space="docs", limit=10)
-```
-
----
-
-### vector_list_spaces()
-
-List all vector spaces. No parameters.
-
-**Example:**
-
-```juglans
-[spaces]: vector_list_spaces()
-```
-
----
-
-### vector_delete_space()
-
-Delete an entire vector space.
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `space` | string | Yes | - | Space name to delete |
-
-**Example:**
-
-```juglans
-[del]: vector_delete_space(space="old-space")
-```
-
----
-
-### vector_delete()
-
-Delete specific vector points from a space.
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `space` | string | Yes | - | Space name |
-| `ids` | array/string | Yes | - | Point IDs (JSON array or comma-separated string) |
-
-**Example:**
-
-```juglans
-[del]: vector_delete(space="docs", ids=["doc1", "doc2"])
-```
-
----
-
 ## Testing Tools
 
 ### mock()
@@ -882,86 +760,198 @@ Send a message via Feishu (Lark) webhook.
 
 ---
 
+### feishu_send()
+
+Send a message (or image) to a Feishu chat using the `[bot.feishu]` `app_id` / `app_secret` credentials. Acquires a tenant access token and posts to the Feishu Open API.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `chat_id` | string | Yes | - | Target Feishu chat ID |
+| `message` | string | Conditional | - | Text message body |
+| `image` | string | Conditional | - | Image key or path |
+
+At least one of `message` or `image` must be provided.
+
+**Example:**
+
+```juglans
+[notify]: feishu_send(chat_id=input.chat_id, message="Deployment complete!")
+```
+
+---
+
+## Workflow Composition Tools
+
+### call()
+
+Call a function defined in the current (or root) workflow by name. Any additional keyword parameters are passed as function arguments.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `fn` | string | Yes | - | Function name to invoke |
+| `...` | any | No | - | Arguments forwarded to the function |
+
+**Example:**
+
+```juglans
+[greet(name)]: print(message="Hello " + name)
+
+[run]: call(fn="greet", name="Alice")
+```
+
+---
+
+### execute_workflow()
+
+Run another `.jg` workflow as a nested sub-execution. Returns the nested workflow's final `reply.output`.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `path` | string | Yes | - | Path to the `.jg` workflow file |
+| `input` | object | No | - | Optional input override for the child workflow |
+
+**Example:**
+
+```juglans
+[sub]: execute_workflow(path="./pipelines/process.jg", input={"query": input.query})
+```
+
+---
+
+## Database ORM (`db.*`)
+
+A 21-tool ORM layer for SQL databases. Tools are namespaced under `db.*` and operate on a named connection (set via `db.connect()`). See the source in `src/builtins/database.rs` for full parameter lists.
+
+### Connection
+
+| Tool | Description |
+|------|-------------|
+| `db.connect(name, url)` | Open a named connection (SQLite, Postgres, MySQL) |
+| `db.disconnect(name)` | Close a connection |
+
+### Query & Execute
+
+| Tool | Description |
+|------|-------------|
+| `db.query(sql, params?, name?)` | Run a raw SELECT, returns rows as an array of objects |
+| `db.exec(sql, params?, name?)` | Run a raw INSERT/UPDATE/DELETE statement |
+
+### CRUD
+
+| Tool | Description |
+|------|-------------|
+| `db.find(table, where?, order_by?, limit?, offset?)` | Find rows matching criteria |
+| `db.find_one(table, where?)` | Find a single row |
+| `db.create(table, data)` | Insert a row, returns the inserted record |
+| `db.create_many(table, rows)` | Bulk insert |
+| `db.upsert(table, data, conflict)` | Insert or update on conflict |
+| `db.update(table, where, data)` | Update matching rows |
+| `db.delete(table, where)` | Delete matching rows |
+| `db.count(table, where?)` | Count matching rows |
+| `db.aggregate(table, ops, where?, group_by?)` | Run aggregate functions (sum, avg, min, max) |
+
+### Transactions
+
+| Tool | Description |
+|------|-------------|
+| `db.begin(name?)` | Begin a transaction |
+| `db.commit(name?)` | Commit the current transaction |
+| `db.rollback(name?)` | Roll back the current transaction |
+
+### Schema
+
+| Tool | Description |
+|------|-------------|
+| `db.create_table(table, columns)` | Create a table |
+| `db.drop_table(table)` | Drop a table |
+| `db.alter_table(table, changes)` | Alter a table (add/drop/rename columns) |
+| `db.tables(name?)` | List tables in the database |
+| `db.columns(table, name?)` | List columns of a table |
+
+**Example:**
+
+```juglans
+[open]: db.connect(name="main", url="sqlite://./app.db")
+[user]: db.find_one(table="users", where={"id": input.user_id})
+[count]: db.count(table="orders", where={"user_id": user.id})
+```
+
+---
+
+## Conversation History (`history.*`)
+
+Persistent chat history keyed by `chat_id`. Backed by the `[history]` config section (JSONL, SQLite, or in-memory). When enabled, `chat()` automatically loads recent messages and appends each turn — these primitives are for workflows that need to inspect or manipulate the store directly.
+
+| Tool | Parameters | Returns |
+|------|------------|---------|
+| `history.load` | `chat_id`, `limit?=20` | Array of `{role, content, created_at, tokens?, meta?}` |
+| `history.append` | `chat_id`, `role`, `content`, `tokens?` | `{ok: true}` |
+| `history.replace` | `chat_id`, `from`, `to`, `content`, `role?="system"` | `{ok: true}` — collapses `[from, to)` into one message |
+| `history.trim` | `chat_id`, `keep_recent?=20` | `{ok: true}` |
+| `history.clear` | `chat_id` | `{ok: true}` |
+| `history.stats` | `chat_id` | `{chat_id, count, tokens, first_at, last_at}` |
+| `history.list_chats` | — | `[chat_id, ...]` |
+
+**Examples:**
+
+```juglans
+# Inspect
+[s]: history.stats(chat_id = input.chat_id)
+
+# Reset a thread
+[reset]: history.clear(chat_id = input.chat_id)
+
+# Collapse old messages into a summary (manual compaction)
+[old]: history.load(chat_id = input.chat_id, limit = 999)
+[sum]: chat(message = "Summarize:\n" + json(old), state = "silent")
+[_]:   history.replace(
+         chat_id = input.chat_id,
+         from    = 0,
+         to      = len(old) - 10,
+         content = sum,
+       )
+```
+
+If history is disabled (`[history].enabled = false`) or no `chat_id` is given, these tools return empty / no-op results without erroring.
+
+---
+
+## Device Control (feature-gated: `device`)
+
+Available only when Juglans is built with the `device` Cargo feature enabled (not available on headless CI or the default Docker image). Uses `enigo` for cross-platform keyboard/mouse automation.
+
+### Keyboard
+
+| Tool | Description |
+|------|-------------|
+| `key_tap(key)` | Press and release a key (e.g. `enter`, `esc`, `a`) |
+| `key_combo(keys)` | Press a chord (e.g. `"ctrl+shift+t"`) |
+| `type_text(text)` | Type a string |
+| `key_listen(duration?)` | Listen for key events for a duration |
+
+### Mouse
+
+| Tool | Description |
+|------|-------------|
+| `mouse_move(x, y)` | Move the mouse pointer to absolute coordinates |
+| `mouse_click(button?)` | Click a mouse button (`left`, `right`, `middle`) |
+| `mouse_scroll(x, y)` | Scroll horizontally/vertically |
+| `mouse_position()` | Return the current pointer coordinates |
+| `mouse_drag(from_x, from_y, to_x, to_y)` | Press, drag, and release |
+| `mouse_listen(duration?)` | Listen for mouse events for a duration |
+
+### Screen
+
+| Tool | Description |
+|------|-------------|
+| `screen_size()` | Return `{width, height}` of the primary display |
+| `screenshot(path)` | Capture the screen to a file |
+
+---
+
 ## Utility Functions
 
-Functions available in parameter expressions.
-
-### Data Functions
-
-| Function | Description | Example |
-|----------|-------------|---------|
-| `len(x)` | Length of string, array, or object | `len(items)` |
-| `json(x)` | Serialize to JSON string | `json(data)` |
-| `append(arr, item)` | Append element to array | `append(list, output)` |
-| `keys(obj)` | Get object keys as array | `keys(config)` |
-| `values(obj)` | Get object values as array | `values(config)` |
-| `flatten(arr)` | Flatten nested arrays | `flatten(nested)` |
-| `unique(arr)` | Remove duplicate elements | `unique(tags)` |
-| `sort(arr)` | Sort array | `sort(scores)` |
-| `reverse(arr)` | Reverse array | `reverse(items)` |
-| `slice(arr, start, end)` | Sub-array extraction | `slice(items, 0, 5)` |
-| `sum(arr)` | Sum numeric array | `sum(values)` |
-| `range(n)` | Generate `[0, 1, ..., n-1]` | `range(10)` |
-| `default(val, fallback)` | Return `fallback` if `val` is null | `default(x, 0)` |
-
-### String Functions
-
-| Function | Description | Example |
-|----------|-------------|---------|
-| `str(x)` | Convert to string | `str(count)` |
-| `upper(s)` | Uppercase | `upper(input.name)` |
-| `lower(s)` | Lowercase | `lower(input.name)` |
-| `trim(s)` | Strip whitespace | `trim(input.text)` |
-| `split(s, delim)` | Split string into array | `split(input.csv, ",")` |
-| `join(arr, delim)` | Join array into string | `join(tags, ", ")` |
-| `replace(s, old, new)` | Replace substring | `replace(input.text, "foo", "bar")` |
-| `contains(s, sub)` | Check if string/array contains value | `contains(list, "x")` |
-
-### Numeric Functions
-
-| Function | Description | Example |
-|----------|-------------|---------|
-| `int(x)` | Convert to integer | `int(input.count)` |
-| `float(x)` | Convert to float | `float(input.price)` |
-| `abs(x)` | Absolute value | `abs(delta)` |
-| `round(x)` | Round to nearest integer | `round(score)` |
-| `min(a, b)` / `min(arr)` | Minimum value | `min(a, b)` |
-| `max(a, b)` / `max(arr)` | Maximum value | `max(scores)` |
-
-### Type & Logic Functions
-
-| Function | Description | Example |
-|----------|-------------|---------|
-| `type(x)` | Type name as string | `type(value)` |
-| `if(cond, a, b)` | Conditional expression | `if(ok, "yes", "no")` |
-
-### Operators
-
-```text
-# Arithmetic
-a + b        # Addition / String concatenation
-a - b        # Subtraction
-a * b        # Multiplication
-a / b        # Division
-a % b        # Modulo
-
-# Comparison
-a == b       # Equal
-a != b       # Not equal
-a > b        # Greater than
-a >= b       # Greater than or equal
-a < b        # Less than
-a <= b       # Less than or equal
-
-# Logical
-a and b      # Logical AND (also &&)
-a or b       # Logical OR (also ||)
-not flag     # Logical NOT (also !)
-
-# Membership
-$item in list     # Membership test
-$item not in list # Negated membership
-```
+For the full expression-language function catalog (string, numeric, collection, date/time, encoding, higher-order, etc.), see [expressions.md](./expressions.md).
 
 ---
 
@@ -971,13 +961,13 @@ $item not in list # Negated membership
 prompts: ["./prompts/*.jgx"]
 
 [analyst]: {
-  "model": "gpt-4o",
+  "model": "gpt-4o-mini",
   "temperature": 0.3,
   "system_prompt": "You are a data analyst. Return structured JSON analysis."
 }
 
 [summarizer]: {
-  "model": "gpt-4o",
+  "model": "gpt-4o-mini",
   "system_prompt": "You are a summarization assistant."
 }
 

@@ -145,7 +145,7 @@ Final status: validated
 
 ## Step 6: Project Structure
 
-A real Juglans project uses the `src/` layout:
+A real Juglans project typically uses the `src/` layout:
 
 ```
 src/
@@ -156,7 +156,9 @@ src/
 └── tools/                     # Tool definitions
 ```
 
-Fork the [starter template](https://github.com/juglans-ai/juglans-template) to get this structure ready to go.
+Note: the `src/` layout is a convention, not enforced — Juglans will execute any `.jg` file in any directory. Fork the [starter template](https://github.com/juglans-ai/juglans-template) to get this structure ready to go.
+
+Other commands you'll use often: `juglans check` validates workflows before running, `juglans test` runs workflow tests, and `juglans serve` exposes workflows as an HTTP API.
 
 ## What's Next?
 

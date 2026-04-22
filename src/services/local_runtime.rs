@@ -1,16 +1,56 @@
 // src/services/local_runtime.rs
 //
-// LocalRuntime: calls LLM providers directly via the providers layer.
-// No cloud server needed — uses API keys configured locally.
+// LocalRuntime: the only juglans runtime. Calls LLM providers directly via
+// the providers layer using API keys configured locally. juglans is local-first;
+// there is no remote backend dependency.
 
 use crate::providers::llm::{Message, ToolCallChunk};
 use crate::providers::ProviderFactory;
 use crate::services::config::AiConfig;
-use crate::services::interface::{ChatOutput, ChatRequest, JuglansRuntime};
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::{json, Value};
+use std::sync::Arc;
+use tokio::sync::mpsc::UnboundedSender;
+
+// ─── Public types (moved from the former services::interface module) ────────
+
+/// Chat output type, distinguishing final text from tool call requests.
+#[derive(Debug)]
+pub enum ChatOutput {
+    /// Final reply text
+    Final { text: String, chat_id: String },
+    /// Tool call request initiated by AI
+    ToolCalls {
+        _calls: Vec<Value>,
+        _chat_id: String,
+    },
+}
+
+/// Tool execution callback — provided by the caller, invoked inline when
+/// `LocalRuntime::chat()` receives a `tool_call` event.
+#[async_trait]
+pub trait ChatToolHandler: Send + Sync {
+    async fn handle_tool_call(&self, tool_name: &str, arguments_json: &str) -> Result<String>;
+    /// Take pending dynamic tool definitions injected by the frontend via
+    /// tool-result. Returns `None` if no tools were injected. Clears the
+    /// pending state after taking.
+    fn take_pending_tools(&self) -> Option<Vec<Value>> {
+        None
+    }
+}
+
+/// Chat request parameters for `LocalRuntime::chat()`.
+pub struct ChatRequest {
+    pub agent_config: Value,
+    pub messages: Vec<Value>,
+    pub tools: Option<Vec<Value>>,
+    pub token_sender: Option<UnboundedSender<String>>,
+    pub tool_handler: Option<Arc<dyn ChatToolHandler>>,
+}
+
+// ─── LocalRuntime ───────────────────────────────────────────────────────────
 
 pub struct LocalRuntime {
     factory: ProviderFactory,
@@ -54,57 +94,15 @@ impl LocalRuntime {
                 .unwrap_or_else(|| "gpt-4o-mini".to_string()),
         }
     }
-}
 
-/// Accumulate tool call chunks into complete tool calls
-struct ToolCallAccumulator {
-    id: String,
-    name: String,
-    arguments: String,
-}
-
-fn accumulate_tool_chunks(accumulators: &mut Vec<ToolCallAccumulator>, chunks: &[ToolCallChunk]) {
-    for chunk in chunks {
-        let idx = chunk.index as usize;
-        // Grow the accumulator list if needed
-        while accumulators.len() <= idx {
-            accumulators.push(ToolCallAccumulator {
-                id: String::new(),
-                name: String::new(),
-                arguments: String::new(),
-            });
-        }
-        if let Some(id) = &chunk.id {
-            accumulators[idx].id = id.clone();
-        }
-        if let Some(name) = &chunk.name {
-            accumulators[idx].name = name.clone();
-        }
-        if let Some(args) = &chunk.arguments {
-            accumulators[idx].arguments.push_str(args);
-        }
-    }
-}
-
-fn accumulators_to_tool_calls(accs: &[ToolCallAccumulator]) -> Vec<Value> {
-    accs.iter()
-        .filter(|a| !a.name.is_empty())
-        .map(|a| {
-            json!({
-                "id": a.id,
-                "type": "function",
-                "function": {
-                    "name": a.name,
-                    "arguments": a.arguments,
-                }
-            })
-        })
-        .collect()
-}
-
-#[async_trait]
-impl JuglansRuntime for LocalRuntime {
-    async fn chat(&self, req: ChatRequest) -> Result<ChatOutput> {
+    /// Core chat capability: streams a chat completion against the configured
+    /// LLM provider, handling multi-round tool calls (up to 50 iterations).
+    ///
+    /// When `req.tool_handler` is `Some`, tool_call events are executed inline
+    /// and the loop continues until the model returns final text. When `None`,
+    /// the first tool_call breaks the loop and returns `ChatOutput::ToolCalls`
+    /// for the caller to handle.
+    pub async fn chat(&self, req: ChatRequest) -> Result<ChatOutput> {
         // Extract model from agent_config
         let model = req
             .agent_config
@@ -141,7 +139,7 @@ impl JuglansRuntime for LocalRuntime {
 
         let mut tools = req.tools.clone();
 
-        // Tool call loop (max 50 iterations, same as jug0)
+        // Tool call loop (max 50 iterations)
         for _ in 0..50 {
             let (provider, actual_model) = self.factory.get_provider(&model);
 
@@ -204,8 +202,8 @@ impl JuglansRuntime for LocalRuntime {
                 }
             };
 
-            // Execute tool calls via handler, build tool result messages
-            // First, add assistant message with tool_calls to history
+            // Execute tool calls via handler, build tool result messages.
+            // First, add assistant message with tool_calls to history.
             history.push(Message {
                 role: "assistant".to_string(),
                 parts: if text_acc.is_empty() {
@@ -252,94 +250,52 @@ impl JuglansRuntime for LocalRuntime {
             "LocalRuntime: exceeded maximum tool call iterations (50)"
         ))
     }
+}
 
-    async fn fetch_prompt(&self, _slug: &str) -> Result<String> {
-        Err(anyhow::anyhow!(
-            "fetch_prompt not supported in local runtime (use file-based prompts)"
-        ))
-    }
+// ─── Tool call accumulator helpers ──────────────────────────────────────────
 
-    async fn search_memories(&self, _query: &str, _limit: u64) -> Result<Vec<Value>> {
-        Err(anyhow::anyhow!(
-            "search_memories not supported in local runtime"
-        ))
-    }
+/// Accumulate tool call chunks into complete tool calls
+struct ToolCallAccumulator {
+    id: String,
+    name: String,
+    arguments: String,
+}
 
-    async fn fetch_chat_history(&self, _chat_id: &str, _include_all: bool) -> Result<Vec<Value>> {
-        Err(anyhow::anyhow!(
-            "fetch_chat_history not supported in local runtime"
-        ))
+fn accumulate_tool_chunks(accumulators: &mut Vec<ToolCallAccumulator>, chunks: &[ToolCallChunk]) {
+    for chunk in chunks {
+        let idx = chunk.index as usize;
+        // Grow the accumulator list if needed
+        while accumulators.len() <= idx {
+            accumulators.push(ToolCallAccumulator {
+                id: String::new(),
+                name: String::new(),
+                arguments: String::new(),
+            });
+        }
+        if let Some(id) = &chunk.id {
+            accumulators[idx].id = id.clone();
+        }
+        if let Some(name) = &chunk.name {
+            accumulators[idx].name = name.clone();
+        }
+        if let Some(args) = &chunk.arguments {
+            accumulators[idx].arguments.push_str(args);
+        }
     }
+}
 
-    async fn create_message(
-        &self,
-        _chat_id: &str,
-        _role: &str,
-        _content: &str,
-        _state: &str,
-    ) -> Result<()> {
-        // No-op in local runtime (no persistence)
-        Ok(())
-    }
-
-    async fn update_message_state(
-        &self,
-        _chat_id: &str,
-        _message_id: i32,
-        _state: &str,
-    ) -> Result<()> {
-        Ok(())
-    }
-
-    async fn vector_create_space(
-        &self,
-        _space: &str,
-        _model: Option<&str>,
-        _public: bool,
-    ) -> Result<Value> {
-        Err(anyhow::anyhow!(
-            "vector operations not supported in local runtime"
-        ))
-    }
-
-    async fn vector_upsert(
-        &self,
-        _space: &str,
-        _points: Vec<Value>,
-        _model: Option<&str>,
-    ) -> Result<Value> {
-        Err(anyhow::anyhow!(
-            "vector operations not supported in local runtime"
-        ))
-    }
-
-    async fn vector_search(
-        &self,
-        _space: &str,
-        _query: &str,
-        _limit: u64,
-        _model: Option<&str>,
-    ) -> Result<Vec<Value>> {
-        Err(anyhow::anyhow!(
-            "vector operations not supported in local runtime"
-        ))
-    }
-
-    async fn vector_list_spaces(&self) -> Result<Vec<Value>> {
-        Err(anyhow::anyhow!(
-            "vector operations not supported in local runtime"
-        ))
-    }
-
-    async fn vector_delete_space(&self, _space: &str) -> Result<Value> {
-        Err(anyhow::anyhow!(
-            "vector operations not supported in local runtime"
-        ))
-    }
-
-    async fn vector_delete(&self, _space: &str, _ids: Vec<String>) -> Result<Value> {
-        Err(anyhow::anyhow!(
-            "vector operations not supported in local runtime"
-        ))
-    }
+fn accumulators_to_tool_calls(accs: &[ToolCallAccumulator]) -> Vec<Value> {
+    accs.iter()
+        .filter(|a| !a.name.is_empty())
+        .map(|a| {
+            json!({
+                "id": a.id,
+                "type": "function",
+                "function": {
+                    "name": a.name,
+                    "arguments": a.arguments,
+                }
+            })
+        })
+        .collect()
 }

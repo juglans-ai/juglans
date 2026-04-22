@@ -1,44 +1,64 @@
 # How to Connect AI Models
 
-This guide covers how to configure Juglans to connect to AI models, including the Jug0 backend and local models.
+Juglans is local-first. It calls LLM providers directly using API keys you configure either in `juglans.toml` or via environment variables. There is no remote backend dependency — the language runs entirely on your machine.
 
-## Configure Jug0
+## Configure Providers
 
-Juglans calls LLMs through the Jug0 backend. Configure it in `juglans.toml` at the project root:
+Configure one or more providers in `juglans.toml` at the project root:
 
 ```toml
 [account]
 id = "your_user_id"
-api_key = "jug0_sk_your_api_key"
+name = "Your Name"
+role = "developer"
 
-[jug0]
-base_url = "http://localhost:3000"   # Local development
-# base_url = "https://api.jug0.com" # Production
+[ai.providers.openai]
+api_key = "sk-..."
+
+[ai.providers.anthropic]
+api_key = "sk-ant-..."
+
+[ai.providers.deepseek]
+api_key = "sk-..."
+
+[ai.providers.gemini]
+api_key = "..."
+
+[ai.providers.qwen]
+api_key = "sk-..."
+
+[ai.providers.byteplus]
+api_key = "..."
+
+[ai.providers.xai]
+api_key = "..."
 ```
 
-Configuration file search order: `./juglans.toml` -> `~/.config/juglans/juglans.toml` -> `/etc/juglans/juglans.toml`.
+Supported provider keys: `openai`, `anthropic`, `deepseek`, `gemini`, `qwen`, `byteplus`, `xai`.
 
-You can also override settings via environment variables:
+Configuration file search order: `./juglans.toml` → `~/.config/juglans/juglans.toml` → `/etc/juglans/juglans.toml`.
+
+You can also configure providers via environment variables (no `juglans.toml` needed):
 
 ```bash
-export JUGLANS_API_KEY="jug0_sk_..."
-export JUGLANS_JUG0_URL="http://localhost:3000"
+export OPENAI_API_KEY="sk-..."
+export ANTHROPIC_API_KEY="sk-ant-..."
+export DEEPSEEK_API_KEY="sk-..."
+export GEMINI_API_KEY="..."
+export QWEN_API_KEY="sk-..."
+export XAI_API_KEY="..."
+export ARK_API_KEY="..."
 ```
 
-## Get API Key
-
-1. Log in to the Jug0 console
-2. Go to Settings > API Keys
-3. Create a new API Key (format: `jug0_sk_...`)
-4. Copy it into the `[account].api_key` field in `juglans.toml`
+Juglans will pick up any of these on startup.
 
 ## Test Connection
 
-Create a minimal chat workflow to verify the connection:
+Create a minimal chat workflow:
 
 ```juglans
 [assistant]: {
-  "model": "gpt-4o",
+  "model": "gpt-4o-mini",
   "system_prompt": "You are a helpful assistant."
 }
 
@@ -54,29 +74,27 @@ Run it:
 juglans test-connection.jg
 ```
 
-If configured correctly, you will see the model's response. If it fails, check:
+If configured correctly, you will see `Using local LLM provider (direct API)` in the log followed by the model's response. If it fails, check:
 
-- Whether the `api_key` and `base_url` in `juglans.toml` are correct
-- Whether the Jug0 backend is running (`curl http://localhost:3000/health`)
-- Use `juglans whoami --check-connection` to test the connection status
+- That at least one provider's `api_key` is set in `juglans.toml` or env
+- That the model name is supported by the configured provider
+- That you have network access to the provider's API
 
 ## Use Local Models (Ollama)
 
-Juglans supports connecting to local models through the Jug0 backend. Example Ollama configuration:
+Juglans does not have a dedicated Ollama provider. Instead, point the built-in OpenAI provider at the Ollama OpenAI-compatible endpoint:
 
 ```toml
-[jug0]
-base_url = "http://localhost:3000"
-
-# Set up the Ollama provider in the Jug0 backend configuration,
-# then specify the model in your inline agent definition
+[ai.providers.openai]
+api_key = "ollama"
+base_url = "http://localhost:11434/v1"
 ```
 
-Create an inline agent that uses a local model:
+Then reference a local model in your workflow using the `openai/` prefix:
 
 ```juglans
 [local_agent]: {
-  "model": "ollama/llama3",
+  "model": "openai/llama3",
   "temperature": 0.7,
   "system_prompt": "You are a helpful assistant."
 }
@@ -87,76 +105,35 @@ Create an inline agent that uses a local model:
 [local_agent] -> [ask] -> [done]
 ```
 
-## Resource Management
+The same trick works for any OpenAI-compatible server (LM Studio, vLLM, llama.cpp, etc.) -- just swap the `base_url`.
 
-Juglans resources (Workflows, Agents, Prompts) can be synchronized between local storage and Jug0.
+## Inline Agents and Library Agents
 
-### Push (Local -> Remote)
-
-```bash
-# Push a single file
-juglans push src/prompts/greeting.jgx
-
-# Force overwrite
-juglans push src/main.jg --force
-
-# Batch push (using workspace configuration)
-juglans push
-
-# Preview
-juglans push --dry-run
-```
-
-### Pull (Remote -> Local)
-
-```bash
-juglans pull my-prompt --type prompt
-juglans pull my-agent --type agent --output ./agents/
-```
-
-### List and Delete
-
-```bash
-juglans list                    # List all remote resources
-juglans list --type agent       # List Agents only
-juglans delete old-prompt --type prompt
-```
-
-## Local vs Remote Resources
-
-| | Local | Remote |
-|---|---|---|
-| Reference style | Inline node or `libs:` import | owner/slug (e.g., `"juglans/assistant"`) |
-| Requires import | Define inline or import via `libs:` | No, reference directly |
-| Best for | Development, testing | Production deployment, team sharing |
-
-Mix both in the same Workflow:
+Agents (model + system prompt + temperature etc.) can be defined inline inside a workflow or imported from `libs:` for reuse across files.
 
 ```juglans
 [my_agent]: {
-  "model": "gpt-4o",
+  "model": "gpt-4o-mini",
   "system_prompt": "You are a helpful assistant."
 }
 
 [start]: print(msg="begin")
-[local_chat]: chat(agent=my_agent, message=input.query)
-[remote_chat]: chat(agent="juglans/premium-agent", message=output)
+[chat]: chat(agent=my_agent, message=input.query)
 [end]: print(msg="done")
 
-[my_agent] -> [start] -> [local_chat] -> [remote_chat] -> [end]
+[my_agent] -> [start] -> [chat] -> [end]
 ```
 
 ## Troubleshooting
 
 | Problem | Solution |
 |---------|----------|
-| `Connection refused` | Confirm the Jug0 backend is running; check `base_url` |
-| `401 Unauthorized` | Verify the `api_key` is correct |
+| `No API-key provided` | Set the relevant `*_API_KEY` env var or add `[ai.providers.<name>]` to `juglans.toml` |
+| `401 Unauthorized` | Verify the api_key is valid and not expired |
 | `Agent not found` | Confirm the agent node is defined inline or imported via `libs:` |
-| `Timeout` | Increase the timeout configuration or check the network connection |
+| `Timeout` | Check network access to the provider's API endpoint |
 
 ## Next Steps
 
-- [Jug0 Integration](../integrations/jug0.md) -- Full API reference
-- [Agent Syntax](../reference/agent-spec.md) -- Inline agent configuration
-- [Configuration Reference](../reference/config.md) -- Complete configuration options
+- [Configuration Reference](../reference/config.md) — Complete configuration options
+- [Agent Syntax](../reference/agent-spec.md) — Inline agent configuration

@@ -44,7 +44,7 @@ POST /api/workflows/my-flow/execute
 input              # Entire input object
 input.query        # Top-level field
 input.user.name    # Nested object field
-input.items.0      # Array element by index
+input.items[0]     # Array element by index
 ```
 
 ### Example
@@ -65,7 +65,7 @@ The return value of the most recently executed node. Overwritten after each node
 |------|---------------|
 | `chat()` | string (or object if `format="json"`) |
 | `p()` | string |
-| `fetch()` | `{status, ok, data}` |
+| `fetch()` | `{status, ok, data, headers}` |
 | `fetch_url()` | `{status, ok, method, url, content}` |
 | `bash()` | `{stdout, stderr, exit_code, ok}` |
 | `read_file()` | `{content, total_lines, lines_returned, offset}` |
@@ -85,7 +85,7 @@ The return value of the most recently executed node. Overwritten after each node
 output             # Entire output value
 output.status      # Field access (when output is object)
 output.data.items  # Nested field access
-output.items.0     # Array element by index
+output.items[0]    # Array element by index
 ```
 
 ### Example
