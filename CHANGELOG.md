@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.15] - 2026-04-22
+
+### Fixed
+
+- **CI build commands updated for the new `cli` feature.** The Linux ARM64 cross build in `release.yml`, the docker build in `deploy-docker.yml`, and the docs build in `docs.yml` all pass `--no-default-features --features native` to skip device/X11 deps. After 0.2.14 introduced the `cli` feature (required by the `juglans` bin), these commands produced a lib-only build with no binary, causing the ARM64 release upload to fail with `chmod: cannot access 'juglans'`. All three now pass `--features native,cli`. Library content is identical to 0.2.14 on crates.io — this release restores the full binary matrix on GitHub Releases.
+
 ## [0.2.14] - 2026-04-22
 
 ### Fixed

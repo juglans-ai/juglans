@@ -155,7 +155,7 @@ jobs:
       # Cross 编译 (Linux ARM64) — no device feature (pipewire unavailable on focal)
       - name: Build (cross)
         if: matrix.cross
-        run: cross build --release --target ${{ matrix.target }} --no-default-features --features native
+        run: cross build --release --target ${{ matrix.target }} --no-default-features --features native,cli
 
       # 打包 (Unix)
       - name: Package (Unix)

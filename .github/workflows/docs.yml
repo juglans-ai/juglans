@@ -31,7 +31,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build juglans
-        run: cargo build --release --no-default-features --features native
+        run: cargo build --release --no-default-features --features native,cli
 
       - name: Validate doc examples
         run: ./target/release/juglans doctest docs/
