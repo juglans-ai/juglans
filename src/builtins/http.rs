@@ -157,8 +157,7 @@ impl Tool for Serve {
             .unwrap_or(8080);
 
         // Start server (blocks indefinitely)
-        crate::services::web_server::start_inline_server(routes, workflow, executor, port)
-            .await?;
+        crate::services::web_server::start_inline_server(routes, workflow, executor, port).await?;
 
         Ok(None) // never reached
     }

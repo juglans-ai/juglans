@@ -1062,7 +1062,6 @@ fn handle_check(path: Option<&Path>, show_all: bool, output_format: &str) -> Res
     Ok(())
 }
 
-
 async fn handle_bot(
     platform: &str,
     agent_override: Option<String>,

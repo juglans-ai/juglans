@@ -58,10 +58,7 @@ pub struct WorkflowExecutor {
 }
 
 impl WorkflowExecutor {
-    pub async fn new(
-        prompt_registry: Arc<PromptRegistry>,
-        runtime: Arc<LocalRuntime>,
-    ) -> Self {
+    pub async fn new(prompt_registry: Arc<PromptRegistry>, runtime: Arc<LocalRuntime>) -> Self {
         Self::new_with_debug(prompt_registry, runtime, DebugConfig::default()).await
     }
 

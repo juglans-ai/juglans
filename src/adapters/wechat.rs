@@ -546,9 +546,7 @@ async fn qr_login(http: &reqwest::Client, workspace: &Path) -> Result<LoginResul
                 scanned_printed = false;
                 println!("🔄 新二维码已生成，请重新扫描\n");
                 render_qr_terminal(&qrcode_url);
-                if let Err(e) =
-                    write_pending_qr(workspace, &qrcode, &qrcode_url, "awaiting_scan")
-                {
+                if let Err(e) = write_pending_qr(workspace, &qrcode, &qrcode_url, "awaiting_scan") {
                     warn!("[wechat] could not persist refreshed QR: {}", e);
                 }
             }

@@ -194,48 +194,43 @@ impl LlmProvider for JuglansProvider {
                 e
             })?;
 
-        let mapped_stream = stream.map(|item| {
-            match item {
-                Ok(resp) => {
-                    let choice = resp.choices.first();
-                    let content = choice.and_then(|c| c.delta.content.clone());
-                    let finish_reason = choice
-                        .and_then(|c| c.finish_reason.clone())
-                        .map(|r| format!("{:?}", r));
+        let mapped_stream = stream.map(|item| match item {
+            Ok(resp) => {
+                let choice = resp.choices.first();
+                let content = choice.and_then(|c| c.delta.content.clone());
+                let finish_reason = choice
+                    .and_then(|c| c.finish_reason.clone())
+                    .map(|r| format!("{:?}", r));
 
-                    let mut tool_chunks = Vec::new();
-                    if let Some(c) = choice {
-                        if let Some(tool_calls) = &c.delta.tool_calls {
-                            for tc in tool_calls {
-                                tool_chunks.push(ToolCallChunk {
-                                    index: tc.index,
-                                    id: tc.id.clone(),
-                                    name: tc.function.as_ref().and_then(|f| f.name.clone()),
-                                    arguments: tc
-                                        .function
-                                        .as_ref()
-                                        .and_then(|f| f.arguments.clone()),
-                                    signature: None,
-                                });
-                            }
+                let mut tool_chunks = Vec::new();
+                if let Some(c) = choice {
+                    if let Some(tool_calls) = &c.delta.tool_calls {
+                        for tc in tool_calls {
+                            tool_chunks.push(ToolCallChunk {
+                                index: tc.index,
+                                id: tc.id.clone(),
+                                name: tc.function.as_ref().and_then(|f| f.name.clone()),
+                                arguments: tc.function.as_ref().and_then(|f| f.arguments.clone()),
+                                signature: None,
+                            });
                         }
                     }
-
-                    let usage = resp.usage.map(|u| TokenUsage {
-                        input_tokens: u.prompt_tokens as i64,
-                        output_tokens: u.completion_tokens as i64,
-                        total_tokens: u.total_tokens as i64,
-                    });
-
-                    Ok(ChatStreamChunk {
-                        content,
-                        tool_calls: tool_chunks,
-                        usage,
-                        finish_reason,
-                    })
                 }
-                Err(e) => Err(anyhow::anyhow!("Juglans Provider Error: {}", e)),
+
+                let usage = resp.usage.map(|u| TokenUsage {
+                    input_tokens: u.prompt_tokens as i64,
+                    output_tokens: u.completion_tokens as i64,
+                    total_tokens: u.total_tokens as i64,
+                });
+
+                Ok(ChatStreamChunk {
+                    content,
+                    tool_calls: tool_chunks,
+                    usage,
+                    finish_reason,
+                })
             }
+            Err(e) => Err(anyhow::anyhow!("Juglans Provider Error: {}", e)),
         });
 
         Ok(Box::pin(mapped_stream))

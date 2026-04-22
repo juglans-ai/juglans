@@ -444,7 +444,8 @@ impl JuglansConfig {
         if let Ok(v) = std::env::var("JUGLANS_HISTORY_PATH") {
             self.history.path = Some(v);
         }
-        if let Ok(Ok(v)) = std::env::var("JUGLANS_HISTORY_MAX_MESSAGES").map(|s| s.parse::<usize>()) {
+        if let Ok(Ok(v)) = std::env::var("JUGLANS_HISTORY_MAX_MESSAGES").map(|s| s.parse::<usize>())
+        {
             self.history.max_messages = v;
         }
         if let Ok(Ok(v)) = std::env::var("JUGLANS_HISTORY_MAX_TOKENS").map(|s| s.parse::<u32>()) {

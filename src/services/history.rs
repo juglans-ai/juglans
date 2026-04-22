@@ -134,10 +134,7 @@ pub fn global_store() -> Option<Arc<dyn ConversationStore>> {
 /// Get the active history config. Returns default config if init_global
 /// has not been called (safe for callers that want limits with fallback).
 pub fn global_config() -> HistoryConfig {
-    GLOBAL
-        .get()
-        .map(|g| g.cfg.clone())
-        .unwrap_or_else(HistoryConfig::default)
+    GLOBAL.get().map(|g| g.cfg.clone()).unwrap_or_default()
 }
 
 /// Build the configured store. Returns None if history is disabled or
@@ -202,7 +199,10 @@ impl Default for MemoryStore {
 #[async_trait]
 impl ConversationStore for MemoryStore {
     async fn append(&self, chat_id: &str, msg: ChatMessage) -> Result<()> {
-        self.threads.entry(chat_id.to_string()).or_default().push(msg);
+        self.threads
+            .entry(chat_id.to_string())
+            .or_default()
+            .push(msg);
         Ok(())
     }
 
@@ -289,7 +289,8 @@ impl JsonlStore {
     }
 
     fn path_for(&self, chat_id: &str) -> PathBuf {
-        self.dir.join(format!("{}.jsonl", sanitize_chat_id(chat_id)))
+        self.dir
+            .join(format!("{}.jsonl", sanitize_chat_id(chat_id)))
     }
 
     fn lock_for(&self, chat_id: &str) -> Arc<Mutex<()>> {
@@ -305,8 +306,8 @@ impl JsonlStore {
         if !path.exists() {
             return Ok(Vec::new());
         }
-        let file = fs::File::open(&path)
-            .with_context(|| format!("Failed to open {}", path.display()))?;
+        let file =
+            fs::File::open(&path).with_context(|| format!("Failed to open {}", path.display()))?;
         let reader = BufReader::new(file);
         let mut msgs = Vec::new();
         for (idx, line) in reader.lines().enumerate() {
@@ -453,8 +454,8 @@ impl SqliteStore {
                     .with_context(|| format!("Failed to create {}", parent.display()))?;
             }
         }
-        let conn = Connection::open(path)
-            .with_context(|| format!("Failed to open {}", path.display()))?;
+        let conn =
+            Connection::open(path).with_context(|| format!("Failed to open {}", path.display()))?;
         conn.execute_batch(
             "
             CREATE TABLE IF NOT EXISTS messages (
@@ -569,9 +570,8 @@ impl ConversationStore for SqliteStore {
             let tx = c.transaction()?;
             // Collect row ids in chronological order.
             let ids: Vec<i64> = {
-                let mut stmt = tx.prepare(
-                    "SELECT id FROM messages WHERE chat_id = ?1 ORDER BY id ASC",
-                )?;
+                let mut stmt =
+                    tx.prepare("SELECT id FROM messages WHERE chat_id = ?1 ORDER BY id ASC")?;
                 let ids: Vec<i64> = stmt
                     .query_map(params![chat_id], |r| r.get::<_, i64>(0))?
                     .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -611,10 +611,7 @@ impl ConversationStore for SqliteStore {
 
     async fn clear(&self, chat_id: &str) -> Result<()> {
         self.with_conn(|c| {
-            c.execute(
-                "DELETE FROM messages WHERE chat_id = ?1",
-                params![chat_id],
-            )?;
+            c.execute("DELETE FROM messages WHERE chat_id = ?1", params![chat_id])?;
             Ok(())
         })
     }
@@ -674,10 +671,7 @@ fn compute_stats(chat_id: &str, msgs: &[ChatMessage]) -> ChatStats {
     ChatStats {
         chat_id: chat_id.to_string(),
         count: msgs.len(),
-        tokens: msgs
-            .iter()
-            .map(|m| m.tokens.unwrap_or(0) as u64)
-            .sum(),
+        tokens: msgs.iter().map(|m| m.tokens.unwrap_or(0) as u64).sum(),
         first_at: msgs.first().map(|m| m.created_at),
         last_at: msgs.last().map(|m| m.created_at),
     }
@@ -749,7 +743,10 @@ mod tests {
         let store = JsonlStore::open(&tmp).unwrap();
         let c = "t";
         for i in 0..5 {
-            store.append(c, mk("user", &format!("m{}", i))).await.unwrap();
+            store
+                .append(c, mk("user", &format!("m{}", i)))
+                .await
+                .unwrap();
         }
         store
             .replace(c, 0, 3, ChatMessage::new("system", "[summary of first 3]"))
@@ -783,8 +780,7 @@ mod tests {
     }
 
     fn tempdir() -> PathBuf {
-        let p = std::env::temp_dir()
-            .join(format!("juglans-history-test-{}", uuid::Uuid::new_v4()));
+        let p = std::env::temp_dir().join(format!("juglans-history-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&p).unwrap();
         p
     }

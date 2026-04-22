@@ -19,7 +19,7 @@ use crate::services::prompt_loader::PromptRegistry;
 /// Rough token estimate (4 chars ≈ 1 token). Good enough for history
 /// budget accounting; real tokenization is provider-specific.
 fn estimate_tokens(s: &str) -> u32 {
-    ((s.len() + 3) / 4) as u32
+    s.len().div_ceil(4) as u32
 }
 
 // ─── Native MCP support for `chat(mcp=…)` ────────────────────────────
@@ -1281,41 +1281,39 @@ impl Tool for Chat {
         //   - should_persist (state allows it)
         //   - a chat_id was resolved
         //   - a global store is configured
-        let auto_loaded_history: Vec<Value> = if history_param.is_none()
-            && should_persist
-            && active_chat_id.is_some()
-        {
-            if let Some(store) = crate::services::history::global_store() {
-                let cid = active_chat_id.as_deref().unwrap();
-                let cfg = crate::services::history::global_config();
-                match store.load(cid, cfg.max_messages).await {
-                    Ok(msgs) => {
-                        debug!(
-                            "│   Loaded {} prior messages for chat_id={}",
-                            msgs.len(),
-                            cid
-                        );
-                        msgs.into_iter()
-                            .map(|m| {
-                                json!({
-                                    "type": "text",
-                                    "role": m.role,
-                                    "content": m.content,
+        let auto_loaded_history: Vec<Value> =
+            if history_param.is_none() && should_persist && active_chat_id.is_some() {
+                if let Some(store) = crate::services::history::global_store() {
+                    let cid = active_chat_id.as_deref().unwrap();
+                    let cfg = crate::services::history::global_config();
+                    match store.load(cid, cfg.max_messages).await {
+                        Ok(msgs) => {
+                            debug!(
+                                "│   Loaded {} prior messages for chat_id={}",
+                                msgs.len(),
+                                cid
+                            );
+                            msgs.into_iter()
+                                .map(|m| {
+                                    json!({
+                                        "type": "text",
+                                        "role": m.role,
+                                        "content": m.content,
+                                    })
                                 })
-                            })
-                            .collect()
+                                .collect()
+                        }
+                        Err(e) => {
+                            warn!("│   history.load failed for {}: {}", cid, e);
+                            Vec::new()
+                        }
                     }
-                    Err(e) => {
-                        warn!("│   history.load failed for {}: {}", cid, e);
-                        Vec::new()
-                    }
+                } else {
+                    Vec::new()
                 }
             } else {
                 Vec::new()
-            }
-        } else {
-            Vec::new()
-        };
+            };
 
         // Build message buffer. Explicit `history` param wins over auto-load.
         let mut chat_messages_buffer: Vec<Value> = if let Some(history_str) = history_param {
@@ -1502,11 +1500,7 @@ impl Tool for Chat {
                     for (prefix, url, token) in servers {
                         let (server, schemas) =
                             McpHttpServer::discover(prefix.clone(), url, token).await?;
-                        info!(
-                            "│     mcp/{}: {} tool(s)",
-                            prefix,
-                            schemas.len()
-                        );
+                        info!("│     mcp/{}: {} tool(s)", prefix, schemas.len());
                         discovered_schemas.extend(schemas);
                         dispatch.insert(prefix, Arc::new(server));
                     }
@@ -1625,9 +1619,7 @@ impl Tool for Chat {
                     // Prefer the resolved active_chat_id over the provider's
                     // per-request id so subsequent nodes in the same run
                     // stay on the same stored thread.
-                    let exposed_chat_id = active_chat_id
-                        .clone()
-                        .unwrap_or_else(|| chat_id.clone());
+                    let exposed_chat_id = active_chat_id.clone().unwrap_or_else(|| chat_id.clone());
                     context.set("reply.chat_id".to_string(), json!(exposed_chat_id))?;
 
                     let current_display_buffer = context
