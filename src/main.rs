@@ -1,5 +1,7 @@
 // src/main.rs
 #![cfg(not(target_arch = "wasm32"))]
+#![allow(clippy::collapsible_match)]
+#![allow(clippy::collapsible_if)]
 
 mod adapters;
 mod builtins;

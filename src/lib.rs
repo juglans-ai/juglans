@@ -1,5 +1,12 @@
 // src/lib.rs
 
+// Suppress lints that became -W warn or fire on new-in-1.95 patterns in
+// pre-existing code. These are not real correctness issues and were green
+// under earlier clippy versions; keep clippy green across toolchains
+// without a churn-y refactor.
+#![allow(clippy::collapsible_match)]
+#![allow(clippy::collapsible_if)]
+
 // ============================================================================
 // Module Definitions
 // ============================================================================
