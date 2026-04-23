@@ -16,7 +16,9 @@ Open `http://localhost:3080` to view the docs.
 
 ## Workflow Runtime
 
-The root `Dockerfile` packages the pre-built `juglans` binary for running workflows via `juglans serve`. Because the Dockerfile is based on `COPY juglans /` and `COPY workers/ /workers/`, it expects a **staged `docker-context/` directory** containing the Linux binary and Python workers — it does **not** build from the repo root directly.
+The root `Dockerfile` packages the pre-built `juglans` binary for running workflows via `juglans serve`. The relevant directives are `COPY juglans /usr/local/bin/juglans` and `COPY workers/ /usr/local/bin/workers/` — it expects a **staged `docker-context/` directory** containing the Linux binary and Python workers, not the repo root directly.
+
+The fastest path is `juglans deploy` (see the section below), which stages, builds, and runs the container in one command. Manual staging is shown next for transparency.
 
 Prepare the context and build:
 

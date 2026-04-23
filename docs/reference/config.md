@@ -66,16 +66,6 @@ base = "."
 DATABASE_URL = "postgresql://localhost/mydb"
 CUSTOM_VAR = "value"
 
-[[mcp_servers]]
-name = "filesystem"
-base_url = "http://localhost:3001/mcp/filesystem"
-alias = "fs"
-
-[[mcp_servers]]
-name = "github"
-base_url = "http://localhost:3001/mcp/github"
-token = "${GITHUB_TOKEN}"
-
 [bot.telegram]
 token = "bot_token_here"
 agent = "default"
@@ -155,7 +145,8 @@ You can also configure providers entirely via env vars without a `juglans.toml`:
 | `DEEPSEEK_API_KEY` | deepseek |
 | `GEMINI_API_KEY` | gemini |
 | `QWEN_API_KEY` | qwen |
-| `BYTEPLUS_API_KEY` | byteplus |
+| `ARK_API_KEY` | byteplus (ByteDance Ark) |
+| `ARK_API_BASE` | byteplus base URL override |
 | `XAI_API_KEY` | xai |
 
 ---
@@ -256,32 +247,25 @@ Accessible in workflows via `config.env.DATABASE_URL` or directly via `env("DATA
 
 ---
 
-## [[mcp_servers]]
+## MCP Servers
 
-MCP (Model Context Protocol) server connections. Juglans connects via HTTP/JSON-RPC -- you must start the MCP server separately.
+MCP (Model Context Protocol) servers are **not** configured in `juglans.toml` — they are declared inline on a `chat()` call via the `mcp=` parameter, so each agent can opt into the exact set of tools it needs:
 
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `name` | string | Yes | | Server name (used in tool namespace) |
-| `base_url` | string | Yes | | MCP server HTTP address |
-| `alias` | string | No | | Short alias |
-| `token` | string | No | | Authentication token |
-
-Token values support `${ENV_VAR}` syntax for environment variable interpolation.
-
-Multiple servers use TOML array-of-tables syntax:
-
-```toml
-[[mcp_servers]]
-name = "filesystem"
-base_url = "http://localhost:3001/mcp/filesystem"
-alias = "fs"
-
-[[mcp_servers]]
-name = "github"
-base_url = "http://localhost:3001/mcp/github"
-token = "${GITHUB_TOKEN}"
+```juglans
+[reply]: chat(
+  agent = my_agent,
+  message = input.text,
+  mcp = {
+    "filesystem": "http://localhost:3001/mcp/filesystem",
+    "github": {
+      "url": "http://localhost:3001/mcp/github",
+      "token": env("GITHUB_TOKEN")
+    }
+  }
+)
 ```
+
+See [How to Use MCP Tools](../guide/use-mcp.md) for the full flow, including the `std/mcps.jg` helper library.
 
 ---
 
@@ -351,13 +335,11 @@ Programmatic access from workflows is exposed via the [`history.*` builtins](./b
 
 ## [registry]
 
-Package registry configuration.
+Package registry configuration used by `juglans publish` / `juglans add`.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `url` | string | `https://jgr.juglans.ai` | Registry URL |
-| `port` | u16 | | Server port (when running registry locally) |
-| `data_dir` | string | | Server data directory |
+| `url` | string | `https://jgr.juglans.ai` | Registry URL to publish to / fetch from |
 
 To publish packages, set `JUGLANS_REGISTRY_API_KEY` (or `REGISTRY_API_KEY`) in your environment.
 
@@ -367,11 +349,14 @@ To publish packages, set `JUGLANS_REGISTRY_API_KEY` (or `REGISTRY_API_KEY`) in y
 
 | Variable | Description |
 |----------|-------------|
-| `JUGLANS_LOG_LEVEL` | Log level: `debug`, `info`, `warn`, `error` |
-| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `DEEPSEEK_API_KEY` / `GEMINI_API_KEY` / `QWEN_API_KEY` / `BYTEPLUS_API_KEY` / `XAI_API_KEY` | LLM provider API keys (alternative to `[ai.providers]`) |
+| `RUST_LOG` | Log level / module filter (e.g. `debug`, `juglans::runtime::python=debug`) |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `DEEPSEEK_API_KEY` / `GEMINI_API_KEY` / `QWEN_API_KEY` / `ARK_API_KEY` / `XAI_API_KEY` / `JUGLANS_API_KEY` | LLM provider API keys (alternative to `[ai.providers]`) |
+| `OPENAI_API_BASE` / `ANTHROPIC_BASE_URL` / `ARK_API_BASE` / `JUGLANS_API_BASE` | Provider base URL overrides (local proxies, Ollama, Azure OpenAI, etc.) |
+| `DEFAULT_LLM_PROVIDER` | Fallback provider when `chat(model="default")` is used and no `ai.default_model` is set (`openai` \| `anthropic` \| `byteplus` \| `qwen` \| ...) |
+| `JUGLANS_HISTORY_BACKEND` / `JUGLANS_HISTORY_DIR` / `JUGLANS_HISTORY_PATH` / `JUGLANS_HISTORY_MAX_MESSAGES` / `JUGLANS_HISTORY_MAX_TOKENS` / `JUGLANS_HISTORY_ENABLED` | Override `[history]` section fields |
 | `JUGLANS_REGISTRY_API_KEY` / `REGISTRY_API_KEY` | Package registry credential for `juglans publish` |
 | `SERVER_HOST` / `SERVER_PORT` | Override `[server]` host/port |
-| `TELEGRAM_BOT_TOKEN` / `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | Bot adapter overrides |
+| `TELEGRAM_BOT_TOKEN` / `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | Bot adapter overrides — if `[bot.telegram]` / `[bot.feishu]` is absent from `juglans.toml`, setting these env vars creates those sections automatically (handy for serverless / container deployments) |
 
 ---
 
@@ -385,10 +370,6 @@ port = 8080
 
 [ai.providers.openai]
 api_key = "${OPENAI_API_KEY}"
-
-[[mcp_servers]]
-name = "filesystem"
-base_url = "http://localhost:3001/mcp/filesystem"
 ```
 
 **User config** (`~/.config/juglans/juglans.toml`) -- personal settings:

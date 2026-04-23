@@ -12,15 +12,21 @@ Core terminology used throughout Juglans documentation.
 
 **CLI** -- The `juglans` command-line interface, the primary way to execute workflows, manage resources, and run development tools.
 
+**`chat_id`** -- The routing key that identifies a single conversation thread in the history store. Resolved per `chat()` call in priority order: explicit `chat_id=` → `reply.chat_id` (chained within a run) → `input.chat_id` (auto-injected by bot adapters as `"{platform}:{user}:{agent}"`) → stateless. Used as the primary key in the JSONL / SQLite history backends.
+
 **Class** -- A named, typed schema declared inside a `.jg` file. Classes define the shape of structured data so the type checker can validate how values flow between nodes.
 
 **Client Bridge** -- A mechanism where unresolved tool calls are forwarded to the frontend via SSE events, allowing the UI to handle tools that require user interaction.
 
 **Context** -- The shared state (`WorkflowContext`) that accumulates data during workflow execution, accessible as bare identifiers (e.g., `count`, `user.name`).
 
+**Conversation History** -- Persistent storage of `chat()` turns keyed by `chat_id`. Configured via the `[history]` section in `juglans.toml`; backends include JSONL (default, one file per thread), SQLite (indexed, for concurrent writers), and in-memory (tests). Auto-loads the tail of a thread before each `chat()` call and appends the turn afterwards; honors the `state=` parameter.
+
 **Cron** -- A built-in scheduler (`juglans cron`) that runs workflows on recurring schedules. Cron entries live alongside workflows and are served by `juglans serve`.
 
 **DAG** -- Directed Acyclic Graph. The underlying data structure of a workflow -- nodes connected by directed edges with no cycles.
+
+**Decorator** -- A `@fn(args)` annotation placed above a `[node]` definition, expanded at compile time by the decorator macro system. Used by adapters and web routing (`@get("/path")`, `@post("/path")`) to attach metadata without imperative wiring.
 
 **Devtools** -- Developer tools (`read_file`, `write_file`, `edit_file`, `glob`, `grep`, `bash`) available as builtins for agent use in code-editing scenarios.
 
@@ -40,7 +46,9 @@ Core terminology used throughout Juglans documentation.
 
 **Instance Arena** -- The runtime store that holds live `class` instances during workflow execution. Nodes hand around stable references into the arena rather than copying the objects themselves, which keeps large structured values cheap to pass between steps.
 
-**LocalRuntime** -- The juglans runtime. Calls LLM providers (OpenAI, Anthropic, DeepSeek, Gemini, Qwen, etc.) directly via their APIs. juglans is local-first and has no remote backend dependency.
+**LocalRuntime** -- The juglans runtime. Calls LLM providers (OpenAI, Anthropic, DeepSeek, Gemini, Qwen, ByteDance Ark, xAI) directly via their APIs, plus two specialty providers: `claude-code` (dispatches through the local `claude` CLI) and `juglans` (routes through the juglans-wallet proxy so agents don't hold upstream credentials). The runtime itself is local-first; no inbound connection to a Juglans service is required.
+
+**Message State** -- The `state=` argument on `chat()`, which controls a message's lifecycle on two axes: whether it persists into conversation history (`context`) and whether it streams to the UI via SSE (`display`). Canonical values: `context_visible` (both), `context_hidden` (history only), `display_only` (UI only), `silent` (neither).
 
 **LSP** -- Language Server Protocol. `juglans lsp` implements an LSP server for `.jg`/`.jgx` files, providing diagnostics, hover, and completion in any LSP-compatible editor.
 
@@ -50,7 +58,7 @@ Core terminology used throughout Juglans documentation.
 
 **Manifest Parser** -- The component that reads a package's `juglans.toml` manifest and resolves its metadata, dependencies, and entry points. Used by `juglans pack`, `publish`, `add`, and `install`.
 
-**Metadata** -- The header section of a `.jg` file containing resource import declarations. Valid keys: `libs`, `flows`, `prompts`, `tools`, `python`. (The `agents` key is silently ignored for backward compatibility.)
+**Metadata** -- The header section of a `.jg` file containing resource import declarations. Valid keys: `libs`, `flows`, `prompts`, `tools`, `python`. Package-level fields like `slug` / `name` / `version` live in the `.jgflow` manifest instead.
 
 **Node** -- The fundamental unit of a workflow. Each node has an ID (in brackets) and executes a single tool call: `[node_id]: tool(params)`.
 
@@ -70,6 +78,6 @@ Core terminology used throughout Juglans documentation.
 
 **Type checker** -- The static analysis pass (part of `juglans check`) that validates class definitions, node inputs/outputs, and cross-node data flow before execution, catching wiring mistakes that would otherwise surface at runtime.
 
-**Variable** -- A runtime reference to data: `input` (CLI input), `output` (previous node result), context variables (shared context via assignment syntax), `reply` (agent response metadata). Loop-scoped variables (`$item`, `$_index`) still use the `$` prefix.
+**Variable** -- A runtime reference to data: `input` (CLI/adapter input, including `input.chat_id` in bot paths), `output` (previous node result), `reply.*` (agent response metadata, including `reply.chat_id` for chaining), `error` (`on error` paths), `config` (parsed `juglans.toml`), `response` (HTTP handlers), plus loop-scoped `loop.index` / `loop.item` inside `foreach` / `while` blocks. Reserved names cannot be used as user variables.
 
 **Workflow** -- A complete execution graph defined in a `.jg` file, consisting of metadata, nodes, edges, and optional function definitions.

@@ -55,11 +55,28 @@ Conditional edges are evaluated at runtime; branches whose conditions are not me
 
 | Variable | Scope | Description |
 |----------|-------|-------------|
-| `input.field` | Global | Input data passed via CLI or API |
+| `input.field` | Global | Input data passed via CLI or API (includes `input.chat_id` when triggered by a bot adapter) |
 | `output` | Per-node | Output of the previous node |
 | `key` | Global | Custom context variables (via assignment syntax) |
-| `reply.output` | Per-chat | Metadata from the agent's response |
+| `reply.output` / `reply.chat_id` | Per-chat | Metadata from the agent's response; `reply.chat_id` chains history across `chat()` nodes in one run |
 | `error` | Error path | Error information object (available in `on error` paths) |
+| `config` | Global | Parsed `juglans.toml`, e.g. `config.server.port` |
+| `response` | Global | Written by `response()` in `serve()`-backed HTTP handlers |
+
+Reserved top-level names: `input`, `output`, `reply`, `error`, `config`, `response`. Don't use them as variable names you write to.
+
+### Message state and conversation history
+
+`chat()` accepts a `state=` parameter that controls the message lifecycle on two axes: whether the message feeds back into the chat history (`context`) and whether it streams out via SSE (`display`). Four canonical values:
+
+| state | Persist to history? | Stream to user? |
+|---|---|---|
+| `context_visible` (default) | ✓ | ✓ |
+| `context_hidden` | ✓ | ✗ |
+| `display_only` | ✗ | ✓ |
+| `silent` | ✗ | ✗ |
+
+When a `chat_id` is resolved (explicit `chat_id=`, `reply.chat_id`, or `input.chat_id` injected by bot adapters), Juglans auto-loads the tail of the thread and appends the turn — so bot workflows get multi-turn memory with no extra wiring. See [Conversation History in connect-ai.md](./connect-ai.md#conversation-history) for the full story.
 
 Variables are accessed by path within node parameters:
 
@@ -74,15 +91,15 @@ Variables are accessed by path within node parameters:
 When a node invokes a tool, the engine searches in the following order:
 
 ```
-1. Builtin         — chat, p, notify, print, fetch, bash...
+1. Builtin         — chat, p, notify, print, fetch, bash, history.*, db.*...
 2. Function        — [name(params)]: { ... } defined in the current workflow
-3. Associated Fn   — Type.function() calls on struct definitions
-4. Instance Method — instance.method() calls on struct instances
-5. Python          — Direct Python module calls (pandas.read_csv(), etc.)
+3. Struct methods  — Type.fn() / instance.method() on struct / impl blocks
+4. Python          — Direct Python module calls (pandas.read_csv(), etc.)
+5. MCP             — External tools surfaced via the `mcp=` parameter on chat()
 6. Client Bridge   — Unmatched tools forwarded to the frontend via SSE
 ```
 
-MCP tools are handled at the DSL level via `std/mcps.jg` (see [How to Use MCP Tools](./use-mcp.md)).
+MCP tools are declared inline on `chat(mcp={...})`; see [How to Use MCP Tools](./use-mcp.md).
 
 Calling builtin tools in a Workflow:
 

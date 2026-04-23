@@ -51,7 +51,7 @@ Field-by-field explanation:
 
 | Field | Purpose | Example Value |
 |------|------|--------|
-| `model` | The AI model to use | `"deepseek-chat"`, `"gpt-5.4"`, `"claude-sonnet-4-6"`, `"gemini-3.1-pro"` |
+| `model` | The AI model to use | `"deepseek-chat"`, `"gpt-4o-mini"`, `"claude-haiku-4-5"`, `"gemini-2.0-flash"` |
 | `temperature` | Randomness control (0 = deterministic, 2 = high randomness) | `0.7` (recommended default) |
 | `system_prompt` | System prompt that defines the agent's role and behavior | `"You are a helpful assistant."` |
 
@@ -241,14 +241,16 @@ The most powerful use of JSON output is combining it with conditional routing, l
 [neg]: print(message="Negative feedback — escalating.")
 [done]: print(message="Classification complete.")
 
-[classify] if output.sentiment == "positive" -> [pos]
-[classify] if output.sentiment == "negative" -> [neg]
-[classify] -> [done]
+[classify] -> switch output.sentiment {
+    "positive": [pos]
+    "negative": [neg]
+    default:    [done]
+}
 [pos] -> [done]
 [neg] -> [done]
 ```
 
-The AI returns `{"sentiment": "positive"}`, and the workflow automatically routes to `[pos]` or `[neg]` based on `output.sentiment`.
+The AI returns `{"sentiment": "positive"}`, and `switch` takes exactly one branch based on the value — use `switch` (not conditional edges) when branches are mutually exclusive, so you don't have to worry about multiple edges firing.
 
 ## 6.6 Configuration Notes
 
@@ -290,4 +292,4 @@ Key rules:
 
 ## Next Chapter
 
-**[Tutorial 7: Prompt Templates](./prompt-templates.md)** — Learn the `.jgx` template syntax and the `p()` tool to manage complex prompts with Jinja-style templates.
+**[Prompt Templates](./prompts.md)** — Learn the `.jgx` template syntax and the `p()` tool to manage complex prompts with Jinja-style templates.

@@ -258,17 +258,25 @@ Start a single bot adapter for a messaging platform.
 juglans bot <PLATFORM> [OPTIONS]
 ```
 
+**Arguments:**
+
+| Name | Description |
+|--------|-------------|
+| `PLATFORM` | `telegram`, `feishu` (alias `lark`), or `wechat` (alias `weixin`) |
+
+**Options:**
+
 | Option | Description |
 |--------|-------------|
-| `PLATFORM` | `telegram`, `feishu`, or `wechat` |
 | `--agent <SLUG>` | Agent slug (overrides config default) |
-| `--port <PORT>` | Webhook port (Feishu / WeChat) |
+| `--port <PORT>` | Webhook port (Feishu only — WeChat uses long-poll and Telegram uses long-poll / webhook separately) |
 
 **Examples:**
 
 ```bash
 juglans bot telegram
 juglans bot feishu --agent trader --port 9000
+juglans bot lark --agent trader            # 'lark' is a Feishu alias
 juglans bot wechat
 ```
 
@@ -284,12 +292,12 @@ juglans chat [OPTIONS]
 
 | Option | Description |
 |--------|-------------|
-| `--agent <SLUG>`, `-a` | Agent slug to use |
+| `--agent <FILE>`, `-a` | Path to an agent file (e.g. `./agents/assistant.jg`) |
 
 **Example:**
 
 ```bash
-juglans chat --agent assistant
+juglans chat --agent ./agents/assistant.jg
 ```
 
 ---
@@ -337,6 +345,49 @@ juglans doctest [PATH] [OPTIONS]
 juglans doctest
 juglans doctest docs/reference/workflow-spec.md
 juglans doctest --format json
+```
+
+---
+
+## skills
+
+Manage Agent Skills — packaged capabilities (workflows + prompts + tools) fetched from a GitHub repository and converted to `.jgx` templates.
+
+```bash
+juglans skills <SUBCOMMAND>
+```
+
+### skills add
+
+Fetch one or more skills from a GitHub repo and save them as `.jgx` files under `./prompts/` (or a custom output directory).
+
+```bash
+juglans skills add <REPO> [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `REPO` | GitHub repo in `owner/repo` form, e.g. `anthropics/skills` |
+| `--skill <NAME>` | Specific skill to fetch (repeatable) |
+| `--all` | Fetch every skill discovered in the repo |
+| `--list` | Only list available skill names, don't download |
+| `--output <DIR>`, `-o` | Output directory (default: `./prompts`) |
+
+### skills list / skills remove
+
+```bash
+juglans skills list                    # list locally-installed skills
+juglans skills remove <NAME>           # delete one
+```
+
+**Examples:**
+
+```bash
+juglans skills add anthropics/skills --list
+juglans skills add anthropics/skills --skill pdf
+juglans skills add anthropics/skills --all -o ./my-prompts
+juglans skills list
+juglans skills remove pdf
 ```
 
 ---
@@ -411,9 +462,17 @@ Deploy project to a Docker container.
 juglans deploy [PATH] [OPTIONS]
 ```
 
+**Arguments:**
+
+| Name | Description |
+|------|-------------|
+| `PATH` | Project directory (default: current directory) |
+
+**Options:**
+
 | Option | Description |
 |--------|-------------|
-| `--tag <TAG>` | Custom image tag |
+| `--tag <TAG>` | Custom image tag (default: `juglans-{project}:latest`) |
 | `--port <PORT>`, `-p` | Host port (default: 8080) |
 | `--build-only` | Build image without starting container |
 | `--push` | Push image to registry after build |
@@ -443,13 +502,16 @@ juglans cron <FILE> [OPTIONS]
 
 | Option | Description |
 |--------|-------------|
-| `--schedule <EXPR>`, `-s` | Cron expression (overrides file metadata) |
+| `--schedule <EXPR>`, `-s` | Cron expression (required for `.jg` files; overrides manifest metadata for `.jgflow`) |
 
 **Example:**
 
 ```bash
 juglans cron src/daily-report.jg -s "0 9 * * *"
+juglans cron my-package.jgflow                # uses `schedule` from the manifest
 ```
+
+> `.jg` files have no schedule metadata, so `--schedule` is required. `.jgflow` package manifests may embed the schedule.
 
 ---
 

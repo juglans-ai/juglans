@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.17] - 2026-04-24
+
+### Changed — full documentation sweep
+
+Large cleanup based on a cross-document review. No runtime behavior changed; every edit is in `docs/`.
+
+**Factual fixes**
+- `JUGLANS_LOG_LEVEL` → `RUST_LOG` (debugging, cli, config references)
+- `BYTEPLUS_API_KEY` → `ARK_API_KEY` (plus `ARK_API_BASE` now listed)
+- Install URL standardized on `raw.githubusercontent.com/juglans-ai/juglans/main/install.sh`; Homebrew tap and Windows `.ps1` marked as not-yet-shipped
+- Dockerfile `COPY` paths in `deploy-docker.md` now match the actual Dockerfile (`/usr/local/bin/juglans`, `/usr/local/bin/workers/`)
+- Stale version strings removed
+- Two workflow snippets that would have failed to parse (wrong edge-condition direction in `tutorials/loops.md`; mixed assignment + tool call via comma in `tutorials/full-project.md`) are rewritten
+
+**Removed fictional sections**
+- `workflow-spec.md` metadata table — the parser rejects `slug`/`name`/`version`/`entry`/`exit`/`description`/`author`/`source`/`is_public`/`schedule` at the top of `.jg` files; only `libs`, `flows`, `prompts`, `tools`, `python` are valid. Package-level fields belong in `.jgflow` manifests.
+- `prompt-spec.md` "Available Filters" and duplicated "Built-in Functions" tables — pipe filters are just the expression-function catalog applied left-to-right, now documented as such with a pointer to `expressions.md`
+- `config.md` `[[mcp_servers]]` section — MCP servers are declared inline on `chat(mcp={...})`, not in `juglans.toml`. Example now shows the real shape.
+- Deprecated terms purged: `$var` prefix in `expressions.md` examples, `.jgagent` file-extension references in `agent-spec.md` / `glossary.md`, fictional model IDs (`gpt-5.4`, `claude-sonnet-4-6`, `gemini-3.1-pro`) in `ai-chat.md`
+
+**New coverage for 0.2.13–0.2.16 features**
+- **Conversation history** — added sections to `guide/concepts.md`, `guide/connect-ai.md` (new "Conversation History" block covering `chat_id` resolution, backends, config), `reference/builtins.md` (`chat()` table now lists `chat_id`, `history`, `input`, `mcp`, `on_token`, `on_result`, `tool_event` with the 4-tier resolution rule), `appendix/glossary.md` (three new entries), `appendix/troubleshooting.md` (three new diagnostic entries)
+- **`juglans/` proxy provider + `claude-code` provider** — documented in `connect-ai.md`, `config.md`, `glossary.md`
+- **`assert()` builtin** — documented in `reference/builtins.md` testing section
+- **Decorators, `yield` node, switch `ok:/err:` cases, explicit function `return`, `@/` path alias** — added to `reference/workflow-spec.md`
+
+**CLI completeness**
+- `juglans skills` full section (`add` / `list` / `remove` with all flags)
+- `juglans bot` documents `lark` / `weixin` aliases
+- `juglans chat` argument is a file path, not a slug (`--agent <FILE>`)
+- `juglans cron` clarifies `--schedule` requirement for `.jg` vs `.jgflow`
+- `juglans deploy` documents the `PATH` positional
+
+**Polish**
+- `troubleshooting.md` renumbered (was missing #4, had duplicate #8 and #15)
+- `appendix/comparisons.md` rewritten — matrix now covers LangGraph, CrewAI, LangChain, n8n / Dify, Temporal, Airflow (dropped Terraform; downgraded the "no Python env" and "WASM everywhere" claims to accurate language)
+
 ## [0.2.15] - 2026-04-22
 
 ### Fixed

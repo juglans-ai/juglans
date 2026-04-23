@@ -34,7 +34,7 @@ api_key = "..."
 api_key = "..."
 ```
 
-Supported provider keys: `openai`, `anthropic`, `deepseek`, `gemini`, `qwen`, `byteplus`, `xai`.
+Supported provider keys: `openai`, `anthropic`, `deepseek`, `gemini`, `qwen`, `byteplus` (ByteDance Ark), `xai`, plus two specialty providers documented below: `claude_code` and `juglans`.
 
 Configuration file search order: `./juglans.toml` → `~/.config/juglans/juglans.toml` → `/etc/juglans/juglans.toml`.
 
@@ -47,10 +47,36 @@ export DEEPSEEK_API_KEY="sk-..."
 export GEMINI_API_KEY="..."
 export QWEN_API_KEY="sk-..."
 export XAI_API_KEY="..."
-export ARK_API_KEY="..."
+export ARK_API_KEY="..."              # ByteDance / BytePlus Ark
 ```
 
-Juglans will pick up any of these on startup.
+Juglans will pick up any of these on startup. Each provider also accepts `base_url` for local proxies (see the Ollama section below) and the environment overrides `OPENAI_API_BASE` / `ANTHROPIC_BASE_URL` / `ARK_API_BASE` / `JUGLANS_API_BASE`.
+
+### Claude Code provider
+
+If you have the `claude` CLI installed (from the [Claude Code](https://docs.claude.com/en/docs/claude-code) release), Juglans can dispatch through it as an LLM provider. No API key is needed — authentication is handled by the CLI itself:
+
+```juglans
+[reply]: chat(model="claude-code/sonnet", message=input.text)
+```
+
+Model names use the `claude-code/<variant>` prefix. Tool calling goes through MCP; see [use-mcp.md](./use-mcp.md) for how to wire MCP servers to a Claude Code agent.
+
+### `juglans/` proxy provider
+
+The `juglans/` provider routes requests through the juglans-wallet proxy. Agents running behind the proxy don't need to hold LLM credentials directly — the proxy handles provider keys and quota server-side:
+
+```toml
+[ai.providers.juglans]
+api_key  = "${JUGLANS_API_KEY}"
+base_url = "http://127.0.0.1:3002/v1/llm"    # default
+```
+
+```juglans
+[reply]: chat(model="juglans/deepseek-chat", message=input.text)
+```
+
+The `juglans/<upstream-model>` format picks any model the proxy is configured to forward — the proxy rewrites the upstream model name and injects the real key.
 
 ## Test Connection
 
@@ -124,6 +150,47 @@ Agents (model + system prompt + temperature etc.) can be defined inline inside a
 [my_agent] -> [start] -> [chat] -> [end]
 ```
 
+## Conversation History
+
+When a `chat()` node has a `chat_id` resolved, Juglans automatically loads the tail of that thread before the LLM call and appends the user / assistant turn afterwards — so multi-turn conversations "just work" without you threading a history array by hand. Persistence honors the `state` parameter (`silent` and `display_only` skip storage).
+
+### `chat_id` resolution (highest to lowest priority)
+
+1. **Explicit** — `chat(message=..., chat_id="support:123")`
+2. **`reply.chat_id`** — set by a prior `chat()` in the same run, so a chain of `chat()` nodes stays on one thread
+3. **`input.chat_id`** — injected by bot adapters as `"{platform}:{user_id}:{agent_slug}"` (e.g. `telegram:12345:support_bot`), so bot workflows get memory without any code change
+4. **None** — the call is stateless; nothing is loaded or stored
+
+To explicitly skip history for a single call, pass `state="silent"` (drops the turn from storage) or an empty `chat_id=""`.
+
+### Storage backends
+
+Configured once in `juglans.toml`:
+
+```toml
+[history]
+enabled = true              # master switch
+backend = "jsonl"           # "jsonl" | "sqlite" | "memory" | "none"
+dir = ".juglans/history"    # JSONL: one file per chat_id
+# path = ".juglans/history.db"  # SQLite path
+max_messages = 20           # cap on auto-loaded messages per call
+max_tokens = 8000           # soft token budget
+retention_days = 30         # GC threshold (0 disables)
+```
+
+| Backend | Use when | Scales to |
+|---|---|---|
+| `jsonl` (default) | Single-machine, human-inspectable files | Tens of thousands of threads |
+| `sqlite` | Concurrent writers, bigger corpus, indexed queries | Millions of messages |
+| `memory` | Tests / ephemeral / serverless | In-process only |
+| `none` | Disable entirely | – |
+
+Environment overrides: `JUGLANS_HISTORY_BACKEND`, `JUGLANS_HISTORY_DIR`, `JUGLANS_HISTORY_PATH`, `JUGLANS_HISTORY_MAX_MESSAGES`, `JUGLANS_HISTORY_MAX_TOKENS`, `JUGLANS_HISTORY_ENABLED`.
+
+### Direct access from workflows
+
+The [`history.*` builtins](../reference/builtins.md#conversation-history-history) — `history.load`, `history.append`, `history.replace`, `history.trim`, `history.clear`, `history.stats`, `history.list_chats` — let workflows inspect and rewrite the store. Useful for building memory-summary flows or "reset conversation" handlers.
+
 ## Troubleshooting
 
 | Problem | Solution |
@@ -132,6 +199,7 @@ Agents (model + system prompt + temperature etc.) can be defined inline inside a
 | `401 Unauthorized` | Verify the api_key is valid and not expired |
 | `Agent not found` | Confirm the agent node is defined inline or imported via `libs:` |
 | `Timeout` | Check network access to the provider's API endpoint |
+| History not persisting | Check `[history].enabled = true`, the configured path is writable, and the node's `state` is not `silent` / `display_only` |
 
 ## Next Steps
 

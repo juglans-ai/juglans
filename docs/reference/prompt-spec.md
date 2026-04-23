@@ -284,70 +284,19 @@ inputs:
 
 ---
 
-## Filters (Pipe Syntax)
+## Filters and Functions
 
-Apply transformations using the `|` pipe operator inside `{{ }}`:
+Template expressions are evaluated by the same engine as workflow expressions. The pipe operator and plain function calls are two notations for the same thing — both resolve to entries in the expression-function catalog:
 
 ```text
-{{ value | filter_name }}
-{{ value | filter_name(arg1, arg2) }}
-{{ value | filter1 | filter2 }}
+{{ value | upper }}       ≡   {{ upper(value) }}
+{{ text | replace("a", "b") }}  ≡   {{ replace(text, "a", "b") }}
+{{ items | sort | join(", ") }} ≡   {{ join(sort(items), ", ") }}
 ```
 
-### Available Filters
+Use whichever reads better in context. Chained pipes are commonly clearer for a sequence of string / collection transforms; plain function calls are clearer when arguments surround the value.
 
-#### String Filters
-
-| Filter | Description | Example |
-|---|---|---|
-| `upper` | Uppercase | `{{ name \| upper }}` |
-| `lower` | Lowercase | `{{ name \| lower }}` |
-| `capitalize` | Capitalize first letter | `{{ name \| capitalize }}` |
-| `title` | Title case | `{{ name \| title }}` |
-| `strip` / `trim` | Remove leading/trailing whitespace | `{{ text \| strip }}` |
-| `truncate(n)` | Truncate to n characters | `{{ text \| truncate(100) }}` |
-| `replace(old, new)` | Replace substring | `{{ text \| replace("a", "b") }}` |
-| `split(sep)` | Split into array | `{{ text \| split(",") }}` |
-| `lpad(n, ch)` | Left-pad to length n | `{{ num \| lpad(5, "0") }}` |
-| `rpad(n, ch)` | Right-pad to length n | `{{ name \| rpad(20, ".") }}` |
-| `repeat(n)` | Repeat n times | `{{ "-" \| repeat(40) }}` |
-
-#### Numeric Filters
-
-| Filter | Description | Example |
-|---|---|---|
-| `round(n)` | Round to n decimal places | `{{ price \| round(2) }}` |
-| `abs` | Absolute value | `{{ diff \| abs }}` |
-| `floor` | Floor | `{{ val \| floor }}` |
-| `ceil` | Ceiling | `{{ val \| ceil }}` |
-
-#### Collection Filters
-
-| Filter | Description | Example |
-|---|---|---|
-| `len` | Length of string/array/object | `{{ items \| len }}` |
-| `join(sep)` | Join array elements | `{{ tags \| join(", ") }}` |
-| `first` | First element | `{{ items \| first }}` |
-| `last` | Last element | `{{ items \| last }}` |
-| `sort` | Sort array | `{{ nums \| sort }}` |
-| `reverse` | Reverse array/string | `{{ items \| reverse }}` |
-| `unique` | Deduplicate array | `{{ items \| unique }}` |
-| `flatten` | Flatten nested arrays | `{{ nested \| flatten }}` |
-| `sum` | Sum numeric array | `{{ prices \| sum }}` |
-| `keys` | Object keys | `{{ obj \| keys }}` |
-| `values` | Object values | `{{ obj \| values }}` |
-
-#### Type / Format Filters
-
-| Filter | Description | Example |
-|---|---|---|
-| `json` | JSON serialize | `{{ data \| json }}` |
-| `json_pretty` | Pretty-print JSON | `{{ data \| json_pretty }}` |
-| `str` | Convert to string | `{{ num \| str }}` |
-| `int` | Convert to integer | `{{ text \| int }}` |
-| `float` | Convert to float | `{{ text \| float }}` |
-| `default(val)` | Default if null/empty | `{{ name \| default("N/A") }}` |
-| `type` | Return type name | `{{ val \| type }}` |
+The full catalog of 80+ functions (strings, numbers, collections, dates, encoding, higher-order `map`/`filter`/`reduce`, etc.) is documented in **[expressions.md](./expressions.md)** — everything listed there works identically inside `.jgx` templates.
 
 ### Filter Examples
 
@@ -377,34 +326,6 @@ inputs:
 ---
 {{ items | sort | join(", ") }}
 ```
-
----
-
-## Built-in Functions
-
-Functions can be called inside `{{ }}` expressions:
-
-| Function | Description | Example |
-|---|---|---|
-| `len(x)` | Length | `{{ len(items) }}` |
-| `range(n)` | Generate 0..n array | `{{ range(5) }}` |
-| `str(x)` | To string | `{{ str(42) }}` |
-| `int(x)` | To integer | `{{ int("42") }}` |
-| `float(x)` | To float | `{{ float("3.14") }}` |
-| `json(x)` | JSON serialize | `{{ json(data) }}` |
-| `contains(haystack, needle)` | Membership test | `{{ contains(list, "x") }}` |
-| `replace(s, old, new)` | String replace | `{{ replace(text, "a", "b") }}` |
-| `upper(s)` | Uppercase | `{{ upper(name) }}` |
-| `lower(s)` | Lowercase | `{{ lower(name) }}` |
-| `default(val, fallback)` | Default value | `{{ default(x, "none") }}` |
-| `join(arr, sep)` | Join array | `{{ join(items, ", ") }}` |
-| `split(s, sep)` | Split string | `{{ split(csv, ",") }}` |
-| `keys(obj)` | Object keys | `{{ keys(config) }}` |
-| `values(obj)` | Object values | `{{ values(config) }}` |
-| `round(n, digits)` | Round | `{{ round(3.14159, 2) }}` |
-| `abs(n)` | Absolute value | `{{ abs(-5) }}` |
-| `min(a, b)` | Minimum | `{{ min(x, y) }}` |
-| `max(a, b)` | Maximum | `{{ max(x, y) }}` |
 
 ---
 

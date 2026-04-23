@@ -2,24 +2,19 @@
 
 ## Quick Install (Recommended)
 
-### macOS (Homebrew)
-
-```bash
-brew tap juglans-ai/tap
-brew install juglans
-```
-
 ### macOS & Linux (Script)
 
 ```bash
-curl -fsSL https://juglans.ai/get-sdk | sh
+curl -fsSL https://raw.githubusercontent.com/juglans-ai/juglans/main/install.sh | sh
 ```
 
-### Windows (PowerShell)
+The script downloads the latest pre-built binary from GitHub Releases and installs it to `~/.juglans/bin/juglans`. If that directory is not already on your `PATH`, the script prints the one line you need to add to your shell profile.
 
-```powershell
-irm https://juglans.ai/get-sdk.ps1 | iex
-```
+### Windows
+
+The `install.sh` script does not support Windows. Download `juglans-windows-x64.zip` directly from the [latest GitHub Release](https://github.com/juglans-ai/juglans/releases/latest), extract it, and add the folder containing `juglans.exe` to your `PATH`.
+
+> Homebrew tap and a PowerShell installer are planned but not yet shipped — use the manual download path for now.
 
 ### Verify
 
@@ -27,7 +22,7 @@ irm https://juglans.ai/get-sdk.ps1 | iex
 juglans --version
 ```
 
-You should see output like `juglans 0.2.12`. If you see `command not found`, check the [Troubleshooting](#troubleshooting) section below.
+You should see a version number like `juglans 0.2.16`. If you see `command not found`, check the [Troubleshooting](#troubleshooting) section below — the installer puts the binary at `~/.juglans/bin/juglans`, which may not be on your PATH yet.
 
 Run `juglans --help` to see all subcommands. See [CLI Commands](../reference/cli.md) for the full reference.
 

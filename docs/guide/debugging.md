@@ -48,7 +48,9 @@ Output includes:
 You can also set the log level via an environment variable:
 
 ```bash
-JUGLANS_LOG_LEVEL=debug juglans src/main.jg
+RUST_LOG=debug juglans src/main.jg
+# Scope to a single module:
+RUST_LOG=juglans::runtime::python=debug juglans src/main.jg
 ```
 
 ## juglans doctest -- Validate Doc Code Blocks

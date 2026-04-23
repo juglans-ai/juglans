@@ -1,18 +1,22 @@
 # Juglans vs Other Tools
 
+The AI orchestration landscape in 2026 spans low-code visual builders (n8n, Dify, Flowise), code-first graph frameworks (LangGraph, CrewAI), the legacy Python ecosystem (LangChain, LlamaIndex), and heavy workflow engines (Temporal, Airflow). Juglans carves out a specific niche: a declarative DSL with first-class AI, bot adapters, and persistence, shipped as a single binary.
+
 ## Comparison Matrix
 
-| Dimension | Juglans | Python Script | LangChain | Airflow | Terraform |
-|-----------|---------|---------------|-----------|---------|-----------|
-| **Abstraction** | Workflow DAG DSL | Imperative code | Chain abstractions | Task DAG | Declarative IaC |
-| **Control Flow** | Declarative edges, switch, conditionals | if/else/for | Chain routing | DAG scheduling | Dependency graph |
-| **Composition** | Flow imports, function defs, libs | Module imports | Chain nesting | SubDAGs | Modules |
-| **AI Integration** | First-class (chat, agent, prompt) | Library calls | First-class | Operator wrappers | N/A |
-| **Tool System** | Builtin + MCP + Python + client bridge | Any library | Tool classes | Operators/Hooks | Providers |
-| **Learning Curve** | Low -- 3 concepts (node, edge, variable) | Depends on skill | Medium-high | High | Medium |
-| **Type Safety** | Static validation (`juglans check`) | Runtime errors | Runtime errors | Runtime errors | Plan/validate |
-| **Deployment** | Single binary, Docker, cron | Python env | Python env | Scheduler cluster | CLI + state |
-| **Best For** | AI agent workflows, API orchestration | Quick prototypes, data science | LLM-heavy chains | Batch data pipelines | Infrastructure |
+| Dimension | Juglans | LangGraph | CrewAI | LangChain | n8n / Dify | Temporal | Airflow |
+|---|---|---|---|---|---|---|---|
+| **Primary form** | Declarative `.jg` DSL | Python graph class | Python role graph | Python LCEL / classes | Visual no-code | Durable code | Task DAG |
+| **AI as 1st-class** | ✓ (`chat`, agents inline) | ✓ (LangChain runnables) | ✓ (role-centric) | ✓ | ✓ (integrations) | ✗ (plumbing) | ✗ |
+| **Runtime** | Single Rust binary | Python runtime | Python runtime | Python runtime | Node.js server | Go + worker pool | Python + scheduler |
+| **Python required?** | Only for Python tools | Always | Always | Always | Workflows yes | Optional | Always |
+| **State between runs** | Built-in history (JSONL / SQLite) | Checkpointer (Postgres/Memory) | In-process | Memory classes | Per-flow DB | Durable event log | XCom / DB |
+| **Bot adapters built-in** | Telegram / Feishu / WeChat | None | None | None | Many (no-code) | None | None |
+| **Streaming to UI** | SSE, server + client bridge | Native (async) | Limited | Callbacks | Webhook-driven | Not direct | Not direct |
+| **MCP client** | Built-in (HTTP) | Via external libs | Via external libs | Via external libs | Via integrations | N/A | N/A |
+| **Static validation** | `juglans check` (graph + types) | Runtime | Runtime | Runtime | Limited | Runtime | DAG parse |
+| **Learning curve** | Low (3 concepts) | Medium (Python + graph API) | Medium | High | Very low (UI) | High | Medium-high |
+| **Best for** | AI agents, bots, API glue | Complex Python AI graphs | Multi-agent teams | RAG + LLM pipelines | Business automations | Durable long-running work | Batch ETL |
 
 ## What Juglans Does Differently
 
@@ -21,24 +25,18 @@
 ```juglans
 [input]: query = input.question
 [search]: fetch(url="https://api.example.com/search?q=" + query)
-[respond]: chat(agent="assistant", message=output)
+[respond]: chat(agent=assistant, message=output)
 
 [input] -> [search] -> [respond]
 ```
 
-The equivalent Python script requires explicit function definitions, error handling, HTTP client setup, and result passing between steps. In LangChain, you would additionally need chain class instantiation and callback wiring.
+An equivalent Python pipeline (LangChain LCEL, LangGraph, or hand-rolled) needs type imports, chain/runnable wiring, HTTP client setup, and explicit state plumbing between steps. No-code tools (n8n, Dify) express this shape easily but require a UI — the workflow isn't reviewable as a file diff.
 
-**Static analysis before execution.** `juglans check` validates the entire DAG before running -- missing nodes, broken edges, unreachable paths, unused variables. Python and LangChain only discover these at runtime.
+**Static analysis before execution.** `juglans check` validates the entire DAG before running — missing nodes, broken edges, unreachable paths, unknown builtins, type drift. LangGraph / LangChain / CrewAI only surface these at runtime.
 
-**Built-in routing without code.**  Conditional edges and switch routing are part of the DSL, not bolted-on logic:
+**Built-in routing without code.** Conditional edges and `switch` are part of the DSL, not helper classes:
 
 ```juglans
-[classify]: chat(agent="router", message=input.query, format="json")
-
-[answer]: chat(agent="qa", message=input.query)
-[execute]: chat(agent="coder", message=input.query)
-[fallback]: chat(agent="general", message=input.query)
-
 [classify] -> switch output.intent {
     "question": [answer]
     "task": [execute]
@@ -46,30 +44,32 @@ The equivalent Python script requires explicit function definitions, error handl
 }
 ```
 
-In Airflow, this requires a BranchPythonOperator with a custom callable. In LangChain, you need a RouterChain or custom RunnableRouter.
+LangGraph expresses this via `add_conditional_edges` with a routing function. CrewAI doesn't branch at the graph level. n8n uses a visual Switch node.
 
-## When to Choose Juglans
-
-**Choose Juglans when:**
-
-- You need AI agent orchestration with multi-step workflows
-- You want static validation of workflow graphs before deployment
-- You need to compose workflows from reusable sub-workflows and function definitions
-- You want a single binary with no runtime dependencies (no Python env, no JVM)
-- You need SSE streaming, bot adapters, or MCP tool integration out of the box
+**Shipped bot adapters, history, and MCP.** Multi-turn Telegram / Feishu / WeChat bots are one TOML block away — `chat_id` auto-derives per platform, history auto-persists, MCP tools attach inline. No other framework in the matrix bundles these in the runtime itself.
 
 ## Juglans-Only Differentiators
 
-A few capabilities set Juglans apart from every tool in the comparison matrix:
+- **Compiles to WebAssembly** — the parser, resolver, expression evaluator, and executor core can be embedded in a browser for static analysis and workflow visualization. (Note: builtins that need TLS, subprocess, or disk do not run in the browser; use the server in that case.)
+- **First-class type system** — `class` definitions + a static checker validate structured state flow between nodes before execution, catching wiring mistakes that runtime-only tools miss.
+- **LSP server** — `juglans lsp` provides diagnostics, hover, and completion for `.jg` / `.jgx` in any LSP-aware editor.
+- **Conversation history as a builtin** — `chat_id` + `[history]` + `history.*` tools give multi-turn memory without threading arrays by hand or adopting an external memory class.
+- **Unified `juglans serve`** — one process hosts the web API, every configured bot adapter, and cron triggers.
 
-- **WASM engine** -- The core runtime compiles to `cdylib` and runs in the browser, so the same workflow file executes identically on the CLI, server, and web.
-- **Type system** -- A static type checker validates node inputs/outputs across the DAG before execution, catching wiring mistakes that runtime-only tools miss.
-- **Class system** -- First-class `class` definitions let workflows share typed schemas and structured state instead of opaque dictionaries.
-- **LSP server** -- `juglans lsp` ships a Language Server Protocol implementation so editors get diagnostics, hover, and completion for `.jg` files out of the box.
+## When to Choose Juglans
 
-**Choose something else when:**
+**Pick Juglans when:**
 
-- **Python script** -- one-off data analysis or quick prototyping
-- **LangChain** -- heavy experimentation with LLM internals (custom embeddings, vector stores)
-- **Airflow** -- large-scale batch ETL with scheduling, retries, and cluster management
-- **Terraform** -- infrastructure provisioning (not workflow orchestration)
+- You're building AI agent workflows and want them in a reviewable, diff-able file
+- You need multi-turn chat with durable history across runs
+- You want a single binary you can drop on a VM or in a container — no Python toolchain
+- You need bot adapters (Telegram / Feishu / WeChat) or SSE streaming out of the box
+- You want static validation catching wiring bugs before they hit production
+
+**Pick something else when:**
+
+- **LangGraph / LangChain** — you're deep in the Python ecosystem, need LlamaIndex-style RAG pipelines, or want LCEL composability with Python control flow
+- **CrewAI** — you're modeling teams of agents with role-based collaboration patterns as the primary abstraction
+- **n8n / Dify / Flowise** — non-developers author the workflows in a visual editor; reviewability as text is not a priority
+- **Temporal** — you need durable execution with retries, backoff, human-in-the-loop signals, and multi-day / multi-week runs
+- **Airflow** — traditional batch ETL with scheduling, retries, and cluster workers is the core workload, not AI

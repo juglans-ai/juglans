@@ -46,14 +46,14 @@ export GEMINI_API_KEY="..."
 export ARK_API_KEY="..."        # ByteDance / BytePlus Ark
 export XAI_API_KEY="xai-..."
 
-# Or add to juglans.toml (optional since v0.2.5)
+# Or configure inside juglans.toml:
 # [ai.providers.openai]
 # api_key = "sk-..."
 ```
 
 ---
 
-### 5. MCP server connection failed
+### 4. MCP server connection failed
 
 **Error:** `Failed to connect to MCP server: connection refused`
 
@@ -64,14 +64,25 @@ export XAI_API_KEY="xai-..."
 ```bash
 # Verify the MCP server is running
 curl http://localhost:3001/mcp/filesystem
-
-# Check juglans.toml [[mcp_servers]] config
-# Ensure base_url matches the actual server address
 ```
+
+MCP servers are declared inline on the `chat()` call (not in `juglans.toml`), so check the workflow itself:
+
+```juglans
+[reply]: chat(
+  agent = my_agent,
+  message = input.text,
+  mcp = {
+    "filesystem": "http://localhost:3001/mcp/filesystem"
+  }
+)
+```
+
+Make sure the URL matches the running server's address (host + port + path).
 
 ---
 
-### 6. Variable resolution failed
+### 5. Variable resolution failed
 
 **Error:** `Failed to resolve variable: result`
 
@@ -88,7 +99,7 @@ curl http://localhost:3001/mcp/filesystem
 
 ---
 
-### 7. Agent not found
+### 6. Agent not found
 
 **Error:** `Agent 'my-agent' not found in registry`
 
@@ -110,7 +121,7 @@ libs: ["./agents.jg"]
 
 ---
 
-### 8. Parse error: unexpected token
+### 7. Parse error: unexpected token
 
 **Error:** `Parse error at line 5: expected node definition, found '...'`
 
@@ -140,7 +151,7 @@ juglans check workflow.jg
 
 ---
 
-### 10. Resource already exists
+### 9. Resource already exists
 
 **Error:** `Resource 'my-prompt' already exists (use --force to overwrite)`
 
@@ -154,7 +165,7 @@ juglans push src/prompts/my-prompt.jgx --force
 
 ---
 
-### 11. Flow import file not found
+### 10. Flow import file not found
 
 **Error:** `Flow import failed: file './auth.jg' not found`
 
@@ -164,7 +175,7 @@ juglans push src/prompts/my-prompt.jgx --force
 
 ---
 
-### 12. Max loop iterations exceeded
+### 11. Max loop iterations exceeded
 
 **Error:** `Loop exceeded maximum iterations (100)`
 
@@ -179,7 +190,7 @@ max_loop_iterations = 500
 
 ---
 
-### 13. HTTP request timeout
+### 12. HTTP request timeout
 
 **Error:** `HTTP request timed out after 120s`
 
@@ -194,7 +205,7 @@ http_timeout_secs = 300
 
 ---
 
-### 14. Port already in use
+### 13. Port already in use
 
 **Error:** `Address already in use (port 3000)`
 
@@ -214,7 +225,7 @@ lsof -i :3000
 
 ---
 
-### 15. Python worker failed to start
+### 14. Python worker failed to start
 
 **Error:** `Failed to start Python worker`
 
@@ -250,4 +261,51 @@ export JUGLANS_REGISTRY_API_KEY="jgr_..."
 export REGISTRY_API_KEY="jgr_..."
 
 juglans publish
+```
+
+---
+
+### 16. Conversation history isn't persisting
+
+**Symptom:** A bot that should have memory keeps treating each message as a first turn. `reply.chat_id` is empty or the history file is missing.
+
+**Cause:** Likely one of (a) `[history].enabled = false`, (b) the `chat()` call has `state="silent"` / `state="display_only"` which skips persistence, (c) no `chat_id` is being resolved — check `input.chat_id` is set by the adapter, or that `chat(chat_id=...)` is passed explicitly.
+
+**Solution:**
+
+```bash
+# Verify the configured path is writable
+ls -la .juglans/history/
+
+# Inspect what's stored for one thread
+cat .juglans/history/telegram_12345_agent.jsonl
+
+# Turn backend to memory for a quick test
+JUGLANS_HISTORY_BACKEND=memory juglans your-workflow.jg
+```
+
+Then check that `chat()` nodes you expect to persist do not have `state="silent"` or `state="display_only"`.
+
+---
+
+### 17. `history.*` tool returns `{ "ok": false, "reason": "history disabled" }`
+
+**Cause:** The workflow called a `history.*` builtin but the global history store was never initialized — either `[history].enabled = false`, `backend = "none"`, or the call path doesn't pass through a code entry point that runs `init_global()`.
+
+**Solution:** Confirm `[history] enabled = true` and a valid `backend`. For bot and `juglans serve` paths this happens automatically; for custom embeddings check that `juglans::services::history::init_global(&config.history)` runs at startup.
+
+---
+
+### 18. Corrupt JSONL history file
+
+**Symptom:** A thread loads fewer messages than expected, or parse warnings appear in the log (`[history] skipping corrupt line N`).
+
+**Cause:** A previous process was killed mid-write, leaving a truncated JSON line. The loader skips the bad line but the turn is lost.
+
+**Solution:** Either accept the skip (subsequent turns will continue appending cleanly), or hand-edit the `.jsonl` file to remove the truncated line. For higher durability under kill-9 / power-loss, switch the backend to `sqlite`:
+
+```toml
+[history]
+backend = "sqlite"
+path = ".juglans/history.db"
 ```

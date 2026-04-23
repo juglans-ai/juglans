@@ -18,36 +18,27 @@ All sections are optional. Comments begin with `#` and extend to end of line.
 
 ## Metadata
 
-Metadata lines appear at the top of the file. Each line follows `key: value` format.
+A `.jg` file can declare resource imports at the top. Each line follows `key: value` format. Only the fields below are accepted — any other top-level key produces a parse error.
 
 | Field | Type | Description |
 |---|---|---|
-| `slug` | string | Unique identifier (for registry) |
-| `name` | string | Display name |
-| `version` | string | Workflow version |
-| `description` | string | Human-readable description |
-| `author` | string | Author name |
-| `source` | string | Source file path |
-| `entry` | string or list | Explicit entry node ID (overrides topological inference) |
-| `exit` | string list | Explicit terminal node IDs |
-| `prompts` | string list | Prompt file glob patterns |
-| `agents` | string list | _(deprecated, silently ignored)_ |
-| `tools` | string list | Tool definition file patterns |
-| `python` | string list | Python module imports |
-| `flows` | object map | Subworkflow imports: `{ alias: "path.jg" }` |
-| `libs` | list or map | Library imports (function-only) |
-| `is_public` | boolean | Resource visibility |
-| `schedule` | string | Cron schedule expression |
+| `prompts` | string list | Prompt file glob patterns (loaded as `.jgx`) |
+| `tools` | string list | Tool definition file patterns (`.json` schemas) |
+| `python` | string list | Python module imports (loaded by the Python worker) |
+| `flows` | object map | Subworkflow imports: `{ alias: "path.jg" }` — see [Flow Imports](#flow-imports) |
+| `libs` | list or map | Library imports (function-only files) — see [Lib Imports](#lib-imports) |
+
+> Package-level fields like `slug` / `name` / `version` / `description` / `author` / `entry` / `exit` / `schedule` / `is_public` belong in the **`.jgflow` manifest** (used by the package registry), **not** in `.jg` workflow files. Entry nodes are inferred automatically from the graph topology (in-degree 0 nodes).
 
 ### Metadata Examples
 
-Minimal metadata:
+Minimal — no metadata at all:
 
 ```juglans
 [start]: notify(status="hello")
 ```
 
-Full metadata:
+With imports:
 
 ```juglans
 prompts: ["./prompts/*.jgx"]
@@ -67,8 +58,6 @@ Multiple terminal nodes:
 [start] -> [success]
 [start] on error -> [failure]
 ```
-
-Entry nodes are determined automatically by topological sort (nodes with in-degree 0).
 
 ### Resource Imports
 
@@ -183,6 +172,42 @@ Multiple assignments separated by commas:
 ```juglans
 [setup]: status = "ready", retries = 3, items = []
 ```
+
+> Note: a node can hold multiple assignments **or** a single tool call, not both. To do both, split into two nodes.
+
+### Yield Node
+
+`yield <expr>` emits a value to the caller without terminating the workflow. Streaming UIs use this to surface intermediate results while later steps keep running:
+
+```juglans
+[progress]: yield "stage 1 complete"
+[work2]:    fetch(url=input.url)
+[progress2]: yield "stage 2 complete"
+```
+
+Yielded values arrive as SSE events on the web path and as callback invocations on embedded paths.
+
+### Decorators
+
+A `@fn(args)` annotation placed immediately before a node attaches metadata that a decorator macro expands at compile time. Decorators stack — the topmost is applied first:
+
+```juglans
+@get("/api/hello")
+[hello]: response(body="hi")
+
+@post("/api/chat")
+@auth(required=true)
+[chat_endpoint]: chat(message=input.text)
+```
+
+The two most common decorator families today:
+
+| Family | Used by | Example |
+|---|---|---|
+| HTTP routing | `serve()` / the web server | `@get("/path")`, `@post("/path")` |
+| Tool schema attachment | Custom builtins & adapters | `@tool("search", ...)` |
+
+Decorators that aren't recognized by any expansion simply pass through — they're preserved as node-level metadata for later tooling.
 
 ---
 
@@ -303,6 +328,20 @@ Switch with numeric cases:
 | Syntax | Multiple lines | Single block |
 | Default | Unconditional edge | `default:` keyword |
 
+**`ok:` / `err:` cases** — In addition to `default:`, `switch` accepts two special cases that work with the error edge system:
+
+```juglans
+[parse]: fetch(url=input.url)
+
+[parse] -> switch {
+    ok:  [continue]          # took the happy path
+    err: [retry_once]        # any on-error propagation
+    err "timeout": [fallback]  # typed error (matches on error.kind / error.code)
+}
+```
+
+Use `ok:` / `err:` when the branch decision is "did this node succeed?" rather than "what value did it produce?". `err "<type>":` narrows to a specific error kind; other error types still fall through to plain `err:`.
+
 ### Cross-Workflow Edges (with flows)
 
 ```juglans
@@ -319,6 +358,24 @@ flows: {
 ```
 
 Namespaced node references use `[alias.node_id]` format.
+
+### `@/` Path Alias for Imports
+
+When `[paths].base` is set in `juglans.toml` (e.g. `base = "."`), `@/` resolves to `{project_root}/{base}/` in any `flows:` or `libs:` import path:
+
+```toml
+# juglans.toml
+[paths]
+base = "."
+```
+
+```juglans
+# any workflow under the project root
+flows: { auth: "@/shared/auth.jg" }
+libs:  ["@/shared/helpers.jg"]
+```
+
+This keeps imports stable regardless of how deeply nested the importing file is.
 
 ---
 
@@ -345,7 +402,16 @@ Functions are reusable parameterized blocks. They are NOT added to the main DAG.
 [run]: pipeline(msg="test")
 ```
 
-Steps separated by newlines or semicolons. The function returns `output` from its last step.
+Steps separated by newlines or semicolons. The function returns `output` from its last step by default. To return early or to return a specific value, use the `return` keyword:
+
+```juglans
+[classify(text)]: {
+  score = sentiment(text)
+  if score > 0.9 return "strong_positive"
+  if score < 0.1 return "strong_negative"
+  output = "neutral"     # implicit return of last expression
+}
+```
 
 ### Multiple Parameters
 

@@ -1,6 +1,6 @@
 # Agent Syntax Reference
 
-Agents are defined as **inline JSON map nodes** in `.jg` workflow files. There are no separate `.jgagent` files -- agents live alongside the workflow that uses them.
+Agents are defined as **inline JSON map nodes** in `.jg` workflow files — they live alongside the workflow that uses them, and can be exported for reuse via `libs:` imports (see below).
 
 ## Inline Agent Syntax
 
@@ -261,9 +261,3 @@ libs: ["./agents.jg"]
 ```
 
 This pattern keeps agent definitions centralized and reusable across multiple workflows.
-
----
-
-## Backward Compatibility
-
-The `agents:` metadata key is silently ignored for backward compatibility. Old workflows that declare `agents: ["./agents/*.jgagent"]` will not error, but the declaration has no effect. Migrate to inline agent map nodes or `libs:` imports.

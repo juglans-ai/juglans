@@ -12,19 +12,23 @@ Conduct a conversation with an AI agent.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
+| `message` | string | Yes | - | User message to send |
 | `agent` | string/ref | No | `"default"` | Agent node reference or slug |
-| `message` | string | Yes | - | Message to send |
-| `format` | string | No | `"text"` | Output format: `"text"` or `"json"` |
-| `state` | string | No | `"context_visible"` | Message state control (see below) |
-| `chat_id` | string | No | - | Conversation ID for reusing session context |
-| `tools` | array/string | No | - | Tool definitions or slug references |
+| `model` | string | No | - | Override agent's model (e.g. `"openai/gpt-4o-mini"`, `"claude-code/sonnet"`, `"juglans/deepseek-chat"`) |
 | `system_prompt` | string | No | - | Override agent's system prompt |
-| `model` | string | No | - | Override agent's model |
-| `temperature` | number | No | - | Override agent's temperature |
-| `history` | string | No | - | History retrieval mode |
-| `on_tool` | string | No | - | Route unresolved tool calls to a workflow node: `on_tool=[node]` |
-| `on_tool_call` | string | No | - | Route unresolved tool calls to an external workflow file |
-| `stream_tool_events` | boolean | No | `false` | Emit SSE events for tool call start/complete |
+| `temperature` | number | No | - | Override agent's sampling temperature |
+| `format` | string | No | `"text"` | Output format: `"text"` or `"json"` |
+| `state` | string | No | `"context_visible"` | Message state — controls persistence + streaming (see below) |
+| `chat_id` | string | No | resolved | Conversation thread key for history auto-load / append (see resolution order below) |
+| `history` | string | No | - | Explicit history override: a JSON array of `{role, content}` that supersedes auto-loading |
+| `input` | JSON | No | - | Structured inputs passed to the agent's prompt template (available as `{{ input.* }}`) |
+| `tools` | array/string | No | - | Tool definitions or slug references (see `tools` resolution below) |
+| `mcp` | JSON | No | - | MCP server map: `{"fs": "http://..."}` or `{"fs": {"url": "...", "token": "..."}}`; per-server tools are prefixed `fs.tool_name` |
+| `on_tool` | ref / map | No | - | Unresolved-tool callback: node ref `on_tool=[node]`, map dispatch `on_tool={"search": [node_a], ...}` |
+| `on_tool_call` | string | No | - | Alternative form: path to an external workflow file that handles unresolved tool calls |
+| `on_token` | string | No | - | Per-token callback node name (streaming progress UIs) |
+| `on_result` | string | No | - | Node name to invoke with the full assistant response after completion |
+| `tool_event` | string | No | `"silent"` | SSE tool-event verbosity: `"silent"` / `"info"` / `"verbose"` (replaces the old `stream_tool_events` boolean) |
 
 **`state` values:**
 
@@ -36,6 +40,14 @@ Conduct a conversation with an AI agent.
 | `silent` | No | No | Neither stored nor streamed |
 
 Composite syntax: `state="input_state:output_state"` controls input and output independently.
+
+**`chat_id` resolution** — when `chat_id` isn't passed explicitly, it falls back through:
+
+1. `reply.chat_id` — chained from a prior `chat()` in the same run
+2. `input.chat_id` — injected by bot adapters as `"{platform}:{user_id}:{agent_slug}"`
+3. None — the call is stateless; history is not loaded or saved
+
+Pass `chat_id=""` to explicitly force a stateless call. Pass `state="silent"` or `state="display_only"` to skip just the persistence half while keeping the `chat_id` resolved (useful for ephemeral diagnostic messages).
 
 **`tools` resolution:**
 
@@ -704,6 +716,41 @@ Regex search of file contents. Recursively searches files and returns matching l
 ---
 
 ## Testing Tools
+
+### assert()
+
+Assert a condition inside a test node (a node whose ID starts with `test_`). Non-true assertions are collected by the test runner and reported at the end of `juglans test`. Accepts one of several shorthand forms:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `true` | any | Passes when the value is truthy |
+| `eq` | any | Passes when `eq == value` (paired with `value`) |
+| `value` | any | The observed value to compare against `eq` / `contains` / etc. |
+| `contains` | string / array | Passes when `value` contains this substring or element |
+| `message` | string | Optional failure message shown in the test report |
+
+**Examples:**
+
+```juglans
+[test_adds_correctly]: {
+  sum = 2 + 2
+  assert(eq=4, value=sum)
+}
+
+[test_contains_substring]: {
+  greeting = "Hello, Alice!"
+  assert(contains="Alice", value=greeting, message="greeting should name the user")
+}
+
+[test_truthy]: {
+  users = fetch_users()
+  assert(true=len(users) > 0)
+}
+```
+
+Assertions run as part of `juglans test`, which discovers every node whose ID begins with `test_` under the target path.
+
+---
 
 ### mock()
 

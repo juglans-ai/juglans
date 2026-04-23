@@ -287,9 +287,9 @@ Beyond functions, Juglans supports Rust-style struct definitions with `impl` blo
 
 `impl` blocks group methods for a struct. Methods with `self` are instance methods; methods without `self` are associated functions (static methods).
 
-The snippet below is a **concept sketch** showing the shape of struct + impl declarations; it is not a complete runnable workflow:
+The snippet below shows the shape of struct + impl declarations. For a fully-runnable end-to-end example, see [`examples/impl_trait_demo.jg`](https://github.com/juglans-ai/juglans/blob/main/examples/impl_trait_demo.jg) and [`examples/associated_fn_demo.jg`](https://github.com/juglans-ai/juglans/blob/main/examples/associated_fn_demo.jg) in the repo:
 
-```text
+```juglans
 [Config]: {
   host: str = "localhost"
   port: int = 8080
@@ -301,9 +301,9 @@ impl Config {
 }
 ```
 
-Usage (concept sketch):
+Usage:
 
-```text
+```juglans
 [d]: Config.defaults()
 [c]: new Config(host="0.0.0.0", port=3000)
 [i]: c.info()
@@ -314,7 +314,7 @@ Usage (concept sketch):
 
 Traits define behavior contracts. Methods without a body are required; methods with a body provide a default implementation:
 
-```text
+```juglans
 trait Validatable {
   [validate(self)]:
   [is_valid(self)]: output = self.validate().valid == true
@@ -323,7 +323,7 @@ trait Validatable {
 
 ### impl Trait for Type
 
-```text
+```juglans
 [User]: {
   name: str
   email: str
@@ -340,7 +340,7 @@ The compiler validates that all required methods are provided. Default methods a
 
 Traits, structs, and impl blocks defined in library files are imported with namespace prefixes, just like functions:
 
-```text
+```juglans
 # lib/models.jg
 [User]: {
   name: str
@@ -358,7 +358,7 @@ impl Displayable for User {
 
 Import and use:
 
-```text
+```juglans
 libs: ["./lib/models.jg"]
 
 [u]: new models.User(name="Alice", email="alice@example.com")

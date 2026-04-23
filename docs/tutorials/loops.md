@@ -174,7 +174,7 @@ A data processing pipeline: receive a batch of records, count passing scores, an
 [process]: foreach(record in records) {
   [count]: total = total + 1
   [check]: passed = passed + 1
-  [count] -> [check] if record.score >= 60
+  [count] if record.score >= 60 -> [check]
 }
 
 [report]: print(

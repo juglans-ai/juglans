@@ -119,8 +119,10 @@ prompts: ["./prompts/*.jgx"]
 # Step 5: Fallback node (also initializes intent so downstream formatting has a value)
 [fallback]: intent = "unknown"
 
-# Step 6: Error handling
-[error_handler]: intent = "unknown", print(message="Classification failed: " + error.message)
+# Step 6: Error handling — split into two nodes; a single node can hold
+# multiple assignments but NOT mix an assignment with a tool call.
+[error_intent]: intent = "unknown"
+[error_log]:    print(message="Classification failed: " + error.message)
 
 # Step 7: Format output
 [format]: response = output
@@ -135,8 +137,8 @@ prompts: ["./prompts/*.jgx"]
 [classify] -> [save_intent]
 
 # Error handling: route to QA on classification failure
-[classify] on error -> [error_handler]
-[error_handler] -> [handle_qa]
+[classify] on error -> [error_intent]
+[error_intent] -> [error_log] -> [handle_qa]
 
 # Intent routing
 [save_intent] -> switch intent {
@@ -177,13 +179,13 @@ Section-by-section explanation:
 | `[handle_task]` | `chat()` | QA agent handles tasks |
 | `[handle_chat]` | `chat()` | QA agent handles casual chat |
 | `[fallback]` | `print()` | Fallback for unknown intents |
-| `[error_handler]` | `print()` | Handles classification errors |
+| `[error_intent]` / `[error_log]` | assignment + `print()` | Two nodes handle classification errors (intent default then logging) |
 | `[format]` | assignment | Saves the response to context |
 | `[output]` | `print()` | Final output |
 
 **Edge definitions**
 
-- `[classify] on error -> [error_handler]` -- on classification failure, instead of terminating, route to error handling, then to QA.
+- `[classify] on error -> [error_intent]` -- on classification failure, instead of terminating, set a fallback intent, log the error, and route to QA.
 - `switch intent { ... }` -- three-way mutually exclusive routing; unmatched cases go to `default: [fallback]`.
 - All branches ultimately converge at `[format] -> [output]`.
 

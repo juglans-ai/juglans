@@ -58,7 +58,7 @@ Return value of the most recently executed node. Overwritten after each step.
 [step1] -> [step2]
 ```
 
-### $node_id.output
+### `<node_id>.output`
 
 Access a specific node's output by its ID. Persists for the entire workflow -- use this to reach back to earlier nodes.
 
@@ -118,9 +118,9 @@ Available on `on error` paths. Contains information about the failure.
 
 When using `flows:` imports, subworkflow node outputs are accessed via namespace prefix:
 
-```text
-$auth.verify.output       # Output of the verify node in the auth subworkflow
-$trading.extract.output   # Output of extract in the trading subworkflow
+```juglans
+auth.verify.output       # Output of the verify node in the auth subworkflow
+trading.extract.output   # Output of extract in the trading subworkflow
 ```
 
 Global variables (`input`, `output`, context variables) are not prefixed.
