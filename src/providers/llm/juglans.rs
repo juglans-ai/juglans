@@ -1,13 +1,17 @@
 // src/providers/llm/juglans.rs
 //
 // The `juglans/` model provider routes LLM requests through the
-// juglans-wallet platform proxy.  Structurally identical to
+// juglans-wallet platform proxy. Structurally identical to
 // `deepseek.rs` — uses `async_openai::Client<OpenAIConfig>` with a
-// different base URL (`JUGLANS_API_BASE`, default localhost:3002).
+// different base URL (the proxy) and the agent's API key.
 //
-// The proxy replaces the model name and injects the real API key
-// server-side, so the agent's juglans.toml needs no LLM credentials.
+// Credentials come from the agent's juglans.toml `[ai.providers.juglans]`
+// block (api_key + base_url), passed in as a `LlmProviderConfig`. The
+// wallet proxy authenticates the agent via that key and forwards the
+// request to the real upstream (DeepSeek etc.), billing/auditing per
+// agent.
 
+use super::factory::LlmProviderConfig;
 use super::{ChatStreamChunk, LlmProvider, Message, MessagePart, TokenUsage, ToolCallChunk};
 use anyhow::Result;
 use async_openai::{
@@ -30,10 +34,13 @@ pub struct JuglansProvider {
 }
 
 impl JuglansProvider {
-    pub fn new() -> Self {
-        let api_key = std::env::var("JUGLANS_API_KEY").unwrap_or_default();
-        let api_base = std::env::var("JUGLANS_API_BASE")
-            .unwrap_or_else(|_| "http://127.0.0.1:3002/v1/llm".to_string());
+    pub fn new(cfg: &LlmProviderConfig) -> Self {
+        let api_key = cfg.api_key.clone().unwrap_or_default();
+        let api_base = cfg
+            .base_url
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "http://127.0.0.1:3002/v1/llm".to_string());
         let config = OpenAIConfig::new()
             .with_api_key(api_key)
             .with_api_base(api_base);

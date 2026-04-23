@@ -42,7 +42,7 @@ impl ProviderFactory {
             chatgpt: Arc::new(ChatGPTProvider::new()),
             deepseek: Arc::new(DeepSeekProvider::new()),
             gemini: Arc::new(GeminiProvider::new()),
-            juglans: Arc::new(JuglansProvider::new()),
+            juglans: Arc::new(JuglansProvider::new(&LlmProviderConfig::default())),
             qwen: Arc::new(QwenProvider::new()),
             xai: Arc::new(XaiProvider::new()),
             extra: Arc::new(DashMap::new()),
@@ -50,7 +50,16 @@ impl ProviderFactory {
     }
 
     /// Create a ProviderFactory with configuration from juglans.toml [ai.providers].
-    /// Provider configs override environment variables; missing configs fall back to env vars.
+    ///
+    /// For historical reasons most providers are still env-driven: we shove
+    /// `[ai.providers.<name>]` values into `std::env` here so the per-provider
+    /// `::new()` constructors (which read env) pick them up. That env magic is
+    /// a wart — difficult to test, leaks across processes, etc. — and will be
+    /// migrated to the explicit-config pattern one provider at a time.
+    ///
+    /// `juglans` is the first to opt out: its constructor takes
+    /// `&LlmProviderConfig` directly, so its entry is built explicitly below
+    /// rather than through `apply(...)`.
     pub fn new_with_config(configs: &HashMap<String, LlmProviderConfig>) -> Self {
         let apply = |name: &str, key_env: &str, url_env: Option<&str>| {
             if let Some(cfg) = configs.get(name) {
@@ -76,9 +85,12 @@ impl ProviderFactory {
         apply("qwen", "QWEN_API_KEY", None);
         apply("byteplus", "ARK_API_KEY", Some("ARK_API_BASE"));
         apply("xai", "XAI_API_KEY", None);
-        apply("juglans", "JUGLANS_API_KEY", Some("JUGLANS_API_BASE"));
 
-        Self::new()
+        let juglans_cfg = configs.get("juglans").cloned().unwrap_or_default();
+
+        let mut s = Self::new();
+        s.juglans = Arc::new(JuglansProvider::new(&juglans_cfg));
+        s
     }
 
     /// Create factory with claude_code provider and MCP tool sessions.
