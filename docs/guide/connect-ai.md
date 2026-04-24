@@ -50,7 +50,7 @@ export XAI_API_KEY="..."
 export ARK_API_KEY="..."              # ByteDance / BytePlus Ark
 ```
 
-Juglans will pick up any of these on startup. Each provider also accepts `base_url` for local proxies (see the Ollama section below) and the environment overrides `OPENAI_API_BASE` / `ANTHROPIC_BASE_URL` / `ARK_API_BASE` / `JUGLANS_API_BASE`.
+Juglans will pick up any of these on startup. Each provider also accepts `base_url` for local proxies (see the Ollama section below); the environment overrides `OPENAI_API_BASE` / `ANTHROPIC_BASE_URL` / `ARK_API_BASE` apply for the corresponding upstreams. The `juglans/` proxy provider is configured exclusively via `[ai.providers.juglans]` in `juglans.toml` — no env var.
 
 ### Claude Code provider
 
@@ -158,7 +158,7 @@ When a `chat()` node has a `chat_id` resolved, Juglans automatically loads the t
 
 1. **Explicit** — `chat(message=..., chat_id="support:123")`
 2. **`reply.chat_id`** — set by a prior `chat()` in the same run, so a chain of `chat()` nodes stays on one thread
-3. **`input.chat_id`** — injected by bot adapters as `"{platform}:{user_id}:{agent_slug}"` (e.g. `telegram:12345:support_bot`), so bot workflows get memory without any code change
+3. **`input.chat_id`** — injected by bot adapters as `"{platform}:{platform_chat_id}:{agent_slug}"` (e.g. `telegram:12345:support_bot`, `discord:987654321:support_bot` where the middle segment is the channel id for guild bots and the DM id for direct messages), so bot workflows get memory without any code change
 4. **None** — the call is stateless; nothing is loaded or stored
 
 To explicitly skip history for a single call, pass `state="silent"` (drops the turn from storage) or an empty `chat_id=""`.

@@ -1,6 +1,6 @@
 [package]
 name = "juglans"
-version = "0.2.17"
+version = "0.2.18"
 edition = "2021"
 rust-version = "1.80"
 default-run = "juglans"
@@ -82,6 +82,9 @@ qrcode = "0.14"
 aes = "0.8"
 ecb = { version = "0.1", features = ["alloc"] }
 hex = "0.4"
+# Discord Gateway (WebSocket)
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["rustls-tls-webpki-roots", "connect"] }
+futures-util = "0.3"
 # TUI
 ratatui = "0.29"
 arboard = "3"

@@ -40,6 +40,53 @@ Core capabilities:
 - **Multiple output formats** -- Report results as human-readable `text`, machine-readable `json`, or CI-friendly `junit` XML via `--format`
 - **Standard exit codes** -- Exit 0 when all tests pass, non-zero on failure, suitable for CI pipelines
 
+### Writing assertions: `assert`
+
+Inside a `test_*` node, use `assert <expression>` to declare a condition that must hold. The runtime evaluates the expression with the same engine as `chat()` parameters; the test passes when the result is truthy. Failures are collected and reported at the end of `juglans test`.
+
+```juglans
+[test_adds_correctly]: {
+  sum = 2 + 2
+  assert sum == 4
+}
+
+[test_contains_substring]: {
+  greeting = "Hello, Alice!"
+  assert "Alice" in greeting
+}
+
+[test_truthy]: {
+  users = fetch_users()
+  assert len(users) > 0
+}
+
+[test_chained_predicates]: {
+  result = classify(input.text)
+  assert result.confidence > 0.8 and result.intent in ["question", "task"]
+}
+```
+
+`assert` is a parser keyword, not a tool call — there are no named parameters. Any expression that the [expression evaluator](../reference/expressions.md) understands is valid: comparisons (`==`, `!=`, `<`, `>=`), membership (`in`, `not in`), logical (`and`, `or`, `not`), function calls (`len`, `contains`, `startswith`, etc.), and dotted access on prior nodes' output (`step.output.field`).
+
+### Stubbing dependencies: `mock()`
+
+Tests that exercise real workflows often need to stub out an LLM, an external HTTP call, or a slow Python tool. `mock()` runs a target workflow with **injected node outputs** — nodes named in `inject` are skipped during execution and their output is set to the injected value. The return value is the workflow's final `output` (i.e. whatever the last terminal node produces):
+
+```juglans
+# Classify routing test — pin the LLM output, assert the workflow picks
+# the right downstream branch.
+[test_classifier_routes_questions]: {
+  final = mock(
+    workflow = "main.jg",
+    inject   = { "classify": { "intent": "question", "confidence": 0.97 } },
+    input    = { "text": "What time is it?" }
+  )
+  assert final.routed_to == "answer"
+}
+```
+
+The `inject` map can stub any node by ID — LLM calls, HTTP fetches, db queries — so the test only exercises the routing / control-flow logic without burning tokens or hitting the network. Pair `mock()` with one or more `assert` lines to check the expected outcome.
+
 ## Manual Testing
 
 Run a workflow manually and pass input data:

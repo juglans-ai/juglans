@@ -73,9 +73,20 @@ impl BuiltinRegistry {
         reg!(system::Print);
         reg!(system::Reply::new());
         reg!(system::SetContext);
-        reg!(system::FeishuWebhook);
-        reg!(system::FeishuSend);
         reg!(system::Return);
+
+        // Platform messaging (dotted): telegram.*, discord.*, wechat.*, feishu.*
+        reg!(platforms::telegram::SendMessage);
+        reg!(platforms::telegram::Typing);
+        reg!(platforms::telegram::EditMessage);
+        reg!(platforms::discord::SendMessage);
+        reg!(platforms::discord::Typing);
+        reg!(platforms::discord::EditMessage);
+        reg!(platforms::discord::React);
+        reg!(platforms::wechat::SendMessage);
+        reg!(platforms::feishu::SendMessage);
+        reg!(platforms::feishu::SendImage);
+        reg!(platforms::feishu::SendWebhook);
 
         // HTTP backend
         // Serve is registered post-construction (needs Weak<BuiltinRegistry>)
@@ -325,5 +336,6 @@ pub mod http;
 pub mod http_client;
 pub mod network;
 pub mod oauth;
+pub mod platforms;
 pub mod system;
 pub mod testing;

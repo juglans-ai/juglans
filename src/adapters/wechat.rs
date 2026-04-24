@@ -1028,9 +1028,35 @@ pub async fn start(
     }
 }
 
+// ── Session accessor (for builtins) ──────────────────────────────────────────
+
+/// Session info loaded from `.juglans/wechat/{account}.json`, used by
+/// `wechat.*` builtin tools so they can push without going through QR login.
+pub(crate) struct SessionInfo {
+    pub token: String,
+    pub base_url: String,
+    #[allow(dead_code)]
+    pub account_id: String,
+    #[allow(dead_code)]
+    pub user_id: Option<String>,
+}
+
+/// Load the most recent saved WeChat account. Returns `None` if no session
+/// file exists — callers should prompt the user to run `juglans bot wechat`
+/// once to perform the QR login.
+pub(crate) fn load_session(project_root: &Path) -> Option<SessionInfo> {
+    let (account_id, data) = load_account(project_root)?;
+    Some(SessionInfo {
+        token: data.token,
+        base_url: data.base_url,
+        account_id,
+        user_id: data.user_id,
+    })
+}
+
 // ── Send Message ─────────────────────────────────────────────────────────────
 
-async fn send_text_message(
+pub(crate) async fn send_text_message(
     http: &reqwest::Client,
     base_url: &str,
     token: &str,

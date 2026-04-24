@@ -166,7 +166,7 @@ Each "potentially failing" node has its own fallback, without interfering with o
 [abort] -> [done]
 ```
 
-Here, two `on error` edges are defined for the same node. When `[work]` fails, the engine selects the first reachable `on error` edge in definition order.
+Here, two `on error` edges are defined for the same node. When `[work]` fails, **both** `on error` edges fire — `[warn]` and `[abort]` will both run. If you want to choose between strategies, route to a single error-handler node and branch from there (see the next section).
 
 If you need to differentiate error handling strategies based on context, a better approach is to have the fallback node handle the decision internally:
 

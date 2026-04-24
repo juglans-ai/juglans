@@ -78,6 +78,12 @@ Reserved top-level names: `input`, `output`, `reply`, `error`, `config`, `respon
 
 When a `chat_id` is resolved (explicit `chat_id=`, `reply.chat_id`, or `input.chat_id` injected by bot adapters), Juglans auto-loads the tail of the thread and appends the turn — so bot workflows get multi-turn memory with no extra wiring. See [Conversation History in connect-ai.md](./connect-ai.md#conversation-history) for the full story.
 
+### Bot adapters
+
+Four platforms ship as first-class adapters: **Telegram**, **Discord**, **Feishu / Lark**, and **WeChat**. Each one runs as `juglans bot <platform>` standalone, or auto-starts inside `juglans serve` when its `[bot.<platform>]` section is present in `juglans.toml`. Inbound messages flow through the same `run_agent_for_message` pipeline, populating `input.platform`, `input.platform_chat_id`, `input.platform_user_id`, `input.text`, and the namespaced `input.chat_id` (e.g. `discord:{channel_id}:{agent_slug}`) so conversation history stays per-thread.
+
+Outbound push uses the platform-namespaced builtins — `telegram.send_message`, `discord.send_message`, `wechat.send_message`, `feishu.send_message` (and friends like `*.typing`, `*.edit_message`, `discord.react`, `feishu.send_image`). Targets auto-resolve from `input.platform_chat_id` on the inbound path, or take an explicit `chat_id` / `channel_id` / `user_id` for cron jobs and broadcasts. See [builtins.md → Platform Messaging](../reference/builtins.md#platform-messaging-telegram-discord-wechat-feishu).
+
 Variables are accessed by path within node parameters:
 
 ```juglans
@@ -91,7 +97,8 @@ Variables are accessed by path within node parameters:
 When a node invokes a tool, the engine searches in the following order:
 
 ```
-1. Builtin         — chat, p, notify, print, fetch, bash, history.*, db.*...
+1. Builtin         — chat, p, notify, print, fetch, bash, history.*, db.*,
+                     telegram.*, discord.*, wechat.*, feishu.*
 2. Function        — [name(params)]: { ... } defined in the current workflow
 3. Struct methods  — Type.fn() / instance.method() on struct / impl blocks
 4. Python          — Direct Python module calls (pandas.read_csv(), etc.)

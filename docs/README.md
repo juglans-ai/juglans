@@ -51,10 +51,13 @@ In the era of AI agents, **how agents interact** — who talks to whom, in what 
 - **Declarative DSL** — Define workflows as graphs, not imperative code
 - **Functions as Nodes** — `[name(params)]: { steps }` — reusable parameterized blocks
 - **Topology-Preserving Composition** — `flows:` merges sub-graphs without losing structure
-- **Expression Language** — Python-like expressions with 30+ built-in functions
+- **Expression Language** — Python-like expressions with 100+ built-in functions
 - **Built-in AI** — `chat()` for LLM calls, `p()` for prompt rendering
-- **HTTP Backend** — `serve()` + `response()` turn workflows into APIs
-- **MCP Integration** — Extend with any Model Context Protocol tool
+- **Bot adapters** — Telegram, Discord, Feishu, WeChat as one flag (`juglans bot <platform>`); inbound `chat_id` auto-injects for multi-turn memory
+- **Platform messaging** — `telegram.send_message`, `discord.send_message`, `wechat.send_message`, `feishu.send_message` (and friends) — push from any node
+- **Conversation history** — JSONL / SQLite / memory backends, auto-loaded into `chat()` when `chat_id` is set
+- **HTTP Backend** — `serve()` + `response()` (and `@get` / `@post` decorators) turn workflows into APIs
+- **MCP Integration** — Extend with any Model Context Protocol tool via inline `chat(mcp={...})`
 - **Python Ecosystem** — Call pandas, sklearn, etc. directly from workflows
 
 ## Quick Install

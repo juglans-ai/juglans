@@ -11,7 +11,8 @@ The AI orchestration landscape in 2026 spans low-code visual builders (n8n, Dify
 | **Runtime** | Single Rust binary | Python runtime | Python runtime | Python runtime | Node.js server | Go + worker pool | Python + scheduler |
 | **Python required?** | Only for Python tools | Always | Always | Always | Workflows yes | Optional | Always |
 | **State between runs** | Built-in history (JSONL / SQLite) | Checkpointer (Postgres/Memory) | In-process | Memory classes | Per-flow DB | Durable event log | XCom / DB |
-| **Bot adapters built-in** | Telegram / Feishu / WeChat | None | None | None | Many (no-code) | None | None |
+| **Bot adapters built-in** | Telegram / Discord / Feishu / WeChat | None | None | None | Many (no-code) | None | None |
+| **Cross-platform push from any node** | ✓ (`<platform>.send_message` etc., 10+ dotted tools) | Manual SDK call | Manual SDK call | Manual SDK call | UI-driven | Manual | Manual |
 | **Streaming to UI** | SSE, server + client bridge | Native (async) | Limited | Callbacks | Webhook-driven | Not direct | Not direct |
 | **MCP client** | Built-in (HTTP) | Via external libs | Via external libs | Via external libs | Via integrations | N/A | N/A |
 | **Static validation** | `juglans check` (graph + types) | Runtime | Runtime | Runtime | Limited | Runtime | DAG parse |
@@ -46,7 +47,7 @@ An equivalent Python pipeline (LangChain LCEL, LangGraph, or hand-rolled) needs 
 
 LangGraph expresses this via `add_conditional_edges` with a routing function. CrewAI doesn't branch at the graph level. n8n uses a visual Switch node.
 
-**Shipped bot adapters, history, and MCP.** Multi-turn Telegram / Feishu / WeChat bots are one TOML block away — `chat_id` auto-derives per platform, history auto-persists, MCP tools attach inline. No other framework in the matrix bundles these in the runtime itself.
+**Shipped bot adapters, history, MCP, and platform messaging.** Multi-turn Telegram / Discord / Feishu / WeChat bots are one TOML block away — `chat_id` auto-derives per platform, history auto-persists, MCP tools attach inline. **Outbound push is also first-class**: `telegram.send_message`, `discord.send_message`, `wechat.send_message`, `feishu.send_message` (plus `typing` / `edit_message` / `react`) work from any node — cron jobs, error handlers, cross-channel alerts. No other framework in the matrix bundles these in the runtime itself.
 
 ## Juglans-Only Differentiators
 
@@ -63,7 +64,7 @@ LangGraph expresses this via `add_conditional_edges` with a routing function. Cr
 - You're building AI agent workflows and want them in a reviewable, diff-able file
 - You need multi-turn chat with durable history across runs
 - You want a single binary you can drop on a VM or in a container — no Python toolchain
-- You need bot adapters (Telegram / Feishu / WeChat) or SSE streaming out of the box
+- You need bot adapters (Telegram / Discord / Feishu / WeChat) or SSE streaming out of the box
 - You want static validation catching wiring bugs before they hit production
 
 **Pick something else when:**

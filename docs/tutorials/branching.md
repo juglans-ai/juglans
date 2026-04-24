@@ -88,7 +88,7 @@ Combine multiple conditions with logical operators:
 [check] -> [normal]
 ```
 
-Conditions are evaluated in the order they are defined. The first condition that evaluates to true wins, and subsequent conditions are **not checked**. Therefore, place the most specific conditions first.
+**All matching `if` edges fire** — they are evaluated independently, and every one whose condition is true activates its successor. If you need exactly one branch (mutual exclusion), use `switch` (see below) or write conditions that cannot both be true (`x < 5` and `x >= 5`).
 
 ### Branch Convergence
 
@@ -163,7 +163,7 @@ When should you use which?
 | Complex conditions (ranges, logical combinations) | `if` | switch only does equality matching |
 | Need a default path | Either | switch uses `default`, if uses an unconditional edge |
 
-The key difference: `switch` guarantees that only one branch is taken, while `if` conditional edges can theoretically satisfy multiple conditions simultaneously (though the engine only takes the first true one, in order).
+The key difference: `switch` guarantees that exactly one branch is taken (the first matching case, or `default:`), while `if` conditional edges all fire independently — every edge whose condition is true activates its successor. Use `switch` when you need mutual exclusion; use `if` edges when multiple paths may legitimately fire at once.
 
 ## Mixing Unconditional and Conditional Edges
 
@@ -238,7 +238,7 @@ This is the most common routing pattern in real projects: coarse-grained routing
 
 - **Conditional edges** `[node] if expr -> [target]` -- the edge is taken when the condition is true
 - **switch** `[node] -> switch var { "val": [target], default: [fb] }` -- multi-way exclusive selection based on a variable's value
-- Conditions are evaluated in definition order; the first true condition wins
+- All matching `if` conditions fire — for mutual exclusion use `switch`, or write non-overlapping conditions
 - Unconditional edges `[node] -> [target]` can serve as a default path
 - Branch convergence uses OR semantics: the convergence node triggers when any predecessor completes
 - `switch` is best for equality-based multi-way selection; `if` is best for complex conditions and binary choices

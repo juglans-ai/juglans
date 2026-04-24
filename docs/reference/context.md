@@ -36,7 +36,17 @@ POST /api/workflows/my-flow/execute
 {"query": "hello", "count": 5}
 ```
 
-**HTTP handler (serve()):** The web server pre-injects `input.method`, `input.path`, `input.query`, `input.body`, `input.headers`, and `input.route`.
+**HTTP handler (serve()):** The web server pre-injects `input.method`, `input.path`, `input.query`, `input.body`, `input.headers`, `input.path_parts` (array split on `/`), and `input.route` (`"METHOD /path"`).
+
+**Bot adapters (Telegram / Discord / Feishu / WeChat):** Each adapter pre-injects:
+
+- `input.platform` — `"telegram"` / `"discord"` / `"feishu"` / `"wechat"`
+- `input.platform_chat_id` — raw platform target id (chat / channel / user). **Used as the auto-resolved target by the `<platform>.send_message` builtins** when no explicit target is passed.
+- `input.platform_user_id` — sender id
+- `input.chat_id` — namespaced as `"{platform}:{platform_chat_id}:{agent_slug}"`. This is the **history routing key** (different from `platform_chat_id`); see [Conversation History in connect-ai.md](../guide/connect-ai.md#conversation-history).
+- `input.text` — message text
+- `input.username` — sender username (when the platform exposes one)
+- `input.event_type` / `input.event_data` — event envelope (e.g. `"message"`, `"card_action"` for Feishu)
 
 ### Path Access
 

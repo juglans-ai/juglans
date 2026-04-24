@@ -22,7 +22,7 @@ The `install.sh` script does not support Windows. Download `juglans-windows-x64.
 juglans --version
 ```
 
-You should see a version number like `juglans 0.2.16`. If you see `command not found`, check the [Troubleshooting](#troubleshooting) section below — the installer puts the binary at `~/.juglans/bin/juglans`, which may not be on your PATH yet.
+You should see a version number like `juglans 0.2.x`. If you see `command not found`, check the [Troubleshooting](#troubleshooting) section below — the installer puts the binary at `~/.juglans/bin/juglans`, which may not be on your PATH yet.
 
 Run `juglans --help` to see all subcommands. See [CLI Commands](../reference/cli.md) for the full reference.
 

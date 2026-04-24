@@ -1,6 +1,7 @@
 // src/adapters/mod.rs
 #![cfg(not(target_arch = "wasm32"))]
 
+pub mod discord;
 pub mod feishu;
 pub mod telegram;
 pub mod wechat;

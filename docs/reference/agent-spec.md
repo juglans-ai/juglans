@@ -45,22 +45,26 @@ The LLM model to use. Any model string supported by your backend.
 }
 ```
 
-Common model values:
+### Model strings
 
-Current model lineup (April 2026):
+Juglans does not maintain its own model catalog — every provider's model IDs come from the provider's own API and change frequently. The model string is passed verbatim to the upstream provider.
 
-| Provider | Models |
-|---|---|
-| OpenAI | `gpt-5.4`, `gpt-5.4-pro`, `gpt-5.4-thinking`, `gpt-5`, `gpt-4o-mini` (note: `gpt-4o`, `gpt-4.1`, `o4-mini` were retired from the API in February 2026) |
-| Anthropic | `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5` |
-| Gemini | `gemini-3.1-pro`, `gemini-3.1-flash`, `gemini-3.1-flash-lite`, `gemini-2.5-pro` |
-| DeepSeek | `deepseek-chat` (V3.2), `deepseek-reasoner` (V3.2 thinking) |
-| Qwen | `qwen3-max`, `qwen3.5-plus`, `qwen3.5` |
-| xAI | `grok-4`, `grok-4-latest`, `grok-3` |
-| ByteDance Ark | `byteplus/seed-1-8-251228`, `byteplus/seed-2-0-lite-260228` |
-| Local (OpenAI-compatible) | set `[ai.providers.openai] base_url` to a local endpoint (Ollama, LM Studio, vLLM) and use models like `openai/llama3` |
+Two equivalent forms work:
 
-Model IDs evolve quickly — consult each provider's docs for the current catalog before pinning a production model.
+```juglans
+# Bare model — provider inferred from the prefix or from `[ai].default_model`
+[a]: { "model": "gpt-4o-mini" }
+[b]: { "model": "claude-haiku-4-5" }
+
+# Explicit `provider/model` — picks the provider before the slash
+[c]: { "model": "openai/llama3" }            # local Ollama via OpenAI base_url
+[d]: { "model": "claude-code/sonnet" }       # local Claude Code CLI
+[e]: { "model": "juglans/deepseek-chat" }    # routed through juglans-wallet proxy
+```
+
+Provider prefixes Juglans understands: `openai`, `anthropic` (also `claude`), `deepseek`, `gemini`, `qwen`, `byteplus` (also `ark`), `xai`, `claude-code`, `juglans`. See the [Connect AI Models guide](../guide/connect-ai.md) for the full provider list and how to configure each.
+
+Pin specific model IDs against each provider's own docs (OpenAI / Anthropic / DeepSeek / Gemini / Qwen / xAI / ByteDance Ark) — the IDs change every few months and any list shipped here would be stale before this release lands.
 
 ### temperature
 

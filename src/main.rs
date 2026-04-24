@@ -122,9 +122,9 @@ enum Commands {
         #[arg(long)]
         entry: Option<PathBuf>,
     },
-    /// Start bot adapter (telegram, feishu, wechat)
+    /// Start bot adapter (telegram, feishu, wechat, discord)
     Bot {
-        /// Platform: telegram, feishu, wechat
+        /// Platform: telegram, feishu, wechat, discord
         platform: String,
         /// Agent slug to use (overrides config default)
         #[arg(long)]
@@ -1109,9 +1109,21 @@ async fn handle_bot(
         "wechat" | "weixin" => {
             adapters::wechat::start(config, project_root, agent_override).await?;
         }
+        "discord" => {
+            let agent_slug = agent_override
+                .or_else(|| {
+                    config
+                        .bot
+                        .as_ref()
+                        .and_then(|b| b.discord.as_ref())
+                        .map(|d| d.agent.clone())
+                })
+                .unwrap_or_else(|| "default".to_string());
+            adapters::discord::start(config, project_root, agent_slug).await?;
+        }
         _ => {
             return Err(anyhow!(
-                "Unknown platform '{}'. Supported: telegram, feishu, wechat",
+                "Unknown platform '{}'. Supported: telegram, feishu, wechat, discord",
                 platform
             ));
         }
@@ -1173,6 +1185,21 @@ async fn handle_serve(
             tokio::spawn(async move {
                 if let Err(e) = adapters::wechat::start(wx_config, wx_root, wx_slug).await {
                     tracing::error!("WeChat bot error: {}", e);
+                }
+            });
+        }
+
+        // Discord Gateway (WebSocket — no webhook alternative).
+        // Requires a long-lived process; will error repeatedly on serverless
+        // platforms that suspend idle containers.
+        if bot.discord.is_some() {
+            let dc_config = config.clone();
+            let dc_root = project_root.clone();
+            let dc_slug = entry_slug.clone();
+            active_platforms.push("discord (gateway)".into());
+            tokio::spawn(async move {
+                if let Err(e) = adapters::discord::start(dc_config, dc_root, dc_slug).await {
+                    tracing::error!("Discord bot error: {}", e);
                 }
             });
         }

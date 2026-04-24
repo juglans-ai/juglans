@@ -273,6 +273,65 @@ api_key = "sk-..."
 
 Without any provider configured, `chat()` will fail with `No API-key provided`. See [Connect AI Models](../guide/connect-ai.md) and [Configuration Reference](../reference/config.md) for full details.
 
+## 6.7 Conversation History (Multi-Turn Memory)
+
+When a `chat_id` is resolved, Juglans automatically loads the tail of that thread before the LLM call and appends the user / assistant turn afterwards. You don't thread a history array by hand:
+
+```juglans
+[reply]: chat(message = input.text, chat_id = input.user_id)
+```
+
+Now the bot remembers what the user said two messages ago — try it: ask the bot its name, then ask "what did you just call yourself?" and it should answer correctly.
+
+`chat_id` resolves in priority order:
+
+1. Explicit `chat_id="..."` parameter (highest)
+2. `reply.chat_id` (chained from a prior `chat()` in the same run)
+3. `input.chat_id` (auto-injected by bot adapters as `"{platform}:{user}:{agent}"`)
+4. None — call is stateless
+
+Inside a bot workflow you usually need zero arguments — the adapter sets `input.chat_id` for you:
+
+```juglans
+[reply]: chat(message = input.text)   # auto-history when running via juglans bot ...
+```
+
+Backends are configured once in `juglans.toml`:
+
+```toml
+[history]
+backend = "jsonl"          # or "sqlite", "memory", "none"
+max_messages = 20
+max_tokens = 8000
+```
+
+See [Conversation History in connect-ai.md](../guide/connect-ai.md#conversation-history) for the full story.
+
+## 6.8 Message State (`state=`)
+
+`chat()` accepts a `state=` parameter that controls the message lifecycle on two axes: whether the message persists into history (`context`), and whether it streams to the user via SSE (`display`). Four canonical values:
+
+| state | Persist? | Stream? | When to use |
+|---|---|---|---|
+| `context_visible` (default) | ✓ | ✓ | Normal turn |
+| `context_hidden` | ✓ | ✗ | Internal AI thinking — feeds future turns but user doesn't see it |
+| `display_only` | ✗ | ✓ | One-off notice that shouldn't pollute history |
+| `silent` | ✗ | ✗ | Diagnostic / classification calls that shouldn't show or persist |
+
+```juglans
+# Classify intent without polluting history or streaming to the user
+[classify]: chat(message = input.text, state = "silent",
+                 system_prompt = "Reply with one word: question | task | smalltalk")
+
+# Save it to context for later branches
+[save]: intent = output
+
+# The actual user-facing reply persists normally
+[reply]: chat(message = input.text)
+```
+
+Compound form `state="input:output"` controls input and output independently — for fine-grained cases like "store the user message but don't stream the response".
+
 ## Summary
 
 | Concept | Syntax | Purpose |

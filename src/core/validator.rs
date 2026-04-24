@@ -376,8 +376,6 @@ impl WorkflowValidator {
             // AI tools
             "chat",
             "p",
-            "memory_search",
-            "history",
             "execute_workflow",
             // Network tools
             "fetch_url",
@@ -390,7 +388,8 @@ impl WorkflowValidator {
             "reply",
             "print",
             "return",
-            "feishu_webhook",
+            "set_context",
+            "call",
             // HTTP backend tools
             "serve",
             "response",
@@ -405,6 +404,7 @@ impl WorkflowValidator {
             // Testing
             "assert",
             "config",
+            "mock",
             // Database ORM
             "db.connect",
             "db.disconnect",
@@ -427,13 +427,6 @@ impl WorkflowValidator {
             "db.alter_table",
             "db.tables",
             "db.columns",
-            // Vector
-            "vector_create_space",
-            "vector_upsert",
-            "vector_search",
-            "vector_list_spaces",
-            "vector_delete_space",
-            "vector_delete",
             // Conversation history
             "history.load",
             "history.append",
@@ -442,6 +435,18 @@ impl WorkflowValidator {
             "history.clear",
             "history.stats",
             "history.list_chats",
+            // Platform messaging
+            "telegram.send_message",
+            "telegram.typing",
+            "telegram.edit_message",
+            "discord.send_message",
+            "discord.typing",
+            "discord.edit_message",
+            "discord.react",
+            "wechat.send_message",
+            "feishu.send_message",
+            "feishu.send_image",
+            "feishu.send_webhook",
         ]
         .iter()
         .copied()
@@ -579,11 +584,11 @@ impl WorkflowValidator {
                     );
                 }
             }
-            "feishu_webhook" => {
-                if !params.contains_key("message") {
+            "feishu.send_webhook" => {
+                if !params.contains_key("message") && !params.contains_key("text") {
                     result.add_error(
                         "E014",
-                        "feishu_webhook() requires 'message' parameter",
+                        "feishu.send_webhook() requires 'message' or 'text' parameter",
                         Some(node_id),
                     );
                 }

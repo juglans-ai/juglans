@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.18] - 2026-04-25
+
+### Added
+
+- **Discord bot adapter** (`src/adapters/discord.rs`, ~620 LoC). Gateway v10 WebSocket client that receives `MESSAGE_CREATE` events and dispatches them through the existing `run_agent_for_message` pipeline. `juglans bot discord` runs standalone; `juglans serve` auto-starts it when `[bot.discord]` is configured. Conversation history works out of the box — `input.chat_id = "discord:{channel_id}:{agent_slug}"` is injected automatically, isolating DMs and guild channels.
+- **`[bot.discord]` config section** with token (via `${DISCORD_BOT_TOKEN}` interpolation), agent slug, and intent names (default: `guilds`, `guild_messages`, `message_content`, `direct_messages`). Optional `intents_bitmask` for copy-pasting from the Discord Developer Portal. `dm_policy` / `group_policy` / `guilds` allowlist fields parsed-but-not-yet-enforced (warned at startup).
+- **Discord session resume.** Session id / resume URL / sequence persist at `.juglans/discord/gateway.json`; restarts resume from the stored state instead of re-identifying.
+- **Platform messaging builtins** — push text from any workflow node (cron, error handlers, cross-channel alerts, etc.). Eleven new dotted tools:
+  - `telegram.send_message`, `telegram.typing`, `telegram.edit_message`
+  - `discord.send_message`, `discord.typing`, `discord.edit_message`, `discord.react`
+  - `wechat.send_message`
+  - `feishu.send_message`, `feishu.send_image`, `feishu.send_webhook`
+- Every `*.send_message` auto-resolves its target from `input.platform_chat_id` (set by the adapter on inbound messages), so bot reply branches need zero arguments: `[reply]: telegram.send_message(text = "hi")`. Pass an explicit `chat_id` / `channel_id` / `user_id` for broadcast / cron use.
+- WeChat tool reads its token + base URL from the QR-login session file (`.juglans/wechat/*.json`) — no additional config; run `juglans bot wechat` once to log in.
+- **Dependencies:** `tokio-tungstenite = "0.24"` (rustls, connect) + `futures-util = "0.3"` for the Discord Gateway WebSocket. ~3 transitive crates added.
+
+### Changed — BREAKING
+
+- **`feishu_send` and `feishu_webhook` removed.** Migrate to the platform-namespaced equivalents:
+  - `feishu_send(chat_id=..., message=...)` → `feishu.send_message(chat_id=..., text=...)` — note `message` became `text`
+  - `feishu_send(chat_id=..., image=...)` → `feishu.send_image(chat_id=..., image=...)`
+  - `feishu_send(chat_id=..., message=..., image=...)` → two separate calls
+  - `feishu_webhook(message=..., webhook_url=...)` → `feishu.send_webhook(message=..., webhook_url=...)` (same params, renamed)
+  - See [troubleshooting #19](docs/appendix/troubleshooting.md) for a worked migration table.
+
+### Documentation
+
+Full sweep across all docs sections to reflect the Discord adapter, platform messaging, and the conversation-history improvements that landed in 0.2.13–0.2.17:
+
+- **Onboarding** (`README.md`, `docs/README.md`) — bot adapter list now lists Telegram / Discord / Feishu / WeChat (4 platforms); platform messaging pitched as a key feature; install version string future-proofed.
+- **Tutorials** — `ai-chat.md` adds **6.7 Conversation History** and **6.8 Message State (`state=`)** sections; `branching.md` and `error-handling.md` corrected on edge semantics ("all matching `if` edges fire" — not "first match wins"); `full-project.md` adds **9.7 Deploying as a Bot** showing `juglans bot telegram` + explicit `telegram.send_message`.
+- **Guide** — `concepts.md` enumerates 4 adapters and adds platform messaging to tool resolution order; `use-mcp.md` rewritten to lead with the native `chat(mcp={...})` parameter (legacy `std/mcps.jg` demoted to a Compatibility section); `build-web-api.md` documents `@get`/`@post`/`@put`/`@delete`/`@patch` decorator routing alongside `switch input.route`; `testing.md` adds `assert()` and `mock()` worked examples; port precedence clarified.
+- **Reference** — `cli.md` clarifies `serve` auto-starts Telegram / WeChat / Discord (Feishu is webhook-only); `config.md` removes fictional `JUGLANS_API_KEY` / `JUGLANS_API_BASE` env-var rows.
+- **Appendix** — `comparisons.md` matrix bot-adapters cell now lists 4 platforms; new "Cross-platform push from any node" row positions platform messaging as a Juglans-only differentiator vs LangGraph/CrewAI/n8n; `glossary.md` adds **Platform Messaging** entry; `troubleshooting.md` adds three new entries: **#19** `feishu_send` / `feishu_webhook` migration, **#20** Discord 4004 / 4014 close codes (most common: privileged `MESSAGE_CONTENT` intent not toggled in the dev portal), **#21** `<platform>.send_message` "no target" / WeChat session-not-found errors.
+
+### Internal
+
+- Extracted `pub(crate)` send helpers in `adapters/{telegram, discord, wechat}.rs` so platform messaging builtins and adapter reply loops share one code path.
+- New `adapters::wechat::load_session` — reads `.juglans/wechat/{account}.json` and returns `{token, base_url, account_id, user_id}`.
+- Validator `known_tools` cleanup: added `set_context`, `call`, `mock`; removed ghost entries `memory_search`, `history` (singular), and the unimplemented `vector_*` family that were causing false-positive W004 warnings on `juglans check`.
+
 ## [0.2.17] - 2026-04-24
 
 ### Changed — full documentation sweep

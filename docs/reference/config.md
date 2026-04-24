@@ -298,6 +298,34 @@ Bot adapter configuration for messaging platforms.
 |-------|------|---------|-------------|
 | `agent` | string | `"default"` | Agent slug to use |
 
+### [bot.discord]
+
+Discord Gateway (WebSocket) adapter. Use `${VAR}` interpolation to pull the token from `.env` or the process environment; see [env_file](#env_file).
+
+```toml
+[bot.discord]
+token = "${DISCORD_BOT_TOKEN}"
+agent = "main"
+# Optional — defaults below are enabled if omitted
+intents = ["guilds", "guild_messages", "message_content", "direct_messages"]
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `token` | string | | Discord bot token. Required. |
+| `agent` | string | `"default"` | Agent slug / workflow name to dispatch messages to |
+| `intents` | string[] | `[guilds, guild_messages, message_content, direct_messages]` | Gateway intent names (see [Discord docs](https://discord.com/developers/docs/topics/gateway#gateway-intents)) |
+| `intents_bitmask` | u64 | | Raw intents bitmask — wins over `intents` when set |
+| `dm_policy` | string | | *Reserved for v2 — parsed but not enforced.* Warned at startup if set. |
+| `group_policy` | string | | *Reserved for v2.* |
+| `guilds` | string[] | `[]` | *Reserved for v2 — guild allowlist.* |
+
+**Privileged intents.** `message_content` is a privileged intent — enable "MESSAGE CONTENT INTENT" in the [Discord Developer Portal](https://discord.com/developers/applications) under your bot's **Bot** tab, otherwise the gateway will reject the connection with close code 4014 and a helpful error.
+
+**Deployment.** Discord uses a persistent WebSocket. Serverless platforms that suspend idle containers (Lambda, Cloud Run with min-instances=0, etc.) are not suitable — run the adapter on a long-lived host. `juglans serve` auto-starts the Discord adapter when `[bot.discord]` is present.
+
+**Session resume.** The adapter persists session state at `.juglans/discord/gateway.json` so restarts can resume close to where they left off without triggering a fresh `Identify`.
+
 ---
 
 ## [history]
@@ -350,8 +378,8 @@ To publish packages, set `JUGLANS_REGISTRY_API_KEY` (or `REGISTRY_API_KEY`) in y
 | Variable | Description |
 |----------|-------------|
 | `RUST_LOG` | Log level / module filter (e.g. `debug`, `juglans::runtime::python=debug`) |
-| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `DEEPSEEK_API_KEY` / `GEMINI_API_KEY` / `QWEN_API_KEY` / `ARK_API_KEY` / `XAI_API_KEY` / `JUGLANS_API_KEY` | LLM provider API keys (alternative to `[ai.providers]`) |
-| `OPENAI_API_BASE` / `ANTHROPIC_BASE_URL` / `ARK_API_BASE` / `JUGLANS_API_BASE` | Provider base URL overrides (local proxies, Ollama, Azure OpenAI, etc.) |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `DEEPSEEK_API_KEY` / `GEMINI_API_KEY` / `QWEN_API_KEY` / `ARK_API_KEY` / `XAI_API_KEY` | LLM provider API keys (alternative to `[ai.providers]`) — the `juglans` proxy provider is config-only, no env var |
+| `OPENAI_API_BASE` / `ANTHROPIC_BASE_URL` / `ARK_API_BASE` | Provider base URL overrides (local proxies, Ollama, Azure OpenAI, etc.) |
 | `DEFAULT_LLM_PROVIDER` | Fallback provider when `chat(model="default")` is used and no `ai.default_model` is set (`openai` \| `anthropic` \| `byteplus` \| `qwen` \| ...) |
 | `JUGLANS_HISTORY_BACKEND` / `JUGLANS_HISTORY_DIR` / `JUGLANS_HISTORY_PATH` / `JUGLANS_HISTORY_MAX_MESSAGES` / `JUGLANS_HISTORY_MAX_TOKENS` / `JUGLANS_HISTORY_ENABLED` | Override `[history]` section fields |
 | `JUGLANS_REGISTRY_API_KEY` / `REGISTRY_API_KEY` | Package registry credential for `juglans publish` |

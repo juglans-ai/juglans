@@ -239,7 +239,46 @@ Expected output (example):
 [chat] Hey! I'm doing well, thanks for asking. How can I help you today?
 ```
 
-## 9.7 Extension Ideas
+## 9.7 Deploying as a Bot
+
+The same `main.jg` runs unchanged on any chat platform. Add a `[bot.<platform>]` block to `juglans.toml`:
+
+```toml
+[bot.telegram]
+token = "${TELEGRAM_BOT_TOKEN}"
+agent = "main"
+
+# Or:
+# [bot.discord]
+# token = "${DISCORD_BOT_TOKEN}"
+# agent = "main"
+```
+
+Then start the adapter:
+
+```bash
+juglans bot telegram        # or: juglans bot discord
+# or, to run web API + bot in one process:
+juglans serve
+```
+
+The adapter injects `input.text` (the user's message) and `input.platform_chat_id` (the chat or channel id) before calling the workflow. Because `input.chat_id` is auto-namespaced as `telegram:{chat_id}:main`, the conversation history layer keeps each user's thread separate.
+
+If you'd rather send the reply explicitly (e.g. for richer formatting, or because the response isn't an LLM output), call the platform's `send_message` builtin:
+
+```juglans
+[reply]: telegram.send_message(text = "[" + intent + "] " + response)
+# or
+[reply]: discord.send_message(text = "[" + intent + "] " + response)
+```
+
+The target auto-resolves from `input.platform_chat_id`, so no `chat_id=` argument is needed. For broadcasts and cron-driven pushes that don't have a current inbound message, pass an explicit target:
+
+```juglans
+[broadcast]: telegram.send_message(chat_id = "987654", text = "morning briefing ready")
+```
+
+## 9.8 Extension Ideas
 
 This project is a starting point. Here are several directions for enhancement:
 
@@ -316,7 +355,7 @@ curl -X POST http://localhost:8080/api/chat \
 
 Note: `serve()` is fallback-based. Any request path is routed into the workflow unless you pattern-match on `input.path`, so the `/api/chat` path above is illustrative -- any URL under the host will reach the same workflow entry.
 
-## 9.8 Tutorial Series Review
+## 9.9 Tutorial Series Review
 
 Nine chapters, each focused on a core topic:
 

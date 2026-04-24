@@ -332,8 +332,114 @@ pub async fn start(config: JuglansConfig, project_root: PathBuf, agent_slug: Str
     }
 }
 
-/// Split long message into chunks (Telegram limit: 4096 characters)
-fn split_message(text: &str, max_len: usize) -> Vec<String> {
+/// Telegram Bot API base URL.
+pub(crate) const TELEGRAM_API: &str = "https://api.telegram.org";
+
+/// Telegram message character limit.
+pub(crate) const TELEGRAM_MAX_LEN: usize = 4096;
+
+/// Send a text message to a Telegram chat. Falls back to plain-text if
+/// `parse_mode`-formatted send fails (typical cause: malformed Markdown).
+/// Chunks long messages using `split_message`.
+pub(crate) async fn send_message_api(
+    http: &reqwest::Client,
+    token: &str,
+    chat_id: &str,
+    text: &str,
+    parse_mode: Option<&str>,
+) -> anyhow::Result<usize> {
+    let base_url = format!("{}/bot{}", TELEGRAM_API, token);
+    let chunks = split_message(text, TELEGRAM_MAX_LEN);
+    let chunk_count = chunks.len();
+    for chunk in chunks {
+        let mut body = serde_json::json!({
+            "chat_id": chat_id,
+            "text": chunk,
+        });
+        if let Some(pm) = parse_mode {
+            body["parse_mode"] = serde_json::json!(pm);
+        }
+        let resp = http
+            .post(format!("{}/sendMessage", base_url))
+            .json(&body)
+            .send()
+            .await?;
+        if resp.status().is_success() {
+            continue;
+        }
+        // Fallback without parse_mode
+        let resp2 = http
+            .post(format!("{}/sendMessage", base_url))
+            .json(&serde_json::json!({
+                "chat_id": chat_id,
+                "text": chunk,
+            }))
+            .send()
+            .await?;
+        if !resp2.status().is_success() {
+            let status = resp2.status();
+            let err = resp2.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!(
+                "Telegram sendMessage failed: {} {}",
+                status,
+                err
+            ));
+        }
+    }
+    Ok(chunk_count)
+}
+
+/// Send typing action (auto-expires after a few seconds, best-effort).
+pub(crate) async fn send_typing(http: &reqwest::Client, token: &str, chat_id: &str) {
+    let base_url = format!("{}/bot{}", TELEGRAM_API, token);
+    let _ = http
+        .post(format!("{}/sendChatAction", base_url))
+        .json(&serde_json::json!({
+            "chat_id": chat_id,
+            "action": "typing",
+        }))
+        .send()
+        .await;
+}
+
+/// Edit a previously-sent message.
+pub(crate) async fn edit_message_api(
+    http: &reqwest::Client,
+    token: &str,
+    chat_id: &str,
+    message_id: i64,
+    text: &str,
+    parse_mode: Option<&str>,
+) -> anyhow::Result<()> {
+    let base_url = format!("{}/bot{}", TELEGRAM_API, token);
+    let mut body = serde_json::json!({
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text,
+    });
+    if let Some(pm) = parse_mode {
+        body["parse_mode"] = serde_json::json!(pm);
+    }
+    let resp = http
+        .post(format!("{}/editMessageText", base_url))
+        .json(&body)
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let err = resp.text().await.unwrap_or_default();
+        return Err(anyhow::anyhow!(
+            "Telegram editMessageText failed: {} {}",
+            status,
+            err
+        ));
+    }
+    Ok(())
+}
+
+/// Split long message into chunks (Telegram limit: 4096 characters).
+/// Prefers splitting at a newline, falls back to `max_len`.
+pub(crate) fn split_message(text: &str, max_len: usize) -> Vec<String> {
     if text.len() <= max_len {
         return vec![text.to_string()];
     }

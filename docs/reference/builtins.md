@@ -717,34 +717,37 @@ Regex search of file contents. Recursively searches files and returns matching l
 
 ## Testing Tools
 
-### assert()
+### assert
 
-Assert a condition inside a test node (a node whose ID starts with `test_`). Non-true assertions are collected by the test runner and reported at the end of `juglans test`. Accepts one of several shorthand forms:
+Assert a condition inside a test node (a node whose ID starts with `test_`). `assert` is a parser keyword, not a tool call — it takes a single bare expression and passes when the result is truthy. Failures are collected and reported at the end of `juglans test`.
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `true` | any | Passes when the value is truthy |
-| `eq` | any | Passes when `eq == value` (paired with `value`) |
-| `value` | any | The observed value to compare against `eq` / `contains` / etc. |
-| `contains` | string / array | Passes when `value` contains this substring or element |
-| `message` | string | Optional failure message shown in the test report |
+```text
+assert <expression>
+```
+
+The expression is evaluated by the same engine that handles `chat()` parameters, so the full [expression language](./expressions.md) is available: comparisons, membership (`in` / `not in`), logical (`and` / `or` / `not`), function calls, and dotted access on prior nodes.
 
 **Examples:**
 
 ```juglans
 [test_adds_correctly]: {
   sum = 2 + 2
-  assert(eq=4, value=sum)
+  assert sum == 4
 }
 
 [test_contains_substring]: {
   greeting = "Hello, Alice!"
-  assert(contains="Alice", value=greeting, message="greeting should name the user")
+  assert "Alice" in greeting
 }
 
 [test_truthy]: {
   users = fetch_users()
-  assert(true=len(users) > 0)
+  assert len(users) > 0
+}
+
+[test_chained]: {
+  result = classify(input.text)
+  assert result.confidence > 0.8 and result.intent in ["question", "task"]
 }
 ```
 
@@ -788,42 +791,71 @@ Store test configuration. Returns all parameters as a JSON value for the test ru
 
 ---
 
-## Adapter Tools
+## Platform Messaging (`telegram.*`, `discord.*`, `wechat.*`, `feishu.*`)
 
-### feishu_webhook()
+Push messages to a chat platform from any workflow node — reply branches, cron jobs, error handlers, cross-channel alerts. Each platform has its own namespace; within a namespace, each verb follows the same shape.
 
-Send a message via Feishu (Lark) webhook.
+**Common behavior across all send tools:**
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `message` | string | Yes | - | Message text to send |
-| `webhook_url` | string | No | - | Webhook URL (falls back to `[bot.feishu]` config) |
+- Target id (`chat_id` / `channel_id` / `user_id`) is **optional**. When omitted, the tool uses `input.platform_chat_id` — the value the adapter injected for the incoming message. Pass an explicit target for cron / broadcast / cross-channel use.
+- Credentials load from `[bot.<platform>]` in `juglans.toml` (WeChat loads from `.juglans/wechat/{account}.json` since its token is QR-login-issued).
+- Return shape: `{ "status": "sent", "target": "<resolved_id>", ... }`.
 
-**Example:**
+### Telegram
 
-```juglans
-[notify_feishu]: feishu_webhook(message="Deployment complete!")
-```
-
----
-
-### feishu_send()
-
-Send a message (or image) to a Feishu chat using the `[bot.feishu]` `app_id` / `app_secret` credentials. Acquires a tenant access token and posts to the Feishu Open API.
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `chat_id` | string | Yes | - | Target Feishu chat ID |
-| `message` | string | Conditional | - | Text message body |
-| `image` | string | Conditional | - | Image key or path |
-
-At least one of `message` or `image` must be provided.
-
-**Example:**
+| Tool | Parameters | Notes |
+|---|---|---|
+| `telegram.send_message` | `text` (required), `chat_id?`, `parse_mode?="Markdown"` | Chunks at 4096 chars; falls back to plain text on Markdown parse error |
+| `telegram.typing` | `chat_id?` | Best-effort; auto-expires server-side |
+| `telegram.edit_message` | `message_id` (required), `text` (required), `chat_id?`, `parse_mode?="Markdown"` | |
 
 ```juglans
-[notify]: feishu_send(chat_id=input.chat_id, message="Deployment complete!")
+[reply]: telegram.send_message(text = "hi")                       # auto-reply
+[cron]:  telegram.send_message(chat_id = "12345", text = "daily")
+[fix]:   telegram.edit_message(message_id = reply.message_id, text = "corrected")
 ```
+
+### Discord
+
+| Tool | Parameters | Notes |
+|---|---|---|
+| `discord.send_message` | `text` (required), `channel_id?` | Chunks at 2000 chars; 429 retry once |
+| `discord.typing` | `channel_id?` | Best-effort; ~10s window |
+| `discord.edit_message` | `message_id` (required), `text` (required), `channel_id?` | PATCH `/channels/{id}/messages/{msg}` |
+| `discord.react` | `message_id` (required), `emoji` (required), `channel_id?` | Unicode emoji or `name:id` for custom guild emoji |
+
+```juglans
+[reply]: discord.send_message(text = "hi")
+[ack]:   discord.react(message_id = input.message_id, emoji = "👍")
+[file]:  discord.send_message(channel_id = "987", text = "pipeline done")
+```
+
+### WeChat
+
+| Tool | Parameters | Notes |
+|---|---|---|
+| `wechat.send_message` | `text` (required), `user_id?` / `chat_id?` / `to?` | Reads `.juglans/wechat/*.json` session — run `juglans bot wechat` once to log in |
+
+```juglans
+[reply]: wechat.send_message(text = "hi")            # auto-reply via input.platform_chat_id
+[push]:  wechat.send_message(user_id = "u_abc", text = "reminder")
+```
+
+### Feishu / Lark
+
+| Tool | Parameters | Notes |
+|---|---|---|
+| `feishu.send_message` | `text` (required), `chat_id?` | Acquires a tenant access token per call |
+| `feishu.send_image` | `image` (required, URL or local path), `chat_id?` | Uploads to `/open-apis/im/v1/images`, then sends as image message |
+| `feishu.send_webhook` | `message` (required), `webhook_url?` | Webhook URL falls back to `[bot.feishu].webhook_url` |
+
+```juglans
+[notify]: feishu.send_message(chat_id = "oc_xxx", text = "deploy finished")
+[screenshot]: feishu.send_image(chat_id = "oc_xxx", image = "./graph.png")
+[ci]:     feishu.send_webhook(message = "build green")
+```
+
+> **Breaking change in 0.2.18.** The legacy `feishu_send` and `feishu_webhook` tools were removed in favor of the dotted namespace above. Migration: `feishu_send(chat_id=..., message=..., image=...)` → `feishu.send_message(chat_id=..., text=...)` for text (or `feishu.send_image(chat_id=..., image=...)` for images); `feishu_webhook(message=..., webhook_url=...)` → `feishu.send_webhook(message=..., webhook_url=...)`.
 
 ---
 

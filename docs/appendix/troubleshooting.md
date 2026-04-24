@@ -309,3 +309,106 @@ Then check that `chat()` nodes you expect to persist do not have `state="silent"
 backend = "sqlite"
 path = ".juglans/history.db"
 ```
+
+---
+
+### 19. `feishu_send` / `feishu_webhook` not found after upgrading
+
+**Symptom:** `juglans check` warns `W004: Unknown tool 'feishu_send'` (or `'feishu_webhook'`); workflows that previously worked now fail at the validator.
+
+**Cause:** Both tools were **removed in v0.2.18** in favor of platform-namespaced builtins under the `feishu.*` namespace. This is a breaking change documented in CHANGELOG 0.2.18.
+
+**Solution:** Migrate the call sites:
+
+| Old | New |
+|---|---|
+| `feishu_send(chat_id="oc_x", message="hi")` | `feishu.send_message(chat_id="oc_x", text="hi")` — note `message` → `text` |
+| `feishu_send(chat_id="oc_x", image="./pic.png")` | `feishu.send_image(chat_id="oc_x", image="./pic.png")` |
+| `feishu_send(chat_id=..., message=..., image=...)` | Two separate calls — `feishu.send_message` then `feishu.send_image` |
+| `feishu_webhook(message="hi")` | `feishu.send_webhook(message="hi")` — same params, just renamed |
+
+The new tools follow the same dotted convention as `db.*` / `history.*` and share behavior with `telegram.*` / `discord.*` / `wechat.*` (see [Platform Messaging in builtins.md](../reference/builtins.md#platform-messaging-telegram-discord-wechat-feishu)).
+
+---
+
+### 20. Discord bot exits with close code 4004 or 4014
+
+**Symptom:**
+
+```
+[discord] Authentication failed (4004). Check [bot.discord].token.
+```
+
+or
+
+```
+[discord] Gateway rejected intents (close code 4014). Enable 'MESSAGE CONTENT INTENT'
+         in the Discord Developer Portal …
+```
+
+**Cause:**
+
+- **4004**: Token wrong, expired, or `${DISCORD_BOT_TOKEN}` interpolation failed (`.env` not loaded, var name typo).
+- **4014**: The `MESSAGE_CONTENT` intent is **privileged** — Discord rejects connections that request it without portal opt-in. This is the #1 first-time setup failure.
+
+**Solution:**
+
+```bash
+# 4004 — verify the token interpolates
+grep DISCORD_BOT_TOKEN .env
+# regenerate at https://discord.com/developers/applications → Bot → Reset Token if needed
+
+# 4014 — open the dev portal:
+#   Application → Bot → Privileged Gateway Intents → enable MESSAGE CONTENT INTENT
+# OR remove `message_content` from [bot.discord].intents:
+```
+
+```toml
+[bot.discord]
+token = "${DISCORD_BOT_TOKEN}"
+intents = ["guilds", "guild_messages", "direct_messages"]   # no message_content
+```
+
+Without `message_content`, the bot connects but receives empty `content` fields on incoming messages — fine for slash-command-only setups, broken for chat workflows.
+
+If session resumes keep failing with `Invalid Session (op 9)`, delete the cached resume file:
+
+```bash
+rm .juglans/discord/gateway.json
+```
+
+---
+
+### 21. `<platform>.send_message` errors with "no target" or missing token
+
+**Symptom:**
+
+```
+telegram.send_message: no target — pass `chat_id` explicitly, or run from a bot
+                       workflow where `input.platform_chat_id` is set
+```
+
+or
+
+```
+wechat.send_message: no WeChat session found in .juglans/wechat/.
+                     Run `juglans bot wechat` once to complete QR login.
+```
+
+**Cause:** Each `*.send_message` builtin auto-resolves its target from `input.platform_chat_id` — set automatically by the bot adapter on inbound messages. From a cron job, error handler, or any node that doesn't have a current platform message, you must pass the target explicitly.
+
+**Solution:**
+
+```juglans
+# Auto-resolve from inbound message (bot reply branch)
+[reply]: telegram.send_message(text = "hi")
+
+# Explicit target (cron, broadcast)
+[alert]: telegram.send_message(chat_id = "12345", text = "deploy done")
+[ping]:  discord.send_message(channel_id = "987", text = "ping")
+[push]:  wechat.send_message(user_id = "u_abc", text = "reminder")
+```
+
+For WeChat specifically, the token + base_url come from `.juglans/wechat/{account}.json` (the file written after QR login). Run `juglans bot wechat` once to log in, then the `wechat.send_message` builtin works from any context. Delete the file to force a re-login.
+
+For Telegram / Discord / Feishu, ensure the `[bot.<platform>]` section in `juglans.toml` has a non-empty `token` (or the equivalent `app_id` + `app_secret` for Feishu).

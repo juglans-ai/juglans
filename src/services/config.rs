@@ -146,6 +146,7 @@ pub struct BotConfig {
     pub telegram: Option<TelegramBotConfig>,
     pub feishu: Option<FeishuBotConfig>,
     pub wechat: Option<WechatBotConfig>,
+    pub discord: Option<DiscordBotConfig>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -186,8 +187,43 @@ pub struct WechatBotConfig {
     pub agent: String,
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct DiscordBotConfig {
+    /// Discord bot token (use `${DISCORD_BOT_TOKEN}` in TOML to pull from `.env` / env).
+    pub token: String,
+    #[serde(default = "default_bot_agent")]
+    pub agent: String,
+    /// Gateway intents by name. Default: guilds, guild_messages,
+    /// message_content, direct_messages.
+    #[serde(default = "default_discord_intents")]
+    pub intents: Vec<String>,
+    /// Raw intents bitmask; wins over `intents` when set (for users copy-pasting
+    /// from the Discord developer portal).
+    pub intents_bitmask: Option<u64>,
+    /// Execution mode (reserved, currently always local).
+    #[serde(default)]
+    pub mode: Option<String>,
+    // ── v2 placeholders: parsed so copy-pasted openclaw-style TOML doesn't
+    //    fail to deserialize, but not enforced by v1. Setting any of them
+    //    emits a warning at startup. See plans/discord-virtual-waffle.md.
+    #[serde(default)]
+    pub dm_policy: Option<String>,
+    #[serde(default)]
+    pub group_policy: Option<String>,
+    #[serde(default)]
+    pub guilds: Vec<String>,
+}
+
 fn default_bot_agent() -> String {
     "default".to_string()
+}
+fn default_discord_intents() -> Vec<String> {
+    vec![
+        "guilds".into(),
+        "guild_messages".into(),
+        "message_content".into(),
+        "direct_messages".into(),
+    ]
 }
 fn default_feishu_port() -> u16 {
     9000
@@ -416,6 +452,7 @@ impl JuglansConfig {
                 telegram: None,
                 feishu: None,
                 wechat: None,
+                discord: None,
             });
             let feishu = bot.feishu.get_or_insert_with(|| FeishuBotConfig {
                 app_id: None,
@@ -460,6 +497,7 @@ impl JuglansConfig {
                 telegram: None,
                 feishu: None,
                 wechat: None,
+                discord: None,
             });
             let tg = bot.telegram.get_or_insert_with(|| TelegramBotConfig {
                 token: String::new(),

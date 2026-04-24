@@ -24,13 +24,42 @@ curl http://localhost:3000/api/hello
 # {"message": "Hello from Juglans!"}
 ```
 
-> **Port note:** The local dev default is `3000`. The official Docker image launches with `--port 8080` as its container port, so when running in Docker you'll typically publish `8080:8080`. Set `[server] port` in `juglans.toml` or pass `--port` to override either.
+> **Port precedence:** `--port` flag > `[server] port` in `juglans.toml` > built-in fallback `8080` (only used when no `juglans.toml` exists at all). Project scaffolds ship with `port = 3000`, which is why local dev typically shows `3000`. The official Docker image runs `juglans web --port 8080`, so when running in Docker publish `8080:8080`.
 
-The node ID (`[hello]`) is **not** the URL path. `serve()` registers the workflow as an Axum **fallback handler**, meaning every incoming URL is routed into the same workflow regardless of path. Use `input.path` / `input.route` inside the workflow to dispatch — see [Routing](#routing) below.
+The node ID (`[hello]`) is **not** the URL path. There are two ways to declare routes — pick the one that fits your workflow:
 
-## Routing
+1. **Decorator routing** (recommended for multi-endpoint APIs) — annotate function nodes with `@get` / `@post` / `@put` / `@delete` / `@patch`. The web server dispatches per-decorator.
+2. **Single-handler with `switch input.route`** (recommended when the routing is a small data-driven map or when you want every request to flow through one pipeline).
 
-Use `switch input.route` to dispatch requests. `input.route` is auto-computed as `"METHOD /path"` (e.g., `"GET /api/users"`).
+## Decorator Routing
+
+Place an HTTP-method decorator **immediately above** a function node. The web server registers each decorated function as a handler for that method + path; non-matching requests fall through to the bare `serve()` workflow (or 404 if there isn't one).
+
+```juglans
+[start]: serve()
+
+@get("/api/users")
+[list_users()]: response(status=200, body={"users": ["alice", "bob"]})
+
+@post("/api/users")
+[create_user()]: response(status=201, body={"created": input.body.name})
+
+@get("/api/status")
+[get_status()]: response(status=200, body={"status": "ok"})
+```
+
+Each decorated function can read:
+
+- `input.body` — parsed request body (JSON when `Content-Type: application/json`, raw string otherwise)
+- `input.query.*` — query parameters
+- `input.headers.*` — request headers (lowercase keys)
+- `input.path_parts` — array of path segments split on `/` (e.g. `GET /api/users/42` → `["api", "users", "42"]`)
+
+Path matching is **exact-string** at the moment — `@get("/api/users")` matches only `/api/users`, not `/api/users/42`. There is no `:id` templating yet. For variable segments, register one decorator with a coarse path and split inside the handler using `input.path_parts`, or use a `serve()` workflow that switches on `input.route` (next section).
+
+## Routing via `switch input.route`
+
+When you'd rather keep a single `serve()` pipeline, use `switch input.route` to dispatch. `input.route` is auto-computed as `"METHOD /path"` (e.g., `"GET /api/users"`).
 
 ```juglans
 [request]: serve()

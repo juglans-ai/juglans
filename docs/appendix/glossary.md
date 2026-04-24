@@ -6,7 +6,7 @@ Core terminology used throughout Juglans documentation.
 
 **Agent** -- An AI persona defined as an inline JSON map node in a `.jg` file, specifying model, system prompt, tools, and behavior parameters. Referenced by node ID in `chat()` calls (e.g., `chat(agent=my_agent, ...)`). For cross-workflow reuse, agents can be defined in a library file and imported via `libs:`.
 
-**Bot adapter** -- A server-side integration that connects a chat platform (Telegram, Feishu, WeChat) to a Juglans workflow, translating inbound messages into workflow runs and replies back to the platform. Started via `juglans bot` or the unified `juglans serve`.
+**Bot adapter** -- A server-side integration that connects a chat platform (Telegram, Feishu, WeChat, Discord) to a Juglans workflow, translating inbound messages into workflow runs and replies back to the platform. Started via `juglans bot` or the unified `juglans serve`. Each adapter sets `input.chat_id` using a platform-specific key (`discord:{channel_id}:{agent_slug}` for Discord, `telegram:{chat_id}:{agent_slug}` for Telegram, etc.) so conversation-history buckets stay isolated per thread.
 
 **Builtin** -- A tool implemented directly in the Juglans Rust runtime (e.g., `chat`, `fetch`, `notify`), available without any external configuration.
 
@@ -62,6 +62,8 @@ Core terminology used throughout Juglans documentation.
 
 **Node** -- The fundamental unit of a workflow. Each node has an ID (in brackets) and executes a single tool call: `[node_id]: tool(params)`.
 
+**Platform Messaging** -- The family of dotted builtins `{telegram, discord, wechat, feishu}.{send_message, typing, edit_message, react, send_image, send_webhook}` that push messages to a chat platform from any workflow node. Each `*.send_message` auto-resolves its target from `input.platform_chat_id` (set by the adapter on inbound messages), so a bot reply branch is one line: `[reply]: telegram.send_message(text="hi")`. From cron / error / non-bot contexts, pass an explicit `chat_id` / `channel_id` / `user_id`.
+
 **Prompt** -- A Jinja-style template defined in a `.jgx` file, rendered with the `p()` builtin. Supports variables, conditionals, and loops.
 
 **Registry** -- The package registry (`jgr.juglans.ai`) where Juglans packages are published and installed via `juglans publish` / `juglans add`.
@@ -78,6 +80,6 @@ Core terminology used throughout Juglans documentation.
 
 **Type checker** -- The static analysis pass (part of `juglans check`) that validates class definitions, node inputs/outputs, and cross-node data flow before execution, catching wiring mistakes that would otherwise surface at runtime.
 
-**Variable** -- A runtime reference to data: `input` (CLI/adapter input, including `input.chat_id` in bot paths), `output` (previous node result), `reply.*` (agent response metadata, including `reply.chat_id` for chaining), `error` (`on error` paths), `config` (parsed `juglans.toml`), `response` (HTTP handlers), plus loop-scoped `loop.index` / `loop.item` inside `foreach` / `while` blocks. Reserved names cannot be used as user variables.
+**Variable** -- A runtime reference to data: `input` (CLI/adapter input, including `input.chat_id` for history routing and `input.platform_chat_id` as the raw target id used by `*.send_message`), `output` (previous node result), `reply.*` (agent response metadata, including `reply.chat_id` for chaining), `error` (`on error` paths), `config` (parsed `juglans.toml`), `response` (HTTP handlers), plus loop-scoped `loop.index` / `loop.item` inside `foreach` / `while` blocks. Reserved names cannot be used as user variables.
 
 **Workflow** -- A complete execution graph defined in a `.jg` file, consisting of metadata, nodes, edges, and optional function definitions.

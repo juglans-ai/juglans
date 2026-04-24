@@ -49,7 +49,7 @@ docker run -d \
   juglans
 ```
 
-This starts `juglans web --host 0.0.0.0 --port 8080` with your workflow files in `/workspace`.
+This starts the binary with your workflow files in `/workspace`. The default `CMD` runs `juglans web` (HTTP API only); to also boot configured bot adapters in the same container, override with `command: ["juglans", "serve", "--host", "0.0.0.0", "--port", "8080"]` or use the Compose example below.
 
 ## Docker Compose
 
@@ -93,7 +93,19 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
       - QWEN_API_KEY=${QWEN_API_KEY:-}
+      # Bot adapters (optional — only needed for the bots you want to run)
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - FEISHU_APP_ID=${FEISHU_APP_ID:-}
+      - FEISHU_APP_SECRET=${FEISHU_APP_SECRET:-}
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
+      # History storage (override defaults if you want SQLite or a custom path)
+      - JUGLANS_HISTORY_BACKEND=${JUGLANS_HISTORY_BACKEND:-jsonl}
+      - JUGLANS_HISTORY_DIR=${JUGLANS_HISTORY_DIR:-/workspace/.juglans/history}
+    # CRITICAL: use `serve` to also boot bot adapters; `web` runs only the HTTP API.
+    command: ["juglans", "serve", "--host", "0.0.0.0", "--port", "8080"]
 ```
+
+> **Bot adapters and serverless / scale-to-zero**. The Discord adapter holds a persistent Gateway WebSocket — it cannot survive container suspension. Run it on a long-lived host (Cloud Run with `min-instances >= 1`, Fly.io without autostop, a regular VM, etc.). Telegram / WeChat use long-poll which is also incompatible with idle suspension. Feishu's webhook mode is the only adapter that survives serverless.
 
 ## Environment Variables
 
@@ -107,7 +119,26 @@ Pass any LLM provider API key (juglans is local-first — providers are called d
 | `GEMINI_API_KEY` | Google Gemini API key |
 | `QWEN_API_KEY` | Alibaba Qwen API key |
 | `XAI_API_KEY` | xAI API key |
-| `ARK_API_KEY` | ByteDance Ark API key |
+| `ARK_API_KEY` | ByteDance / BytePlus Ark API key |
+
+Bot adapter credentials (only needed for the bots you want to run — `juglans serve` boots them automatically when the corresponding section is present in `juglans.toml` or the env var auto-creates it):
+
+| Variable | Effect |
+|----------|--------|
+| `TELEGRAM_BOT_TOKEN` | Auto-creates `[bot.telegram]` if absent — adapter starts on `juglans serve` |
+| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | Auto-create `[bot.feishu]` (webhook mode) |
+| `DISCORD_BOT_TOKEN` | NOT auto-consumed — must be referenced via `${DISCORD_BOT_TOKEN}` interpolation in `[bot.discord].token` |
+
+History storage overrides (default backend is JSONL at `.juglans/history/`):
+
+| Variable | Effect |
+|----------|--------|
+| `JUGLANS_HISTORY_BACKEND` | `jsonl` (default), `sqlite`, `memory`, `none` |
+| `JUGLANS_HISTORY_DIR` | JSONL directory; mount this to a volume for cross-restart persistence |
+| `JUGLANS_HISTORY_PATH` | SQLite database path |
+| `JUGLANS_HISTORY_MAX_MESSAGES` / `JUGLANS_HISTORY_MAX_TOKENS` / `JUGLANS_HISTORY_ENABLED` | Per-call limits + master switch |
+
+> Mount the history directory as a Docker volume (`./workspace/.juglans/history:/workspace/.juglans/history`) so conversations survive container restarts.
 
 Pass via `-e` flag or in the compose file:
 
@@ -188,7 +219,7 @@ After=network.target
 Type=simple
 User=juglans
 WorkingDirectory=/opt/juglans
-ExecStart=/usr/local/bin/juglans web --host 0.0.0.0 --port 8080
+ExecStart=/usr/local/bin/juglans serve --host 0.0.0.0 --port 8080
 Restart=always
 RestartSec=5
 EnvironmentFile=/etc/juglans/llm.env  # contains OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.

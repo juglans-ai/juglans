@@ -65,7 +65,8 @@ That file IS the architecture diagram. The branching, routing, and convergence a
 - **Python ecosystem bridge** — `python: ["pandas", "sklearn"]` and call modules directly, with object references for non-serializable types
 - **MCP integration** — plug in any Model Context Protocol server as a tool source
 - **Package registry** — `juglans pack` / `publish` / `add` to share reusable libraries
-- **Bot adapters** — Telegram, Feishu, WeChat — one flag to turn a workflow into a chatbot
+- **Bot adapters** — Telegram, Discord, Feishu, WeChat — one flag turns a workflow into a chatbot, with auto-injected `chat_id` for multi-turn memory
+- **Platform messaging** — push from any node via `telegram.send_message` / `discord.send_message` / `wechat.send_message` / `feishu.send_message` (and friends — see [builtins.md](docs/reference/builtins.md))
 - **Cross-platform** — macOS, Linux, Windows, and WASM (full engine runs in the browser)
 
 ## Install
@@ -110,7 +111,7 @@ juglans serve     --port 3000      # Unified web API + all configured bot adapte
 juglans chat      --agent path.jg  # Interactive TUI
 juglans cron      file --schedule  # Run on a cron schedule
 juglans lsp                        # Language Server Protocol
-juglans bot       <platform>       # Telegram / Feishu / WeChat adapter
+juglans bot       <platform>       # Telegram / Discord / Feishu / WeChat adapter
 
 # Packages
 juglans init <name>       # Scaffold a new project
