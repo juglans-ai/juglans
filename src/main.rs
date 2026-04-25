@@ -360,6 +360,13 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
             info!("🚀 Starting Workflow Graph Logic: {:?}", source_file_path);
             let local_config = JuglansConfig::load()?;
 
+            // Initialize global conversation-history store (idempotent).
+            // Without this, the file-exec path runs every chat() stateless,
+            // even when chat_id resolves and [history] is enabled.
+            if let Err(e) = crate::services::history::init_global(&local_config.history) {
+                tracing::warn!("[history] init_global failed: {}", e);
+            }
+
             // Compute base directory for @ path alias
             let at_base: Option<PathBuf> = local_config
                 .paths

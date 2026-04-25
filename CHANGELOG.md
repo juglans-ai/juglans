@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.19] - 2026-04-26
+
+### Fixed
+
+- **`juglans <file.jg>` now initializes conversation history.** The most common code path — `juglans my-workflow.jg` from the CLI — previously skipped `history::init_global` because the file-exec branch (`main.rs::handle_file_logic`) constructs its executor inline without going through `runner::RunBuilder`. As a result, even when `[history]` was enabled and a `chat()` node had a resolved `chat_id`, no history was loaded or persisted; only bot adapters, `juglans serve`, and the embedded `runner` SDK were initializing the store. Adding the init call after `JuglansConfig::load()` brings the file-exec path in line with the other three. Discovered while testing the synple agent end-to-end with `deepseek/deepseek-v4-pro`.
+
 ## [0.2.18] - 2026-04-25
 
 ### Added
