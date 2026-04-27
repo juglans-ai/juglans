@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.21] - 2026-04-27
+
+### Changed
+
+- **`libs:` is now a strict superset of `flows:` — graph nodes from imported `.jg` files are merged into the parent workflow, not just functions/classes/methods.** The lib-vs-flow distinction was inherited from the `.jgflow` era when those were physically distinct file types; once everything became `.jg`, the split decayed into a footgun where authors of bundled tool libraries would naturally write `[registry]:` style nodes (essentially const lookup tables or value bindings) and then couldn't reference them from the importing workflow without renaming `libs:` → `flows:`. After this change, a single `libs: ["tools/skills.jg", ...]` import surfaces functions, classes, methods, AND any nodes / edges / switch routes the lib graph defines, all under the same namespace. Pure-function libraries are unaffected (their graph is empty, the merge is a no-op). `flows:` continues to work and is unchanged. Discovered when juglans-wallet's bundled chat.jg template — written against this assumed semantics — repeatedly failed validation in 0.2.19/0.2.20 because `skills.registry` (a node defined in a libs-imported file) wasn't reachable from the importing workflow's graph edges.
+
+### Fixed
+
+- **W006 false positive on lib-namespaced function references.** `validator::check_variable_references` was inserting full function names like `skills.registry` into `valid_prefixes`, but the variable-reference check compares against the *root segment* of a dotted reference (the `skills` in `skills.registry()`), so all lib function calls were flagged as "Variable 'X' has unknown prefix 'skills'. Known: input, output, ctx, reply, error, config" even when the function existed. Now the namespace root is also registered alongside the full name — mirrors what `WorkflowGraph::nodes` already does for namespaced node IDs.
+- **Misleading `commit_pending_edges` error message.** Used to say "Did you declare it in 'flows:' and define it in the imported workflow?"; now reads "Did you declare it in 'libs:' / 'flows:' and define it in the imported file?" — accurate after the libs unification, and avoids steering users toward the historical-only keyword.
+
 ## [0.2.20] - 2026-04-27
 
 ### Added

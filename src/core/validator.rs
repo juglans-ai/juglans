@@ -636,9 +636,17 @@ impl WorkflowValidator {
             }
         }
 
-        // Function names are also valid prefixes (in case someone references them)
+        // Function names are also valid prefixes (in case someone references
+        // them). Lib-imported functions are namespaced (e.g. `skills.registry`
+        // for `tools/skills.jg::[registry()]`), so we register both the full
+        // name AND the namespace root — otherwise expressions like
+        // `skills.registry()` get flagged as W006 because the parser only
+        // checks the root segment of dotted variable references.
         for func_name in graph.functions.keys() {
             valid_prefixes.insert(func_name.clone());
+            if let Some(root) = func_name.split('.').next() {
+                valid_prefixes.insert(root.to_string());
+            }
         }
 
         // Build topological order map for DAG predecessor checking

@@ -48,10 +48,20 @@ pub fn expand_at_prefixes(patterns: &[String], at_base: Option<&Path>) -> Vec<St
         .collect()
 }
 
-/// Resolve lib imports — load library files, extract function defs and register them
-/// into the parent workflow with namespace prefixes.
+/// Resolve lib imports — load library files, extract function defs (and any
+/// graph nodes the lib happens to define) and register them into the parent
+/// workflow under a namespace prefix.
 ///
-/// Unlike flow imports, libs only extract functions without merging graph nodes/edges.
+/// Historically `libs:` only extracted functions while `flows:` also merged
+/// graph nodes — a distinction inherited from the `.jgflow` era when those
+/// were physically separate file types. Now that everything is `.jg`, that
+/// split has decayed into a footgun: authors of bundled tool libs end up
+/// defining `[registry]:` style nodes (essentially const lookup tables) and
+/// then can't reference them from the importing workflow. v0.2.21 unifies
+/// the semantics — a lib import is a strict superset, merging functions,
+/// classes, methods, AND any nodes / edges / switch routes the lib graph
+/// declares. Pure-function libraries are unaffected (their graph is empty,
+/// so the merge is a no-op).
 ///
 /// Namespace two-level priority (high -> low):
 /// 1. Explicit naming via object form (determined at parser stage, not in lib_auto_namespaces)
@@ -87,20 +97,8 @@ pub fn resolve_lib_imports(
                     clean_name.to_string()
                 };
 
-                for (func_name, func_def) in lib_graph.functions {
-                    let namespaced = format!("{}.{}", namespace, func_name);
-                    workflow.functions.insert(namespaced, func_def);
-                }
-                for (class_name, class_def) in lib_graph.classes {
-                    let namespaced = format!("{}.{}", namespace, class_name);
-                    workflow.classes.insert(namespaced, class_def);
-                }
-                for (type_name, method_name, func_def) in lib_graph.pending_methods {
-                    let namespaced_type = format!("{}.{}", namespace, type_name);
-                    workflow
-                        .pending_methods
-                        .push((namespaced_type, method_name, func_def));
-                }
+                merge_lib_symbols(workflow, &lib_graph, &namespace);
+                merge_subgraph(workflow, &lib_graph, &namespace, base_dir, at_base)?;
                 continue;
             }
         }
@@ -160,20 +158,9 @@ pub fn resolve_lib_imports(
                 pkg_name.clone()
             };
 
-            for (func_name, func_def) in lib_graph.functions {
-                let namespaced = format!("{}.{}", namespace, func_name);
-                workflow.functions.insert(namespaced, func_def);
-            }
-            for (class_name, class_def) in lib_graph.classes {
-                let namespaced = format!("{}.{}", namespace, class_name);
-                workflow.classes.insert(namespaced, class_def);
-            }
-            for (type_name, method_name, func_def) in lib_graph.pending_methods {
-                let namespaced_type = format!("{}.{}", namespace, type_name);
-                workflow
-                    .pending_methods
-                    .push((namespaced_type, method_name, func_def));
-            }
+            let pkg_base = canonical.parent().unwrap_or(Path::new("."));
+            merge_lib_symbols(workflow, &lib_graph, &namespace);
+            merge_subgraph(workflow, &lib_graph, &namespace, pkg_base, at_base)?;
 
             import_stack.pop();
             continue;
@@ -218,26 +205,41 @@ pub fn resolve_lib_imports(
         // Explicit naming via object form > filename stem (default for list form)
         let namespace = parser_namespace.clone();
 
-        // 6. Extract function defs, register to parent workflow with namespace prefix
-        for (func_name, func_def) in lib_graph.functions {
-            let namespaced = format!("{}.{}", namespace, func_name);
-            workflow.functions.insert(namespaced, func_def);
-        }
-        for (class_name, class_def) in lib_graph.classes {
-            let namespaced = format!("{}.{}", namespace, class_name);
-            workflow.classes.insert(namespaced, class_def);
-        }
-        for (type_name, method_name, func_def) in lib_graph.pending_methods {
-            let namespaced_type = format!("{}.{}", namespace, type_name);
-            workflow
-                .pending_methods
-                .push((namespaced_type, method_name, func_def));
-        }
+        // 6. Register symbols + merge any graph nodes the lib defines.
+        merge_lib_symbols(workflow, &lib_graph, &namespace);
+        merge_subgraph(workflow, &lib_graph, &namespace, lib_base_dir, at_base)?;
 
         import_stack.pop();
     }
 
     Ok(())
+}
+
+/// Register a lib's function / class / method symbols into the parent
+/// workflow under `namespace`. Companion to `merge_subgraph`, which handles
+/// graph-level state (nodes, edges, switch routes, pending edges, resource
+/// patterns, python imports). Called from every branch of
+/// `resolve_lib_imports` (stdlib, registry, local) so they all share one
+/// canonical merge path.
+fn merge_lib_symbols(
+    workflow: &mut WorkflowGraph,
+    lib_graph: &WorkflowGraph,
+    namespace: &str,
+) {
+    for (func_name, func_def) in lib_graph.functions.clone() {
+        let namespaced = format!("{}.{}", namespace, func_name);
+        workflow.functions.insert(namespaced, func_def);
+    }
+    for (class_name, class_def) in lib_graph.classes.clone() {
+        let namespaced = format!("{}.{}", namespace, class_name);
+        workflow.classes.insert(namespaced, class_def);
+    }
+    for (type_name, method_name, func_def) in lib_graph.pending_methods.clone() {
+        let namespaced_type = format!("{}.{}", namespace, type_name);
+        workflow
+            .pending_methods
+            .push((namespaced_type, method_name, func_def));
+    }
 }
 
 /// Resolve flow imports and merge sub-graphs into the parent workflow.
@@ -437,14 +439,14 @@ fn commit_pending_edges(workflow: &mut WorkflowGraph) -> Result<()> {
         let f_idx = *workflow.node_map.get(&f_id).ok_or_else(|| {
             anyhow!(
                 "Graph Error: Pending edge references undefined node '{}'. \
-                 Did you declare it in 'flows:' and define it in the imported workflow?",
+                 Did you declare it in 'libs:' / 'flows:' and define it in the imported file?",
                 f_id
             )
         })?;
         let t_idx = *workflow.node_map.get(&t_id).ok_or_else(|| {
             anyhow!(
                 "Graph Error: Pending edge references undefined node '{}'. \
-                 Did you declare it in 'flows:' and define it in the imported workflow?",
+                 Did you declare it in 'libs:' / 'flows:' and define it in the imported file?",
                 t_id
             )
         })?;
