@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.22] - 2026-04-27
+
+### Changed
+
+- Re-release of 0.2.21. The 0.2.21 tag's release pipeline failed in the CI Gate twice — first on `cargo fmt --check` drift inherited from the v0.2.20 main, then on `cargo clippy -- -D warnings` (4 `needless_borrow` errors in `adapters/wechat.rs` from the same drift). 0.2.22 is the same logic + a clean run; tags are immutable so we move forward by version rather than rewriting history. Picking up here means consumers should pin `>=0.2.22` for the libs/flows unification.
+
 ## [0.2.21] - 2026-04-27
 
 ### Changed
