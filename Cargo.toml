@@ -1,6 +1,6 @@
 [package]
 name = "juglans"
-version = "0.2.19"
+version = "0.2.20"
 edition = "2021"
 rust-version = "1.80"
 default-run = "juglans"
@@ -96,6 +96,8 @@ thiserror = "1.0"
 tower-lsp = "0.20"
 cron = "0.15"
 notify = "7"
+notify-debouncer-mini = "0.4"
+arc-swap = "1"
 enigo = { version = "0.3", optional = true }
 rdev = { version = "0.5", optional = true }
 xcap = { version = "0.8", optional = true }

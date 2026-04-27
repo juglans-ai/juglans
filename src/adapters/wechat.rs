@@ -16,7 +16,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
-use super::{run_agent_for_message, PlatformMessage};
+use super::{LocalDispatcher, MessageDispatcher, PlatformMessage};
 use crate::services::config::JuglansConfig;
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -119,11 +119,14 @@ struct GetConfigResp {
 
 // ── Login Result ─────────────────────────────────────────────────────────────
 
-struct LoginResult {
-    bot_token: String,
-    base_url: String,
-    account_id: String,
-    user_id: Option<String>,
+/// Output of a successful WeChat login (either fresh QR scan or restored from
+/// disk). Public so external orchestrators (juglans-wallet) can drive the
+/// login flow themselves and feed the result into [`message_loop`].
+pub struct LoginResult {
+    pub bot_token: String,
+    pub base_url: String,
+    pub account_id: String,
+    pub user_id: Option<String>,
 }
 
 // ── Account Persistence ──────────────────────────────────────────────────────
@@ -422,7 +425,11 @@ fn save_media_file(project_root: &Path, data: &[u8], filename: &str) -> Result<S
 
 // ── QR Login ─────────────────────────────────────────────────────────────────
 
-async fn qr_login(http: &reqwest::Client, workspace: &Path) -> Result<LoginResult> {
+/// Drive the iLink QR login flow: fetch the QR, write it to
+/// `<workspace>/.juglans/wechat/qr.pending.{txt,json}` so external observers
+/// can render it, and poll until the user confirms on their phone.
+/// Returns the resulting bot token / base URL / account id.
+pub async fn qr_login(http: &reqwest::Client, workspace: &Path) -> Result<LoginResult> {
     // Step 1: Get QR code
     let qr_url = format!(
         "{}ilink/bot/get_bot_qrcode?bot_type={}",
@@ -760,6 +767,38 @@ async fn extract_message(
 
 // ── Main Entry Point ─────────────────────────────────────────────────────────
 
+/// Returns a saved [`LoginResult`] if `<workspace>/.juglans/wechat/` already
+/// has an account file, otherwise drives a fresh QR login (writing the
+/// pending QR for external observers) and persists the result.
+pub async fn ensure_login(http: &reqwest::Client, workspace: &Path) -> Result<LoginResult> {
+    if let Some((id, data)) = load_account(workspace) {
+        info!("[wechat] Loaded saved account: {}", id);
+        return Ok(LoginResult {
+            account_id: id,
+            base_url: data.base_url,
+            bot_token: data.token,
+            user_id: data.user_id,
+        });
+    }
+    info!("[wechat] No saved account, starting QR login...");
+    let result = qr_login(http, workspace).await?;
+    let normalized_id = normalize_account_id(&result.account_id);
+    save_account(
+        workspace,
+        &normalized_id,
+        &AccountData {
+            token: result.bot_token.clone(),
+            base_url: result.base_url.clone(),
+            user_id: result.user_id.clone(),
+            saved_at: chrono::Utc::now().to_rfc3339(),
+        },
+    )?;
+    Ok(LoginResult {
+        account_id: normalized_id,
+        ..result
+    })
+}
+
 pub async fn start(
     config: JuglansConfig,
     workspace: PathBuf,
@@ -779,38 +818,44 @@ pub async fn start(
         .timeout(std::time::Duration::from_secs(60))
         .build()?;
 
-    // Try to load saved token, or do QR login
-    let (account_id, base_url, token) = match load_account(&workspace) {
-        Some((id, data)) => {
-            info!("[wechat] Loaded saved account: {}", id);
-            println!("📱 已恢复微信连接 (account: {})", id);
-            (id, data.base_url, data.token)
-        }
-        None => {
-            info!("[wechat] No saved account, starting QR login...");
-            println!("📱 微信 Bot 启动中...");
-            let result = qr_login(&http, &workspace).await?;
-            let normalized_id = normalize_account_id(&result.account_id);
+    let login = ensure_login(&http, &workspace).await?;
+    println!(
+        "📱 微信连接就绪 (account: {})",
+        login.account_id
+    );
+    let dispatcher: Arc<dyn MessageDispatcher> = Arc::new(LocalDispatcher {
+        config,
+        project_root: workspace.clone(),
+        agent_slug: agent_slug.clone(),
+    });
+    println!(
+        "🤖 微信 Bot 已启动 (agent: {}, account: {})",
+        agent_slug, login.account_id
+    );
+    message_loop(&http, &workspace, login, dispatcher).await
+}
 
-            save_account(
-                &workspace,
-                &normalized_id,
-                &AccountData {
-                    token: result.bot_token.clone(),
-                    base_url: result.base_url.clone(),
-                    user_id: result.user_id,
-                    saved_at: chrono::Utc::now().to_rfc3339(),
-                },
-            )?;
-
-            (normalized_id, result.base_url, result.bot_token)
-        }
-    };
+/// Long-poll iLink for new messages and dispatch each one through
+/// `dispatcher`. Reply text is sent back via the same iLink session. Runs
+/// forever; cancel by aborting the task. Both CLI mode (via [`start`]) and
+/// orchestrator mode (juglans-wallet's per-channel task) share this body.
+pub async fn message_loop(
+    http: &reqwest::Client,
+    workspace: &Path,
+    login: LoginResult,
+    dispatcher: Arc<dyn MessageDispatcher>,
+) -> Result<()> {
+    let LoginResult {
+        account_id,
+        base_url,
+        bot_token: token,
+        ..
+    } = login;
 
     let context_tokens: ContextTokenStore = Arc::new(RwLock::new(HashMap::new()));
 
     // Load saved sync_buf
-    let mut get_updates_buf = load_sync_buf(&workspace, &account_id).unwrap_or_default();
+    let mut get_updates_buf = load_sync_buf(workspace, &account_id).unwrap_or_default();
     if !get_updates_buf.is_empty() {
         info!(
             "[wechat] Resumed sync buf ({} bytes)",
@@ -821,14 +866,7 @@ pub async fn start(
     let mut next_timeout_ms = DEFAULT_LONG_POLL_TIMEOUT_MS;
     let mut consecutive_failures: u32 = 0;
 
-    info!(
-        "[wechat] Starting message loop: base_url={}, agent={}",
-        base_url, agent_slug
-    );
-    println!(
-        "🤖 微信 Bot 已启动 (agent: {}, account: {})",
-        agent_slug, account_id
-    );
+    info!("[wechat] Starting message loop: base_url={}", base_url);
 
     loop {
         let body = json!({
@@ -898,7 +936,7 @@ pub async fn start(
                 error!("[wechat] Session expired! Please re-login with `juglans bot wechat`");
                 // Delete saved account to force re-login next time
                 let account_path =
-                    wechat_state_dir(&workspace).join(format!("{}.json", account_id));
+                    wechat_state_dir(workspace).join(format!("{}.json", account_id));
                 let _ = fs::remove_file(&account_path);
                 return Err(anyhow!(
                     "WeChat session expired. Run `juglans bot wechat` to re-login."
@@ -925,7 +963,7 @@ pub async fn start(
         if let Some(ref buf) = updates.get_updates_buf {
             if !buf.is_empty() {
                 get_updates_buf = buf.clone();
-                let _ = save_sync_buf(&workspace, &account_id, buf);
+                let _ = save_sync_buf(workspace, &account_id, buf);
             }
         }
 
@@ -935,7 +973,7 @@ pub async fn start(
             let from_user_id = msg.from_user_id.as_deref().unwrap_or("");
 
             // Extract message content (text, voice-to-text, or media)
-            let extracted = extract_message(msg, &http, &workspace).await;
+            let extracted = extract_message(msg, http, workspace).await;
 
             if extracted.text.is_empty() && extracted.media_path.is_none() {
                 debug!("[wechat] Skipping empty message from {}", from_user_id);
@@ -990,16 +1028,13 @@ pub async fn start(
                 platform: "wechat".into(),
             };
 
-            let reply =
-                match run_agent_for_message(&config, &workspace, &agent_slug, &platform_msg, None)
-                    .await
-                {
-                    Ok(r) => r.text,
-                    Err(e) => {
-                        error!("[wechat] Workflow error: {}", e);
-                        format!("Error: {}", e)
-                    }
-                };
+            let reply = match dispatcher.dispatch(&platform_msg).await {
+                Ok(r) => r.text,
+                Err(e) => {
+                    error!("[wechat] Workflow error: {}", e);
+                    format!("Error: {}", e)
+                }
+            };
 
             // Send reply
             let context_token = {

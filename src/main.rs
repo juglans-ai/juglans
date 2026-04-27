@@ -463,13 +463,114 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
             let input_value: Option<serde_json::Value> =
                 resolve_input_data(cli)?.and_then(|s| serde_json::from_str(&s).ok());
 
-            let context = shared_executor_engine
-                .run_with_input(workflow_definition_obj, &local_config, input_value)
-                .await?;
+            // SSE mode streams every WorkflowEvent live (one `data:` line per
+            // event). Used by orchestrators like juglans-wallet that drive
+            // chat.jg over `docker run` and forward tokens to a UI as they
+            // arrive. The other formats keep their original "wait for the
+            // full run, then print the final output" behavior.
+            if cli.output_format == "sse" {
+                use crate::core::context::{WorkflowContext, WorkflowEvent};
 
-            // Output result based on format
-            match cli.output_format.as_str() {
-                "json" => {
+                let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<WorkflowEvent>();
+                let context_with_tx = WorkflowContext::with_sender(tx.clone());
+
+                if let Ok(config_value) = serde_json::to_value(&local_config) {
+                    let _ = context_with_tx.set("config".into(), config_value);
+                }
+                if let Some(ref input_val) = input_value {
+                    if let Some(obj) = input_val.as_object() {
+                        for (k, v) in obj {
+                            let _ = context_with_tx.set(format!("input.{}", k), v.clone());
+                        }
+                    }
+                    let _ = context_with_tx.set("input".into(), input_val.clone());
+                }
+
+                let exec_engine = shared_executor_engine.clone();
+                let wf = workflow_definition_obj.clone();
+                // Move the context into the spawn so the executor can write
+                // into it; we'll resolve `output` from the same context after
+                // execution finishes.
+                let final_ctx_handle: tokio::task::JoinHandle<
+                    Result<WorkflowContext>,
+                > = tokio::spawn(async move {
+                    let res = exec_engine.execute_graph(wf, &context_with_tx).await;
+                    drop(tx);
+                    res.map(|_| context_with_tx)
+                });
+
+                while let Some(event) = rx.recv().await {
+                    let payload = match event {
+                        WorkflowEvent::Token(t) => {
+                            serde_json::json!({"event": "token", "text": t})
+                        }
+                        WorkflowEvent::Status(s) => {
+                            serde_json::json!({"event": "status", "text": s})
+                        }
+                        WorkflowEvent::Error(e) => {
+                            serde_json::json!({"event": "error", "message": e})
+                        }
+                        WorkflowEvent::NodeStart(evt) => {
+                            serde_json::json!({
+                                "event": "node_start",
+                                "node_id": evt.node_id,
+                                "tool": evt.tool,
+                            })
+                        }
+                        WorkflowEvent::NodeComplete(evt) => {
+                            serde_json::json!({
+                                "event": "node_complete",
+                                "node_id": evt.node_id,
+                                "tool": evt.tool,
+                                "status": evt.status,
+                                "result": evt.result,
+                                "error": evt.error,
+                            })
+                        }
+                        // Other event variants (Yield, ToolCall, ToolStart,
+                        // ToolComplete, Meta) — coalesce into a single
+                        // generic event tag for orchestrators that don't
+                        // care; they can be split out later if needed.
+                        _ => serde_json::json!({"event": "raw"}),
+                    };
+                    println!("data: {}\n", serde_json::to_string(&payload).unwrap_or_default());
+                }
+
+                let final_output = match final_ctx_handle
+                    .await
+                    .unwrap_or_else(|e| Err(anyhow!("{e}")))
+                {
+                    Ok(ctx) => ctx
+                        .resolve_path("output")
+                        .ok()
+                        .flatten()
+                        .unwrap_or(serde_json::Value::Null),
+                    Err(e) => {
+                        println!(
+                            "data: {}\n",
+                            serde_json::to_string(&serde_json::json!({
+                                "event": "error",
+                                "message": e.to_string(),
+                            }))
+                            .unwrap_or_default()
+                        );
+                        serde_json::Value::Null
+                    }
+                };
+                println!(
+                    "data: {}\n",
+                    serde_json::to_string(&serde_json::json!({
+                        "event": "done",
+                        "output": final_output,
+                    }))
+                    .unwrap_or_default()
+                );
+            } else {
+                let context = shared_executor_engine
+                    .run_with_input(workflow_definition_obj, &local_config, input_value)
+                    .await?;
+
+                if cli.output_format == "json" {
                     let output = context
                         .resolve_path("output")
                         .ok()
@@ -477,21 +578,7 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
                         .unwrap_or(serde_json::Value::Null);
                     println!("{}", serde_json::to_string(&output)?);
                 }
-                "sse" => {
-                    let output = context
-                        .resolve_path("output")
-                        .ok()
-                        .flatten()
-                        .unwrap_or(serde_json::Value::Null);
-                    println!(
-                        "data: {}\n",
-                        serde_json::to_string(&serde_json::json!({
-                            "event": "done",
-                            "output": output
-                        }))?
-                    );
-                }
-                _ => {} // text: already printed by notify/chat during execution
+                // text: already printed by notify/chat during execution
             }
         }
 

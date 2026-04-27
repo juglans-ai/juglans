@@ -94,6 +94,13 @@ impl WorkflowExecutor {
         &self.builtin_registry
     }
 
+    /// Get a reference to the expression evaluator. Used by `juglans serve` to
+    /// pre-populate the class + function registries at cache-build time so hot
+    /// request paths skip the per-call init.
+    pub fn expr_eval(&self) -> &ExprEvaluator {
+        &self.expr_eval
+    }
+
     /// Load tool definitions from workflow patterns
     pub async fn load_tools(&mut self, workflow: &WorkflowGraph) {
         use crate::core::tool_loader::ToolLoader;
@@ -765,7 +772,7 @@ impl WorkflowExecutor {
 
                 if *parallel {
                     // Parallel foreach: spawn all iterations concurrently
-                    info!("│   Foreach parallel: {} iterations", array.len());
+                    debug!("│   Foreach parallel: {} iterations", array.len());
                     let mut tasks = vec![];
                     for (i, val) in array.iter().enumerate() {
                         let ctx_clone = context.fork();
@@ -816,7 +823,7 @@ impl WorkflowExecutor {
                 }
             }
             NodeType::Loop { condition, body } => {
-                info!(
+                debug!(
                     "  [Control] Entering while loop with condition: '{}'",
                     condition
                 );
@@ -829,7 +836,7 @@ impl WorkflowExecutor {
                         ));
                     }
                     if !self.evaluate_condition_async(condition, context).await? {
-                        info!("  [Control] Loop condition is false, exiting loop.");
+                        debug!("  [Control] Loop condition is false, exiting loop.");
                         break;
                     }
                     let body_arc = Arc::new(*body.clone());
@@ -1109,7 +1116,7 @@ impl WorkflowExecutor {
             return;
         }
 
-        info!(
+        debug!(
             "  -> Node [{}] is unreachable (skipping)",
             workflow.graph[node_idx].id
         );
@@ -1150,7 +1157,7 @@ impl WorkflowExecutor {
                         );
                     } else {
                         // Has normally-executed predecessors, add to queue
-                        info!(
+                        debug!(
                             "Node [{}] is now ready to run.",
                             workflow.graph[successor_idx].id
                         );
@@ -1174,7 +1181,7 @@ impl WorkflowExecutor {
                     node_id,
                     serde_json::to_string(output).unwrap_or_default()
                 );
-                info!("  ✅ Success");
+                debug!("  ✅ Success");
                 // `.ok()` instead of `.unwrap()` — the set can fail when
                 // a node is named "output" and ctx["output"] is already a
                 // non-object value from a prior node. Crashing here would
@@ -1184,7 +1191,7 @@ impl WorkflowExecutor {
             }
             Ok(None) => {
                 debug!("  [Output] No primary output for [{}].", node_id);
-                info!("  ✅ Success");
+                debug!("  ✅ Success");
                 let _ = context.set(format!("{}.output", node_id), Value::Null);
                 let _ = context.set("output".to_string(), Value::Null);
             }
@@ -1238,7 +1245,7 @@ impl WorkflowExecutor {
             None => String::new(),
         };
 
-        info!(
+        debug!(
             "  🔀 Switch on '{}' = '{}'",
             switch_route.subject, subject_str
         );
@@ -1256,7 +1263,7 @@ impl WorkflowExecutor {
         if let Some(degree) = degrees_guard.get_mut(&successor_idx) {
             *degree -= 1;
             if *degree == 0 {
-                info!(
+                debug!(
                     "Node [{}] is now ready to run.",
                     workflow.graph[successor_idx].id
                 );
@@ -1309,7 +1316,7 @@ impl WorkflowExecutor {
                 if let Some(ref case_value) = edge_info.switch_case {
                     if case_value == "__ok__" && node_succeeded && !switch_matched {
                         switch_matched = true;
-                        info!(
+                        debug!(
                             "  -> Switch ok, taking path to [{}]",
                             workflow.graph[successor_idx].id
                         );
@@ -1323,7 +1330,7 @@ impl WorkflowExecutor {
                         let case_kind = &case_value[6..case_value.len() - 2];
                         if error_kind.as_deref() == Some(case_kind) {
                             switch_matched = true;
-                            info!(
+                            debug!(
                                 "  -> Switch err \"{}\", taking path to [{}]",
                                 case_kind, workflow.graph[successor_idx].id
                             );
@@ -1344,7 +1351,7 @@ impl WorkflowExecutor {
                     if let Some(ref case_value) = edge_info.switch_case {
                         if case_value == "__err__" && !switch_matched {
                             switch_matched = true;
-                            info!(
+                            debug!(
                                 "  -> Switch err (catch-all), taking path to [{}]",
                                 workflow.graph[successor_idx].id
                             );
@@ -1373,7 +1380,7 @@ impl WorkflowExecutor {
             } else if edge_info.is_error_path {
                 if !node_succeeded {
                     proceed = true;
-                    info!(
+                    debug!(
                         "  -> Taking 'on error' path to [{}]",
                         workflow.graph[successor_idx].id
                     );
@@ -1384,7 +1391,7 @@ impl WorkflowExecutor {
                         if case_value == switch_value && !switch_matched {
                             proceed = true;
                             switch_matched = true;
-                            info!(
+                            debug!(
                                 "  -> Switch case '{}' matched, taking path to [{}]",
                                 case_value, workflow.graph[successor_idx].id
                             );
@@ -1400,14 +1407,14 @@ impl WorkflowExecutor {
                             .unwrap_or(false)
                         {
                             proceed = true;
-                            info!(
+                            debug!(
                                 "  -> Condition TRUE, taking path to [{}]",
                                 workflow.graph[successor_idx].id
                             );
                         }
                     } else {
                         proceed = true;
-                        info!(
+                        debug!(
                             "  -> Taking unconditional path to [{}]",
                             workflow.graph[successor_idx].id
                         );
@@ -1419,19 +1426,19 @@ impl WorkflowExecutor {
                         .unwrap_or(false)
                     {
                         proceed = true;
-                        info!(
+                        debug!(
                             "  -> Condition TRUE, taking path to [{}]",
                             workflow.graph[successor_idx].id
                         );
                     } else {
-                        info!(
+                        debug!(
                             "  -> Condition FALSE, skipping path to [{}]",
                             workflow.graph[successor_idx].id
                         );
                     }
                 } else {
                     proceed = true;
-                    info!(
+                    debug!(
                         "  -> Taking unconditional path to [{}]",
                         workflow.graph[successor_idx].id
                     );
@@ -1452,7 +1459,7 @@ impl WorkflowExecutor {
                     && !edge_info.is_error_path
                     && edge_info.condition.is_none()
                 {
-                    info!(
+                    debug!(
                         "  -> Switch default, taking path to [{}]",
                         workflow.graph[successor_idx].id
                     );
@@ -1477,7 +1484,7 @@ impl WorkflowExecutor {
                 .get(&func_name)
                 .ok_or_else(|| anyhow!("Function '{}' not found", func_name))?;
 
-            info!(
+            debug!(
                 "│ ⚡ Function [{}]({})",
                 func_name,
                 func_def
@@ -1598,7 +1605,7 @@ impl WorkflowExecutor {
                     let completed = completed_nodes.lock().unwrap().len();
                     if completed < total_nodes {
                         // Try to clean up unreachable nodes
-                        info!("Detecting unreachable nodes...");
+                        debug!("Detecting unreachable nodes...");
                         Self::cleanup_unreachable_nodes(
                             &workflow,
                             &in_degrees,
@@ -1608,7 +1615,7 @@ impl WorkflowExecutor {
 
                         // Check if new nodes were added to the queue
                         if ready_queue.lock().unwrap().is_empty() {
-                            info!("Workflow graph execution finished early/deadlocked. ({} / {} nodes ran)", completed, total_nodes);
+                            debug!("Workflow graph execution finished early/deadlocked. ({} / {} nodes ran)", completed, total_nodes);
                             break;
                         }
                         // Otherwise continue executing newly added nodes
@@ -1616,7 +1623,7 @@ impl WorkflowExecutor {
                     }
                     break;
                 }
-                info!(
+                debug!(
                     "--- Starting execution batch of {} parallel nodes ---",
                     current_batch.len()
                 );

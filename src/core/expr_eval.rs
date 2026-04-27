@@ -9,6 +9,7 @@ use anyhow::{anyhow, Result};
 use parking_lot::RwLock;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use super::expr_ast::{BinOp, Expr, FStringPart, UnaryOp};
@@ -35,6 +36,10 @@ pub struct ExprEvaluator {
     ast_cache: RwLock<HashMap<Arc<str>, Arc<Expr>>>,
     /// Workflow function registry: simple functions (output = expr) callable from expressions
     fn_registry: RwLock<HashMap<String, ExprFunction>>,
+    /// Set after the first `register_expr_functions` call — gates re-registration on hot paths.
+    /// `register_expr_functions` is idempotent for a given workflow, but used to take a write lock
+    /// on every `execute_graph` call, serializing all concurrent requests in `juglans serve`.
+    fn_registry_initialized: AtomicBool,
 }
 
 impl Default for ExprEvaluator {
@@ -49,18 +54,33 @@ impl ExprEvaluator {
             class_registry: RwLock::new(None),
             ast_cache: RwLock::new(HashMap::new()),
             fn_registry: RwLock::new(HashMap::new()),
+            fn_registry_initialized: AtomicBool::new(false),
         }
     }
 
-    /// Set class definition registry (called when workflow execution starts)
+    /// Set class definition registry. Idempotent: subsequent calls with the registry
+    /// already populated short-circuit on a read lock without contending the write lock.
     pub fn set_class_registry(&self, classes: Arc<ClassRegistry>) {
+        // Fast path: already set, skip the write lock entirely.
+        if self.class_registry.read().is_some() {
+            return;
+        }
         *self.class_registry.write() = Some(classes);
     }
 
     /// Register workflow functions that have simple bodies (output = expr).
     /// These become callable from expressions, bridging workflow functions and expression evaluation.
+    /// Idempotent: short-circuits on an atomic load after the first registration.
     pub fn register_expr_functions(&self, functions: &HashMap<String, FunctionDef>) {
+        // Fast path: already registered for this executor.
+        if self.fn_registry_initialized.load(Ordering::Acquire) {
+            return;
+        }
         let mut reg = self.fn_registry.write();
+        // Re-check after acquiring the lock — another thread may have raced us here.
+        if self.fn_registry_initialized.load(Ordering::Acquire) {
+            return;
+        }
         for (name, func_def) in functions {
             if let Some(expr_str) = Self::extract_simple_body(&func_def.body) {
                 reg.insert(
@@ -72,6 +92,7 @@ impl ExprEvaluator {
                 );
             }
         }
+        self.fn_registry_initialized.store(true, Ordering::Release);
     }
 
     /// Extract expression string from a simple function body (single set_context node with "output" key).

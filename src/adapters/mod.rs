@@ -49,6 +49,39 @@ pub trait ToolExecutor: Send + Sync {
     async fn execute(&self, tool_name: &str, args: Value) -> Result<String>;
 }
 
+/// Pluggable message dispatch. Default behavior is the in-process workflow
+/// runtime (see [`LocalDispatcher`]); orchestrator-style hosts (e.g.
+/// juglans-wallet) wrap their own dispatcher so a long-running adapter loop
+/// (`adapters::wechat::run_message_loop`, `adapters::telegram::start`, …)
+/// can route incoming messages to whichever agent the orchestrator picks
+/// without going through the public `run_agent_for_message` helper at all.
+#[async_trait::async_trait]
+pub trait MessageDispatcher: Send + Sync {
+    async fn dispatch(&self, message: &PlatformMessage) -> Result<BotReply>;
+}
+
+/// Default dispatcher: load the workflow file from disk and run it in-process.
+/// CLI-mode adapters use this; juglans-wallet supplies its own.
+pub struct LocalDispatcher {
+    pub config: JuglansConfig,
+    pub project_root: std::path::PathBuf,
+    pub agent_slug: String,
+}
+
+#[async_trait::async_trait]
+impl MessageDispatcher for LocalDispatcher {
+    async fn dispatch(&self, message: &PlatformMessage) -> Result<BotReply> {
+        run_agent_for_message(
+            &self.config,
+            &self.project_root,
+            &self.agent_slug,
+            message,
+            None,
+        )
+        .await
+    }
+}
+
 /// Reuse core logic from web_server handle_chat, without the SSE/HTTP parts:
 /// 1. Load agent -> create executor
 /// 2. Create WorkflowContext, set $input.message

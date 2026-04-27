@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.20] - 2026-04-27
+
+### Added
+
+- **Pluggable message dispatch for bot adapters** (`adapters::MessageDispatcher` trait + `adapters::LocalDispatcher`). External orchestrators (e.g. juglans-wallet) can now drive a bot adapter loop with their own dispatch logic — typical use case is "channel inbound message → look up which agent should answer in our DB → run that agent's workflow → return reply" — without going through the public `run_agent_for_message` helper. The trait is `async-trait`-flavored and `Send + Sync`, suitable for sharing across the adapter's polling task.
+- **`adapters::wechat` is now usable as a library, not just via `juglans bot wechat`.** `LoginResult`, `qr_login()`, `ensure_login()`, and `message_loop()` are all public. Splitting `start()` into a stage-1 login (`ensure_login`) and stage-2 dispatch loop (`message_loop` taking `Arc<dyn MessageDispatcher>`) lets host applications surface QR codes through their own UI and route inbound messages to whichever agent they pick at message time. The all-in-one `start()` is retained for CLI use.
+- **`juglans <file.jg> --output-format sse` streams events live.** Previously `--output-format sse` emitted a single terminal `data: {"event":"done", ...}` line after the workflow finished. The CLI now forwards every `WorkflowEvent` produced during execution: `token`, `status`, `node_start`, `node_complete`, `error`, plus the final `done`. Each is one `data: {...}\n\n` SSE line. Lets orchestrators that drive `juglans` as a subprocess forward token-by-token output to a UI without patching the CLI.
+
+### Performance
+
+- **Per-request lock contention in `juglans serve` removed.** `ExprEvaluator::set_class_registry` and `ExprEvaluator::register_expr_functions` were taking write locks on every `execute_graph` call, serializing concurrent requests behind two `parking_lot::RwLock` writes. Both are now idempotent with a fast read-only / atomic-load short-circuit; first call populates, subsequent calls are lock-free reads. Visible at concurrent serving load — previously, two simultaneous chat requests would block each other on registry init even when the registries were already populated.
+- **`juglans serve` cache hot-reload is now atomic and non-blocking.** The workflow cache is held behind `arc_swap::ArcSwap`; rebuilds happen in a background tokio task and atomically replace the live cache without taking a write lock on the serving path. Filesystem events go through `notify-debouncer-mini` so a burst of saves coalesces into a single rebuild, and rebuild failures preserve the previous cache instead of leaving the server with no routes.
+
+### Changed
+
+- Verbose `info!` logs in the foreach / loop / unreachable-node paths demoted to `debug!`. `juglans serve` under sustained load no longer floods stdout with per-iteration noise; the equivalent details are still available with `RUST_LOG=juglans=debug`.
+
+### Dependencies
+
+- Added `notify-debouncer-mini = "0.4"` and `arc-swap = "1"` for the `juglans serve` hot-reload refactor.
+
 ## [0.2.19] - 2026-04-26
 
 ### Fixed
