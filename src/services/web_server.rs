@@ -47,8 +47,7 @@ use crate::adapters::telegram::TelegramWebhookHandler;
 // --- File Watcher (hot-reload + cache invalidation) ---
 
 /// Extensions that should trigger a workflow cache rebuild.
-const CACHE_INVALIDATING_EXTS: &[&str] =
-    &["jg", "jgflow", "jgx", "jgprompt", "py"];
+const CACHE_INVALIDATING_EXTS: &[&str] = &["jg", "jgflow", "jgx", "jgprompt", "py"];
 
 /// Spawn the workspace watcher.
 ///
@@ -123,8 +122,7 @@ fn spawn_workspace_watcher(project_root: PathBuf, state: Arc<WebState>) {
                 let path = &ev.path;
 
                 // Watch juglans.toml specifically (config changes are rare but real).
-                let is_config = path.file_name().and_then(|n| n.to_str())
-                    == Some("juglans.toml");
+                let is_config = path.file_name().and_then(|n| n.to_str()) == Some("juglans.toml");
 
                 let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
                 let is_workflow_file = CACHE_INVALIDATING_EXTS.contains(&ext);
@@ -249,11 +247,7 @@ async fn build_cached_workflow(
         .unwrap_or_else(|_| serve_info.file_path.clone());
 
     let config = JuglansConfig::load().with_context(|| "load juglans.toml")?;
-    let at_base: Option<PathBuf> = config
-        .paths
-        .base
-        .as_ref()
-        .map(|b| project_root.join(b));
+    let at_base: Option<PathBuf> = config.paths.base.as_ref().map(|b| project_root.join(b));
 
     let mut import_stack = vec![wf_canonical.clone()];
     resolver::resolve_lib_imports(
@@ -278,10 +272,7 @@ async fn build_cached_workflow(
 
     let validation = WorkflowValidator::validate(&graph);
     if !validation.is_valid {
-        anyhow::bail!(
-            "workflow validation failed: {}",
-            validation.to_error_json()
-        );
+        anyhow::bail!("workflow validation failed: {}", validation.to_error_json());
     }
 
     let runtime: Arc<LocalRuntime> = Arc::new(LocalRuntime::new_with_config(&config.ai));
@@ -1111,7 +1102,11 @@ pub async fn start_web_server(
                 Some(Arc::new(ArcSwap::from_pointee(c)))
             }
             Err(e) => {
-                anyhow::bail!("Failed to compile serve() workflow {:?}: {:#}", info.file_path, e);
+                anyhow::bail!(
+                    "Failed to compile serve() workflow {:?}: {:#}",
+                    info.file_path,
+                    e
+                );
             }
         }
     } else {

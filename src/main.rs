@@ -491,13 +491,12 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
                 // Move the context into the spawn so the executor can write
                 // into it; we'll resolve `output` from the same context after
                 // execution finishes.
-                let final_ctx_handle: tokio::task::JoinHandle<
-                    Result<WorkflowContext>,
-                > = tokio::spawn(async move {
-                    let res = exec_engine.execute_graph(wf, &context_with_tx).await;
-                    drop(tx);
-                    res.map(|_| context_with_tx)
-                });
+                let final_ctx_handle: tokio::task::JoinHandle<Result<WorkflowContext>> =
+                    tokio::spawn(async move {
+                        let res = exec_engine.execute_graph(wf, &context_with_tx).await;
+                        drop(tx);
+                        res.map(|_| context_with_tx)
+                    });
 
                 while let Some(event) = rx.recv().await {
                     let payload = match event {
@@ -533,7 +532,10 @@ async fn handle_file_logic(cli: &Cli) -> Result<()> {
                         // care; they can be split out later if needed.
                         _ => serde_json::json!({"event": "raw"}),
                     };
-                    println!("data: {}\n", serde_json::to_string(&payload).unwrap_or_default());
+                    println!(
+                        "data: {}\n",
+                        serde_json::to_string(&payload).unwrap_or_default()
+                    );
                 }
 
                 let final_output = match final_ctx_handle

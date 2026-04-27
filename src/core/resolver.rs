@@ -221,11 +221,7 @@ pub fn resolve_lib_imports(
 /// patterns, python imports). Called from every branch of
 /// `resolve_lib_imports` (stdlib, registry, local) so they all share one
 /// canonical merge path.
-fn merge_lib_symbols(
-    workflow: &mut WorkflowGraph,
-    lib_graph: &WorkflowGraph,
-    namespace: &str,
-) {
+fn merge_lib_symbols(workflow: &mut WorkflowGraph, lib_graph: &WorkflowGraph, namespace: &str) {
     for (func_name, func_def) in lib_graph.functions.clone() {
         let namespaced = format!("{}.{}", namespace, func_name);
         workflow.functions.insert(namespaced, func_def);

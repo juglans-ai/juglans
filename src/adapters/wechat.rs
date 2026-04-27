@@ -819,10 +819,7 @@ pub async fn start(
         .build()?;
 
     let login = ensure_login(&http, &workspace).await?;
-    println!(
-        "📱 微信连接就绪 (account: {})",
-        login.account_id
-    );
+    println!("📱 微信连接就绪 (account: {})", login.account_id);
     let dispatcher: Arc<dyn MessageDispatcher> = Arc::new(LocalDispatcher {
         config,
         project_root: workspace.clone(),
@@ -935,8 +932,7 @@ pub async fn message_loop(
             if is_session_expired {
                 error!("[wechat] Session expired! Please re-login with `juglans bot wechat`");
                 // Delete saved account to force re-login next time
-                let account_path =
-                    wechat_state_dir(workspace).join(format!("{}.json", account_id));
+                let account_path = wechat_state_dir(workspace).join(format!("{}.json", account_id));
                 let _ = fs::remove_file(&account_path);
                 return Err(anyhow!(
                     "WeChat session expired. Run `juglans bot wechat` to re-login."
