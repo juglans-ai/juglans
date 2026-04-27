@@ -990,7 +990,7 @@ pub async fn message_loop(
             // Send typing indicator
             let context_token_for_typing = msg.context_token.as_deref();
             let typing_ticket = get_typing_ticket(
-                &http,
+                http,
                 &base_url,
                 &token,
                 from_user_id,
@@ -998,7 +998,7 @@ pub async fn message_loop(
             )
             .await;
             if let Some(ref ticket) = typing_ticket {
-                send_typing(&http, &base_url, &token, from_user_id, ticket, 1).await;
+                send_typing(http, &base_url, &token, from_user_id, ticket, 1).await;
             }
 
             // Build event_data with media info
@@ -1040,11 +1040,11 @@ pub async fn message_loop(
 
             // Cancel typing before sending reply
             if let Some(ref ticket) = typing_ticket {
-                send_typing(&http, &base_url, &token, from_user_id, ticket, 2).await;
+                send_typing(http, &base_url, &token, from_user_id, ticket, 2).await;
             }
 
             if let Err(e) = send_text_message(
-                &http,
+                http,
                 &base_url,
                 &token,
                 from_user_id,
