@@ -88,6 +88,72 @@ pub struct NodeCompleteEvent {
     pub error: Option<String>,
 }
 
+/// One streaming reply session. Created via `ChannelEgress::start_stream`
+/// when both the channel and the chat/reply call agree on streaming
+/// (channel can stream + workflow asked for stream + state is user-visible).
+/// The egress driver pushes tokens as they arrive on the workflow's event
+/// stream and finalizes when the speech node completes.
+#[cfg(not(target_arch = "wasm32"))]
+#[async_trait::async_trait]
+pub trait StreamHandle: Send + Sync {
+    /// Append a token to the stream. Idempotent on transport-level retries
+    /// is the channel impl's responsibility (e.g. TG editMessageText keeps
+    /// retrying with the same buffer; sendMessageDraft is server-side merged).
+    async fn push_token(&mut self, text: &str) -> Result<()>;
+    /// Finalize the stream — flush any debounce buffer and seal the message.
+    /// Called once on NodeComplete for the streaming chat/reply node.
+    async fn finalize(self: Box<Self>) -> Result<()>;
+}
+
+/// Egress side of a channel — split out of the full `Channel` trait (which
+/// lives in `adapters/mod.rs`) so `WorkflowContext` can carry an `Arc<dyn
+/// ChannelEgress>` without `core` depending on `adapters`. The full `Channel`
+/// trait inherits this; impls provide `send` (always) and optionally
+/// `start_stream`.
+#[cfg(not(target_arch = "wasm32"))]
+#[async_trait::async_trait]
+pub trait ChannelEgress: Send + Sync {
+    /// Push a message back to a conversation on this channel — batch / one-shot.
+    /// Default fails loudly so misrouted egress surfaces as a clear error.
+    async fn send(&self, _conversation: &str, _text: &str) -> Result<()> {
+        Err(anyhow!("channel does not support egress"))
+    }
+
+    /// Start a streaming reply session. Default: not supported — callers
+    /// should fall back to `send` at finalization. Channels that have a
+    /// native streaming primitive (Telegram `sendMessageDraft`, web SSE)
+    /// override this to return a real `StreamHandle`.
+    async fn start_stream(
+        &self,
+        _conversation: &str,
+    ) -> Result<Box<dyn StreamHandle>> {
+        Err(anyhow!("channel does not support streaming"))
+    }
+}
+
+/// Where a workflow run came from. Set on `WorkflowContext` by the channel
+/// that dispatched the inbound message; consumed by `reply()` and the channel
+/// egress driver to route replies back to that channel + conversation.
+///
+/// `None` on `WorkflowContext` means "no channel origin" — workflow was
+/// triggered by CLI run, scheduled job, or test harness. `reply()` falls back
+/// to writing to `reply.output` (and stdout for CLI) in that case.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone)]
+pub struct ChannelOrigin {
+    pub channel: Arc<dyn ChannelEgress>,
+    pub conversation: String,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl std::fmt::Debug for ChannelOrigin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChannelOrigin")
+            .field("conversation", &self.conversation)
+            .finish()
+    }
+}
+
 /// Real-time events during workflow execution
 pub enum WorkflowEvent {
     Token(String),
@@ -147,6 +213,11 @@ pub struct WorkflowContext {
     /// Typed variable shadow store: scalar variables stored as TypedSlot
     /// for zero-JSON-overhead reads. Dual-written alongside the JSON tree.
     typed_store: Arc<RwLock<HashMap<String, TypedSlot>>>,
+    /// Channel that dispatched this workflow run, if any. Set by the
+    /// dispatcher entry point; read by `reply()` and the channel egress
+    /// driver. `None` for CLI / scheduled / test invocations.
+    #[cfg(not(target_arch = "wasm32"))]
+    origin: Arc<RwLock<Option<ChannelOrigin>>>,
 }
 
 impl Default for WorkflowContext {
@@ -174,6 +245,8 @@ impl WorkflowContext {
             instance_arena: InstanceArena::new(),
             method_scopes: Arc::new(RwLock::new(Vec::new())),
             typed_store: Arc::new(RwLock::new(HashMap::new())),
+            #[cfg(not(target_arch = "wasm32"))]
+            origin: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -200,6 +273,7 @@ impl WorkflowContext {
             instance_arena: InstanceArena::new(),
             method_scopes: Arc::new(RwLock::new(Vec::new())),
             typed_store: Arc::new(RwLock::new(HashMap::new())),
+            origin: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -222,6 +296,8 @@ impl WorkflowContext {
             instance_arena: self.instance_arena.clone(),
             method_scopes: Arc::new(RwLock::new(Vec::new())),
             typed_store: Arc::new(RwLock::new(self.typed_store.read().clone())),
+            #[cfg(not(target_arch = "wasm32"))]
+            origin: self.origin.clone(),
         }
     }
 
@@ -481,6 +557,27 @@ impl WorkflowContext {
     /// Get the root workflow (top-level, never overwritten by sub-graph execution)
     pub fn get_root_workflow(&self) -> Option<Arc<WorkflowGraph>> {
         self.root_workflow.read().clone()
+    }
+
+    /// Set the channel origin for this run. Called by dispatchers when invoked
+    /// from a channel; idempotent — only sets once per context.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_origin(&self, origin: ChannelOrigin) {
+        let mut o = self.origin.write();
+        if o.is_none() {
+            *o = Some(origin);
+        }
+    }
+
+    /// Read the channel origin, if any. Used by `reply()` and the egress
+    /// driver to route replies back to the originating channel. The egress
+    /// driver currently consumes origin via the run_agent_for_message helper
+    /// which captures it at function entry; this accessor lands when phase 9
+    /// (workflow `reply(channel="...")` cross-channel addressing) plugs in.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(dead_code)]
+    pub fn origin(&self) -> Option<ChannelOrigin> {
+        self.origin.read().clone()
     }
 
     /// Set tool event verbosity level: 0=silent, 1=info, 2=verbose

@@ -53,7 +53,7 @@ In the era of AI agents, **how agents interact** — who talks to whom, in what 
 - **Topology-Preserving Composition** — `flows:` merges sub-graphs without losing structure
 - **Expression Language** — Python-like expressions with 100+ built-in functions
 - **Built-in AI** — `chat()` for LLM calls, `p()` for prompt rendering
-- **Bot adapters** — Telegram, Discord, Feishu, WeChat as one flag (`juglans bot <platform>`); inbound `chat_id` auto-injects for multi-turn memory
+- **Channels** — Telegram (polling or webhook), Discord, Feishu (event subscription / incoming webhook), WeChat all configured as `[channels.<kind>.<id>]` and run together by `juglans serve` in one process; inbound `chat_id` auto-injects for multi-turn memory; workflows write `reply()` / `chat()` and the runtime routes back to the originating channel automatically
 - **Platform messaging** — `telegram.send_message`, `discord.send_message`, `wechat.send_message`, `feishu.send_message` (and friends) — push from any node
 - **Conversation history** — JSONL / SQLite / memory backends, auto-loaded into `chat()` when `chat_id` is set
 - **HTTP Backend** — `serve()` + `response()` (and `@get` / `@post` decorators) turn workflows into APIs

@@ -66,18 +66,25 @@ base = "."
 DATABASE_URL = "postgresql://localhost/mydb"
 CUSTOM_VAR = "value"
 
-[bot.telegram]
-token = "bot_token_here"
+[channels.telegram.main]
+token = "${TELEGRAM_BOT_TOKEN}"
 agent = "default"
+# mode = "polling"   # auto-detected from server.endpoint_url; override here if needed
 
-[bot.feishu]
+[channels.feishu.events]
 app_id = "cli_xxx"
 app_secret = "secret"
 agent = "default"
-port = 9000
 base_url = "https://open.feishu.cn"
 
-[bot.wechat]
+[channels.feishu.alerts]              # egress-only: push to a Feishu group
+incoming_webhook_url = "https://open.feishu.cn/...hook/abc"
+
+[channels.wechat]                     # accounts auto-discovered from .juglans/wechat/
+agent = "default"
+
+[channels.discord.community]
+token = "${DISCORD_BOT_TOKEN}"
 agent = "default"
 
 [registry]
@@ -269,62 +276,101 @@ See [How to Use MCP Tools](../guide/use-mcp.md) for the full flow, including the
 
 ---
 
-## [bot]
+## [channels]
 
-Bot adapter configuration for messaging platforms.
+Per-instance configuration for chat-platform integrations. Format is `[channels.<kind>.<instance_id>]` — each subsection declares one named channel; multiple instances per platform are supported.
 
-### [bot.telegram]
+`juglans serve` reads this section, instantiates each entry as a `Channel`, and runs them all in one process: active ingress channels (long-poll, websocket) get tokio tasks; passive ingress channels (webhooks) mount HTTP routes on the shared axum router. Replies to the user route back through whichever channel triggered the workflow run, automatically — workflows just call `reply()` and the runtime routes through `ChannelOrigin`.
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `token` | string | | Telegram bot token |
-| `agent` | string | `"default"` | Agent slug to use |
+> Legacy `[bot.<kind>]` configuration was removed. Migrate by moving each section to `[channels.<kind>.<instance_id>]`.
 
-### [bot.feishu]
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `app_id` | string | | Feishu app ID (event subscription mode) |
-| `app_secret` | string | | Feishu app secret |
-| `webhook_url` | string | | Webhook URL (one-way push mode) |
-| `agent` | string | `"default"` | Agent slug to use |
-| `port` | u16 | `9000` | Webhook listener port |
-| `base_url` | string | `https://open.feishu.cn` | API base (`https://open.larksuite.com` for Lark) |
-| `approvers` | string[] | `[]` | Approver open_ids |
-
-### [bot.wechat]
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `agent` | string | `"default"` | Agent slug to use |
-
-### [bot.discord]
-
-Discord Gateway (WebSocket) adapter. Use `${VAR}` interpolation to pull the token from `.env` or the process environment; see [env_file](#env_file).
+### [channels.telegram.\<id\>]
 
 ```toml
-[bot.discord]
+[channels.telegram.main]
+token = "${TELEGRAM_BOT_TOKEN}"
+agent = "default"
+# mode = "polling"   # or "webhook" — auto-detected from server.endpoint_url
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `token` | string | | Telegram bot token. Required. |
+| `agent` | string | `"default"` | Agent slug / workflow name |
+| `mode` | string | `auto` | `"polling"`, `"webhook"`, or unset (auto: webhook iff `server.endpoint_url` is set) |
+
+When `mode = "webhook"`, the channel mounts `POST /webhook/telegram/<instance_id>` on the same axum server `juglans serve` is running. Streaming replies use `sendMessage` + debounced `editMessageText` (~1Hz); native `sendMessageDraft` (Bot API 9.5) is a future optimization.
+
+### [channels.feishu.\<id\>]
+
+A Feishu channel comes in two flavors — pick one per instance:
+
+**Event-subscription mode** (bidirectional). Requires `app_id` + `app_secret`. Mounts `POST /webhook/feishu/<instance_id>` for the platform to push events to; replies via Feishu OpenAPI.
+
+```toml
+[channels.feishu.events]
+app_id = "cli_xxx"
+app_secret = "secret"
+agent = "default"
+```
+
+**Incoming-webhook mode** (egress-only). Requires `incoming_webhook_url`. Pushes plain-text messages to the Feishu group bound to that URL. No ingress.
+
+```toml
+[channels.feishu.alerts]
+incoming_webhook_url = "https://open.feishu.cn/open-apis/bot/v2/hook/abc..."
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `app_id` | string | | Feishu app ID (event mode) |
+| `app_secret` | string | | Feishu app secret (event mode) |
+| `incoming_webhook_url` | string | | Incoming webhook URL (egress-only mode) |
+| `agent` | string | `"default"` | Agent slug to use (event mode) |
+| `base_url` | string | `https://open.feishu.cn` | API base (`https://open.larksuite.com` for Lark) |
+| `approvers` | string[] | `[]` | Approver `open_id`s — used by approval workflows |
+
+### [channels.wechat]
+
+WeChat is special: accounts are auto-discovered from `.juglans/wechat/<account_id>.json` files (created by QR-login flow). There's no per-instance subsection — config sets defaults that apply to every discovered account.
+
+```toml
+[channels.wechat]
+agent = "default"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `agent` | string | `"default"` | Agent slug used for every discovered account |
+
+If no accounts are persisted yet, `juglans serve` runs the QR-login flow to bring up the first one (writes the QR payload to `.juglans/wechat/qr.pending.txt` for external observers).
+
+### [channels.discord.\<id\>]
+
+Discord Gateway (WebSocket). Use `${VAR}` interpolation to pull the token from env (see [env_file](#env_file)).
+
+```toml
+[channels.discord.community]
 token = "${DISCORD_BOT_TOKEN}"
 agent = "main"
-# Optional — defaults below are enabled if omitted
 intents = ["guilds", "guild_messages", "message_content", "direct_messages"]
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `token` | string | | Discord bot token. Required. |
-| `agent` | string | `"default"` | Agent slug / workflow name to dispatch messages to |
+| `agent` | string | `"default"` | Agent slug / workflow name |
 | `intents` | string[] | `[guilds, guild_messages, message_content, direct_messages]` | Gateway intent names (see [Discord docs](https://discord.com/developers/docs/topics/gateway#gateway-intents)) |
 | `intents_bitmask` | u64 | | Raw intents bitmask — wins over `intents` when set |
-| `dm_policy` | string | | *Reserved for v2 — parsed but not enforced.* Warned at startup if set. |
-| `group_policy` | string | | *Reserved for v2.* |
-| `guilds` | string[] | `[]` | *Reserved for v2 — guild allowlist.* |
+| `dm_policy` | string | | *Reserved — parsed but not enforced; warns at startup if set.* |
+| `group_policy` | string | | *Reserved.* |
+| `guilds` | string[] | `[]` | *Reserved — guild allowlist.* |
 
-**Privileged intents.** `message_content` is a privileged intent — enable "MESSAGE CONTENT INTENT" in the [Discord Developer Portal](https://discord.com/developers/applications) under your bot's **Bot** tab, otherwise the gateway will reject the connection with close code 4014 and a helpful error.
+**Privileged intents.** `message_content` is a privileged intent — enable "MESSAGE CONTENT INTENT" in the [Discord Developer Portal](https://discord.com/developers/applications), otherwise the gateway closes with code 4014.
 
-**Deployment.** Discord uses a persistent WebSocket. Serverless platforms that suspend idle containers (Lambda, Cloud Run with min-instances=0, etc.) are not suitable — run the adapter on a long-lived host. `juglans serve` auto-starts the Discord adapter when `[bot.discord]` is present.
+**Deployment.** Persistent WebSocket — serverless platforms that suspend idle containers don't fit. Run on a long-lived host.
 
-**Session resume.** The adapter persists session state at `.juglans/discord/gateway.json` so restarts can resume close to where they left off without triggering a fresh `Identify`.
+**Session resume.** Adapter persists session state at `.juglans/discord/gateway.json` so restarts resume without a fresh `Identify`.
 
 ---
 
@@ -384,7 +430,7 @@ To publish packages, set `JUGLANS_REGISTRY_API_KEY` (or `REGISTRY_API_KEY`) in y
 | `JUGLANS_HISTORY_BACKEND` / `JUGLANS_HISTORY_DIR` / `JUGLANS_HISTORY_PATH` / `JUGLANS_HISTORY_MAX_MESSAGES` / `JUGLANS_HISTORY_MAX_TOKENS` / `JUGLANS_HISTORY_ENABLED` | Override `[history]` section fields |
 | `JUGLANS_REGISTRY_API_KEY` / `REGISTRY_API_KEY` | Package registry credential for `juglans publish` |
 | `SERVER_HOST` / `SERVER_PORT` | Override `[server]` host/port |
-| `TELEGRAM_BOT_TOKEN` / `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | Bot adapter overrides — if `[bot.telegram]` / `[bot.feishu]` is absent from `juglans.toml`, setting these env vars creates those sections automatically (handy for serverless / container deployments) |
+| `TELEGRAM_BOT_TOKEN` / `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | Channel overrides — when set, juglans synthesizes a `[channels.telegram.default]` / `[channels.feishu.default]` instance even if `juglans.toml` doesn't declare one (handy for serverless / container deployments) |
 
 ---
 

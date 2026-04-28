@@ -16,7 +16,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
-use super::{LocalDispatcher, MessageDispatcher, PlatformMessage};
+use super::{Channel, MessageDispatcher, PlatformMessage};
 use crate::services::config::JuglansConfig;
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -122,6 +122,7 @@ struct GetConfigResp {
 /// Output of a successful WeChat login (either fresh QR scan or restored from
 /// disk). Public so external orchestrators (juglans-wallet) can drive the
 /// login flow themselves and feed the result into [`message_loop`].
+#[derive(Clone)]
 pub struct LoginResult {
     pub bot_token: String,
     pub base_url: String,
@@ -158,34 +159,56 @@ fn save_account(project_root: &Path, account_id: &str, data: &AccountData) -> Re
 }
 
 fn load_account(project_root: &Path) -> Option<(String, AccountData)> {
+    list_accounts(project_root).into_iter().next()
+}
+
+/// Scan the wechat state dir and return every persisted account.
+///
+/// Each `<account_id>.json` (excluding `*.sync.json` and `*.context.json`) is one
+/// logged-in WeChat session. Returned in alphabetical order by account_id so
+/// startup is deterministic.
+fn list_accounts(project_root: &Path) -> Vec<(String, AccountData)> {
     let dir = wechat_state_dir(project_root);
     if !dir.exists() {
-        return None;
+        return Vec::new();
     }
-    // Find the first .json account file
-    let entries = fs::read_dir(&dir).ok()?;
+    let entries = match fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+    let mut accounts: Vec<(String, AccountData)> = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("json")
-            && !path
-                .file_name()
-                .and_then(|f| f.to_str())
-                .map(|f| f.contains("sync") || f.contains("context"))
-                .unwrap_or(false)
-        {
-            if let Ok(content) = fs::read_to_string(&path) {
-                if let Ok(data) = serde_json::from_str::<AccountData>(&content) {
-                    let account_id = path
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("unknown")
-                        .to_string();
-                    return Some((account_id, data));
-                }
-            }
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
         }
+        let file_name = match path.file_name().and_then(|f| f.to_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+        // Skip sidecar files (sync_buf, context tokens, qr.pending, etc.)
+        if file_name.contains(".sync.")
+            || file_name.contains(".context.")
+            || file_name.starts_with("qr.")
+        {
+            continue;
+        }
+        let content = match fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let data: AccountData = match serde_json::from_str(&content) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        let account_id = match path.file_stem().and_then(|s| s.to_str()) {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        accounts.push((account_id, data));
     }
-    None
+    accounts.sort_by(|a, b| a.0.cmp(&b.0));
+    accounts
 }
 
 fn save_sync_buf(project_root: &Path, account_id: &str, buf: &str) -> Result<()> {
@@ -799,37 +822,138 @@ pub async fn ensure_login(http: &reqwest::Client, workspace: &Path) -> Result<Lo
     })
 }
 
-pub async fn start(
-    config: JuglansConfig,
+/// One WeChat ingress instance — exactly one persisted account.
+///
+/// Implements [`Channel`]: the long-poll loop is owned by `run()`, the
+/// orchestrator (or `start()`) decides how many to spawn. WeChat with three
+/// logged-in accounts produces three `WechatChannel` instances.
+pub struct WechatChannel {
+    id: String,
+    http: reqwest::Client,
     workspace: PathBuf,
-    agent_slug: Option<String>,
-) -> Result<()> {
-    let agent_slug = agent_slug
-        .or_else(|| {
-            config
-                .bot
-                .as_ref()
-                .and_then(|b| b.wechat.as_ref())
-                .map(|w| w.agent.clone())
-        })
+    login: tokio::sync::Mutex<Option<LoginResult>>,
+}
+
+impl WechatChannel {
+    pub fn new(http: reqwest::Client, workspace: PathBuf, login: LoginResult) -> Self {
+        let id = format!("wechat:{}", login.account_id);
+        Self {
+            id,
+            http,
+            workspace,
+            login: tokio::sync::Mutex::new(Some(login)),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl Channel for WechatChannel {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn kind(&self) -> &str {
+        "wechat"
+    }
+
+    async fn run(self: Arc<Self>, dispatcher: Arc<dyn MessageDispatcher>) -> Result<()> {
+        // `LoginResult` has fields the inner loop moves out of; we hand it over
+        // exactly once. A second call to `run()` would find `None` and bail —
+        // not a constraint we exercise today (Channels are single-shot) but
+        // worth being explicit about.
+        let login = self
+            .login
+            .lock()
+            .await
+            .take()
+            .ok_or_else(|| anyhow!("WechatChannel::run already consumed for {}", self.id))?;
+        let account_id = login.account_id.clone();
+        // Re-bind login so ChannelEgress::send can reach it.
+        *self.login.lock().await = Some(login.clone());
+        info!("[wechat] {} starting message loop", account_id);
+        // Wrap so `reply()` inside the workflow routes back through this
+        // channel via the egress driver.
+        let dispatcher = Arc::new(super::OriginAwareDispatcher::new(
+            self.clone(),
+            dispatcher,
+        )) as Arc<dyn MessageDispatcher>;
+        let result = message_loop(&self.http, &self.workspace, login, dispatcher).await;
+        match &result {
+            Ok(()) => info!("[wechat] {} loop exited cleanly", account_id),
+            Err(e) => error!("[wechat] {} loop exited: {:#}", account_id, e),
+        }
+        result
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::core::context::ChannelEgress for WechatChannel {
+    async fn send(&self, conversation: &str, text: &str) -> Result<()> {
+        // Reuse the same iLink path the message_loop uses to reply to inbound
+        // messages. `conversation` is the WeChat user/group id; `context_token`
+        // is unset because cross-message replies don't have a thread anchor.
+        let login = self.login.lock().await;
+        let (token, base_url) = match login.as_ref() {
+            Some(l) => (l.bot_token.clone(), l.base_url.clone()),
+            None => return Err(anyhow!("WechatChannel: no login bound; call run() first")),
+        };
+        drop(login);
+        send_text_message(&self.http, &base_url, &token, conversation, text, None).await
+    }
+}
+
+/// Discover every persisted WeChat account under `workspace` and wrap each one
+/// in a [`WechatChannel`]. If no accounts are persisted, drives the QR login
+/// flow once to bring up the first one.
+///
+/// Each entry is paired with the agent slug to use for that channel. WeChat
+/// can't carry a per-account agent in disk state, so all accounts share the
+/// same agent — taken from `[channels.wechat].agent` or `[bot.wechat].agent`,
+/// falling back to `"default"`.
+pub async fn discover_channels(
+    http: &reqwest::Client,
+    workspace: &Path,
+    config: &JuglansConfig,
+) -> Result<Vec<(Arc<WechatChannel>, String)>> {
+    let agent = config
+        .channels
+        .wechat
+        .as_ref()
+        .map(|c| c.agent.clone())
         .unwrap_or_else(|| "default".to_string());
 
-    let http = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .build()?;
-
-    let login = ensure_login(&http, &workspace).await?;
-    println!("📱 微信连接就绪 (account: {})", login.account_id);
-    let dispatcher: Arc<dyn MessageDispatcher> = Arc::new(LocalDispatcher {
-        config,
-        project_root: workspace.clone(),
-        agent_slug: agent_slug.clone(),
-    });
-    println!(
-        "🤖 微信 Bot 已启动 (agent: {}, account: {})",
-        agent_slug, login.account_id
-    );
-    message_loop(&http, &workspace, login, dispatcher).await
+    let mut accounts = list_accounts(workspace);
+    if accounts.is_empty() {
+        let login = ensure_login(http, workspace).await?;
+        accounts.push((
+            login.account_id.clone(),
+            AccountData {
+                token: login.bot_token.clone(),
+                base_url: login.base_url.clone(),
+                user_id: login.user_id.clone(),
+                saved_at: chrono::Utc::now().to_rfc3339(),
+            },
+        ));
+    }
+    Ok(accounts
+        .into_iter()
+        .map(|(account_id, data)| {
+            let login = LoginResult {
+                account_id,
+                bot_token: data.token,
+                base_url: data.base_url,
+                user_id: data.user_id,
+            };
+            (
+                Arc::new(WechatChannel::new(
+                    http.clone(),
+                    workspace.to_path_buf(),
+                    login,
+                )),
+                agent.clone(),
+            )
+        })
+        .collect())
 }
 
 /// Long-poll iLink for new messages and dispatch each one through

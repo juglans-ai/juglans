@@ -38,7 +38,7 @@ POST /api/workflows/my-flow/execute
 
 **HTTP handler (serve()):** The web server pre-injects `input.method`, `input.path`, `input.query`, `input.body`, `input.headers`, `input.path_parts` (array split on `/`), and `input.route` (`"METHOD /path"`).
 
-**Bot adapters (Telegram / Discord / Feishu / WeChat):** Each adapter pre-injects:
+**Channels (Telegram / Discord / Feishu / WeChat):** Every channel pre-injects:
 
 - `input.platform` — `"telegram"` / `"discord"` / `"feishu"` / `"wechat"`
 - `input.platform_chat_id` — raw platform target id (chat / channel / user). **Used as the auto-resolved target by the `<platform>.send_message` builtins** when no explicit target is passed.

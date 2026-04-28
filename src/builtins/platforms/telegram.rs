@@ -14,13 +14,16 @@ use std::collections::HashMap;
 
 fn load_token() -> Result<String> {
     let config = JuglansConfig::load().map_err(|e| anyhow!("load config: {}", e))?;
+    // Pick the first telegram channel's token. When point 9 (per-channel reply
+    // routing in the workflow `reply()` builtin) lands, this should accept an
+    // explicit `channel="telegram:beta"` parameter and resolve to that token.
     config
-        .bot
-        .as_ref()
-        .and_then(|b| b.telegram.as_ref())
+        .channels
+        .telegram
+        .values()
         .map(|t| t.token.clone())
-        .filter(|t| !t.is_empty())
-        .ok_or_else(|| anyhow!("Missing [bot.telegram].token in juglans.toml"))
+        .find(|t| !t.is_empty())
+        .ok_or_else(|| anyhow!("No telegram token configured ([channels.telegram.<id>].token)"))
 }
 
 fn param_str<'a>(params: &'a HashMap<String, String>, key: &str) -> Option<&'a str> {

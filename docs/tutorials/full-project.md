@@ -239,30 +239,28 @@ Expected output (example):
 [chat] Hey! I'm doing well, thanks for asking. How can I help you today?
 ```
 
-## 9.7 Deploying as a Bot
+## 9.7 Deploying as a Channel
 
-The same `main.jg` runs unchanged on any chat platform. Add a `[bot.<platform>]` block to `juglans.toml`:
+The same `main.jg` runs unchanged on any chat platform. Add a `[channels.<kind>.<id>]` block to `juglans.toml`:
 
 ```toml
-[bot.telegram]
+[channels.telegram.main]
 token = "${TELEGRAM_BOT_TOKEN}"
 agent = "main"
 
 # Or:
-# [bot.discord]
+# [channels.discord.community]
 # token = "${DISCORD_BOT_TOKEN}"
 # agent = "main"
 ```
 
-Then start the adapter:
+Then start the unified server — runs the HTTP API plus every configured channel in one process:
 
 ```bash
-juglans bot telegram        # or: juglans bot discord
-# or, to run web API + bot in one process:
 juglans serve
 ```
 
-The adapter injects `input.text` (the user's message) and `input.platform_chat_id` (the chat or channel id) before calling the workflow. Because `input.chat_id` is auto-namespaced as `telegram:{chat_id}:main`, the conversation history layer keeps each user's thread separate.
+The channel injects `input.text` (the user's message) and `input.platform_chat_id` (the chat or channel id) before calling the workflow, and stamps a `ChannelOrigin` on the run so `reply()` automatically routes back through Telegram. `input.chat_id` is auto-namespaced as `telegram:{chat_id}:main`, keeping each user's history thread separate.
 
 If you'd rather send the reply explicitly (e.g. for richer formatting, or because the response isn't an LLM output), call the platform's `send_message` builtin:
 

@@ -30,8 +30,7 @@ juglans <COMMAND> [OPTIONS]
 | `juglans check` | Validate file syntax |
 | `juglans web` | Start local development web server |
 | `juglans whoami` | Show account and config info |
-| `juglans serve` | Start unified server (web API + all configured bot adapters) |
-| `juglans bot` | Start bot adapter (Telegram, Feishu, WeChat, Discord) |
+| `juglans serve` | Start unified server (web API + every configured channel) |
 | `juglans chat` | Launch interactive chat TUI |
 | `juglans test` | Run tests (test_* nodes in .jg files) |
 | `juglans doctest` | Validate code snippets in markdown docs |
@@ -228,7 +227,7 @@ juglans whoami -v
 
 ## serve
 
-Start the unified server: runs the web API plus every bot adapter that uses long-poll / Gateway transport (Telegram, WeChat, Discord) in a single process. Feishu uses webhook transport — start it via `juglans bot feishu` or expose `/webhook/feishu` from this same web server when `[bot.feishu]` is configured.
+The single entry point that runs the HTTP API plus every channel configured under `[channels.*]` — Telegram bots (polling or webhook), WeChat accounts (auto-discovered), Discord gateways, Feishu event subscriptions, and Feishu incoming webhooks — in one process. Active channels (long-poll, websocket) get a tokio task each; passive channels (webhooks) mount their routes on the shared axum router.
 
 ```bash
 juglans serve [OPTIONS]
@@ -248,38 +247,18 @@ juglans serve --port 8080 --host 0.0.0.0
 juglans serve --entry src/api.jg
 ```
 
+A single channel failure (token expired, network down) is logged and that task exits — other channels keep running. Per-channel `agent` lets different bots route to different workflows; the orchestrator caches one dispatcher per unique agent slug. See [`[channels.*]`](./config.md#channels) for instance-level config.
+
 ---
 
-## bot
+## bot (removed)
 
-Start a single bot adapter for a messaging platform.
+`juglans bot <platform>` has been removed. Every channel runs through `juglans serve` now. To migrate:
 
-```bash
-juglans bot <PLATFORM> [OPTIONS]
-```
+1. Move `[bot.telegram]` / `[bot.feishu]` / `[bot.wechat]` / `[bot.discord]` config to `[channels.<kind>.<id>]` form (see [config docs](./config.md#channels)).
+2. Replace `juglans bot <platform>` invocations with `juglans serve`.
 
-**Arguments:**
-
-| Name | Description |
-|--------|-------------|
-| `PLATFORM` | `telegram`, `feishu` (alias `lark`), `wechat` (alias `weixin`), or `discord` |
-
-**Options:**
-
-| Option | Description |
-|--------|-------------|
-| `--agent <SLUG>` | Agent slug (overrides config default) |
-| `--port <PORT>` | Webhook port (Feishu only — WeChat uses long-poll, Telegram uses long-poll/webhook separately, Discord uses a persistent Gateway WebSocket with no port) |
-
-**Examples:**
-
-```bash
-juglans bot telegram
-juglans bot feishu --agent trader --port 9000
-juglans bot lark --agent trader            # 'lark' is a Feishu alias
-juglans bot wechat
-juglans bot discord                        # requires [bot.discord] in juglans.toml
-```
+The command exits with an error message pointing here.
 
 ---
 

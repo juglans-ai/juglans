@@ -158,7 +158,7 @@ src/
 
 Note: the `src/` layout is a convention, not enforced — Juglans will execute any `.jg` file in any directory. Fork the [starter template](https://github.com/juglans-ai/juglans-template) to get this structure ready to go.
 
-Other commands you'll use often: `juglans check` validates workflows before running, `juglans test` runs workflow tests, and `juglans serve` exposes workflows as an HTTP API plus auto-starts any configured bot adapter (Telegram / Discord / Feishu / WeChat).
+Other commands you'll use often: `juglans check` validates workflows before running, `juglans test` runs workflow tests, and `juglans serve` exposes workflows as an HTTP API plus auto-starts every configured channel (Telegram / Discord / Feishu / WeChat).
 
 ## Step 7: Add an AI Call (optional)
 
@@ -184,7 +184,7 @@ juglans hello.jg --input '{"question": "What is Rust good for?"}'
 
 You should see a one-paragraph answer. From here you can:
 
-- Turn this into a Telegram / Discord bot with `[bot.<platform>]` in `juglans.toml` and `juglans bot <platform>` — see [Connect AI Models](../guide/connect-ai.md).
+- Turn this into a Telegram / Discord chat by adding `[channels.<kind>.<id>]` to `juglans.toml` and running `juglans serve` — see [Connect AI Models](../guide/connect-ai.md).
 - Push outbound notifications using `telegram.send_message` / `discord.send_message` / `wechat.send_message` / `feishu.send_message`.
 - Add multi-turn memory automatically via `[history]` config (loads per `chat_id`).
 

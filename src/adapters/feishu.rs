@@ -2,31 +2,17 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use anyhow::Result;
-use axum::{extract::Extension, response::IntoResponse, routing::post, Json, Router};
+use axum::Json;
 use dashmap::DashSet;
-use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tracing::{error, info, warn};
 
-use super::{run_agent_for_message, PlatformMessage, ToolExecutor};
+use super::{
+    run_agent_for_message, Channel, MessageDispatcher, PlatformMessage, ToolExecutor,
+};
 use crate::services::config::JuglansConfig;
-
-/// Feishu Bot shared state
-struct FeishuState {
-    config: JuglansConfig,
-    project_root: PathBuf,
-    agent_slug: String,
-    app_id: String,
-    app_secret: String,
-    /// API base URL (https://open.feishu.cn or https://open.larksuite.com)
-    base_url: String,
-    /// Cached tenant_access_token
-    access_token: Mutex<Option<(String, std::time::Instant)>>,
-    /// Set of processed event IDs (Feishu at-least-once deduplication)
-    processed_events: DashSet<String>,
-}
 
 /// Feishu platform tool executor -- invokes bill_utils.py via Python subprocess
 struct FeishuToolExecutor {
@@ -40,38 +26,13 @@ struct FeishuToolExecutor {
 }
 
 impl FeishuToolExecutor {
-    fn from_state(state: &FeishuState) -> Self {
-        let bot_config = state.config.bot.as_ref().and_then(|b| b.feishu.as_ref());
-        let approvers = bot_config.map(|c| c.approvers.clone()).unwrap_or_default();
-
-        Self {
-            project_root: state.project_root.clone(),
-            app_id: state.app_id.clone(),
-            app_secret: state.app_secret.clone(),
-            base_url: state.base_url.clone(),
-            approvers,
-            platform_chat_id: String::new(),
-            platform_user_id: String::new(),
-        }
-    }
-
-    fn with_message(state: &FeishuState, msg: &PlatformMessage) -> Self {
-        let mut executor = Self::from_state(state);
-        executor.platform_chat_id = msg.platform_chat_id.clone();
-        executor.platform_user_id = msg.platform_user_id.clone();
-        executor
-    }
-
     fn from_handler(handler: &FeishuWebhookHandler, msg: &PlatformMessage) -> Self {
-        let bot_config = handler.config.bot.as_ref().and_then(|b| b.feishu.as_ref());
-        let approvers = bot_config.map(|c| c.approvers.clone()).unwrap_or_default();
-
         Self {
             project_root: handler.project_root.clone(),
             app_id: handler.app_id.clone(),
             app_secret: handler.app_secret.clone(),
             base_url: handler.base_url.clone(),
-            approvers,
+            approvers: handler.approvers.clone(),
             platform_chat_id: msg.platform_chat_id.clone(),
             platform_user_id: msg.platform_user_id.clone(),
         }
@@ -171,33 +132,37 @@ pub struct FeishuWebhookHandler {
     app_id: String,
     app_secret: String,
     base_url: String,
+    approvers: Vec<String>,
     access_token: Mutex<Option<(String, std::time::Instant)>>,
     processed_events: DashSet<String>,
 }
 
 impl FeishuWebhookHandler {
-    /// Create from JuglansConfig; returns Some if Feishu config is complete
-    pub fn from_config(config: &JuglansConfig, project_root: &Path) -> Option<Self> {
-        let bot_config = config.bot.as_ref()?.feishu.as_ref()?;
-        let app_id = bot_config.app_id.clone()?;
-        let app_secret = bot_config.app_secret.clone()?;
-        let base_url = bot_config.base_url.clone();
-        let agent_slug = bot_config.agent.clone();
-
-        Some(Self {
-            config: config.clone(),
-            project_root: project_root.to_path_buf(),
-            agent_slug,
-            app_id,
-            app_secret,
-            base_url,
-            access_token: Mutex::new(None),
-            processed_events: DashSet::new(),
-        })
+    /// Handle Feishu webhook request body, return JSON response
+    /// Variant that threads a channel egress reference so workflow `reply()`
+    /// calls route back through the channel system. The plain `handle_event`
+    /// stays as the no-origin fallback for legacy paths.
+    pub async fn handle_event_with_channel(
+        &self,
+        body: Value,
+        channel: Arc<dyn crate::core::context::ChannelEgress>,
+    ) -> Value {
+        self.handle_event_inner(body, Some(channel)).await
     }
 
-    /// Handle Feishu webhook request body, return JSON response
+    /// No-origin fallback for callers that don't have a `Channel` reference
+    /// (e.g. juglans-wallet's external orchestration). The channel-aware path
+    /// goes through [`handle_event_with_channel`].
+    #[allow(dead_code)]
     pub async fn handle_event(&self, body: Value) -> Value {
+        self.handle_event_inner(body, None).await
+    }
+
+    async fn handle_event_inner(
+        &self,
+        body: Value,
+        channel: Option<Arc<dyn crate::core::context::ChannelEgress>>,
+    ) -> Value {
         // URL verification challenge
         if let Some(challenge) = body["challenge"].as_str() {
             info!("[Feishu Webhook] URL verification challenge");
@@ -225,7 +190,7 @@ impl FeishuWebhookHandler {
                 if let Some(event) = body.get("event") {
                     let event = event.clone();
                     // Reuse handle_message logic
-                    if let Err(e) = self.handle_message(&event).await {
+                    if let Err(e) = self.handle_message(&event, channel.clone()).await {
                         error!("[Feishu Webhook] Message handling failed: {}", e);
                     }
                 }
@@ -243,8 +208,14 @@ impl FeishuWebhookHandler {
         }
     }
 
-    /// Handle message event (reuses run_agent_for_message logic)
-    async fn handle_message(&self, event: &Value) -> Result<()> {
+    /// Handle message event (reuses run_agent_for_message logic).
+    /// `channel`, if present, becomes the run's `ChannelOrigin` so `reply()`
+    /// calls inside the workflow round-trip back via Feishu OpenAPI.
+    async fn handle_message(
+        &self,
+        event: &Value,
+        channel: Option<Arc<dyn crate::core::context::ChannelEgress>>,
+    ) -> Result<()> {
         let message = event
             .get("message")
             .ok_or_else(|| anyhow::anyhow!("No message in event"))?;
@@ -306,6 +277,10 @@ impl FeishuWebhookHandler {
             platform: "feishu".into(),
         };
 
+        let origin = channel.as_ref().map(|ch| crate::core::context::ChannelOrigin {
+            channel: ch.clone(),
+            conversation: chat_id.clone(),
+        });
         let result = {
             let tool_executor = FeishuToolExecutor::from_handler(self, &platform_msg);
             run_agent_for_message(
@@ -314,6 +289,7 @@ impl FeishuWebhookHandler {
                 &self.agent_slug,
                 &platform_msg,
                 Some(&tool_executor),
+                origin,
             )
             .await
         };
@@ -349,173 +325,8 @@ impl FeishuWebhookHandler {
     }
 }
 
-/// Feishu event push payload
-#[derive(Deserialize)]
-struct FeishuEventPayload {
-    /// Challenge for URL verification
-    challenge: Option<String>,
-    /// Event header
-    header: Option<FeishuHeader>,
-    /// Event content
-    event: Option<Value>,
-}
-
-#[derive(Deserialize)]
-struct FeishuHeader {
-    event_type: Option<String>,
-    event_id: Option<String>,
-}
-
-/// Start Feishu Bot (auto-selects mode)
-pub async fn start(
-    config: JuglansConfig,
-    project_root: PathBuf,
-    agent_slug: String,
-    port: u16,
-) -> Result<()> {
-    let bot_config = config
-        .bot
-        .as_ref()
-        .and_then(|b| b.feishu.as_ref())
-        .ok_or_else(|| anyhow::anyhow!("Missing [bot.feishu] config in juglans.toml"))?;
-
-    // Extract early to avoid borrow conflicts
-    let webhook_url = bot_config.webhook_url.clone();
-    let has_app_credentials = bot_config.app_id.is_some() && bot_config.app_secret.is_some();
-    let _ = bot_config;
-
-    if let Some(url) = webhook_url {
-        start_webhook_mode(config, project_root, agent_slug, url).await
-    } else if has_app_credentials {
-        start_event_mode(config, project_root, agent_slug, port).await
-    } else {
-        Err(anyhow::anyhow!(
-            "[bot.feishu] requires webhook_url or (app_id + app_secret)"
-        ))
-    }
-}
-
-/// Webhook mode: interactive REPL + Feishu group push
-async fn start_webhook_mode(
-    config: JuglansConfig,
-    project_root: PathBuf,
-    agent_slug: String,
-    webhook_url: String,
-) -> Result<()> {
-    info!("🤖 Starting Feishu Bot (webhook mode)...");
-    info!("   Agent: {}", agent_slug);
-    info!(
-        "   Webhook: {}...{}",
-        &webhook_url[..40.min(webhook_url.len())],
-        ""
-    );
-    info!("   Type messages below. Replies will be sent to Feishu group.");
-    println!();
-
-    let stdin = std::io::stdin();
-    let mut input = String::new();
-
-    loop {
-        print!("📤 > ");
-        std::io::Write::flush(&mut std::io::stdout())?;
-        input.clear();
-        if stdin.read_line(&mut input)? == 0 {
-            break;
-        }
-        let text = input.trim();
-        if text.is_empty() {
-            continue;
-        }
-        if text == "exit" || text == "quit" {
-            break;
-        }
-
-        let msg = PlatformMessage {
-            event_type: "message".into(),
-            event_data: json!({ "text": text }),
-            platform_user_id: "cli".to_string(),
-            platform_chat_id: "cli".to_string(),
-            text: text.to_string(),
-            username: None,
-            platform: "feishu".into(),
-        };
-
-        match run_agent_for_message(&config, &project_root, &agent_slug, &msg, None).await {
-            Ok(reply) => {
-                println!("💬 {}", reply.text);
-                // Push to Feishu group
-                if let Err(e) = send_webhook(&webhook_url, &reply.text).await {
-                    warn!("⚠️  Webhook send failed: {}", e);
-                } else {
-                    info!("✅ Sent to Feishu group");
-                }
-            }
-            Err(e) => {
-                error!("❌ Agent error: {}", e);
-            }
-        }
-        println!();
-    }
-
-    Ok(())
-}
-
-/// Event subscription mode: starts HTTP server to receive Feishu events
-async fn start_event_mode(
-    config: JuglansConfig,
-    project_root: PathBuf,
-    agent_slug: String,
-    port: u16,
-) -> Result<()> {
-    let bot_config = config
-        .bot
-        .as_ref()
-        .and_then(|b| b.feishu.as_ref())
-        .ok_or_else(|| anyhow::anyhow!("Missing [bot.feishu] config"))?;
-
-    let app_id = bot_config
-        .app_id
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("[bot.feishu] event mode requires app_id"))?;
-    let app_secret = bot_config
-        .app_secret
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("[bot.feishu] event mode requires app_secret"))?;
-    let base_url = bot_config.base_url.clone();
-
-    info!("🤖 Starting Feishu Bot (event subscription mode)...");
-    info!("   Agent: {}", agent_slug);
-    info!("   App ID: {}", app_id);
-    info!("   API Base: {}", base_url);
-    info!("   Mode: local execution");
-
-    let state = Arc::new(FeishuState {
-        config,
-        project_root,
-        agent_slug,
-        app_id,
-        app_secret,
-        base_url,
-        access_token: Mutex::new(None),
-        processed_events: DashSet::new(),
-    });
-
-    let app = Router::new()
-        .route("/feishu/event", post(handle_feishu_event))
-        .layer(Extension(state));
-
-    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
-    info!("   Listening on: http://0.0.0.0:{}", port);
-    info!("   Webhook URL: http://<your-domain>:{}/feishu/event", port);
-    info!("   Ready! Configure this URL in Feishu Open Platform.");
-
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
-
-    Ok(())
-}
-
 /// Send message to Feishu group via webhook URL (custom bot)
+#[allow(dead_code)] // wired up by point 9 (workflow reply(channel=...))
 pub async fn send_webhook(webhook_url: &str, text: &str) -> Result<()> {
     let client = reqwest::Client::new();
 
@@ -543,240 +354,6 @@ pub async fn send_webhook(webhook_url: &str, text: &str) -> Result<()> {
 }
 
 /// Send rich text message via webhook (Markdown-style post message)
-pub async fn _send_webhook_rich(
-    webhook_url: &str,
-    title: &str,
-    content_lines: Vec<Vec<Value>>,
-) -> Result<()> {
-    let client = reqwest::Client::new();
-
-    let resp = client
-        .post(webhook_url)
-        .json(&json!({
-            "msg_type": "post",
-            "content": {
-                "post": {
-                    "zh_cn": {
-                        "title": title,
-                        "content": content_lines
-                    }
-                }
-            }
-        }))
-        .send()
-        .await?;
-
-    let body: Value = resp.json().await.unwrap_or(json!({}));
-    if body["code"].as_i64() != Some(0) {
-        warn!("[Feishu Webhook] Rich message send failed: {:?}", body);
-    }
-
-    Ok(())
-}
-
-/// Handle Feishu event push
-async fn handle_feishu_event(
-    Extension(state): Extension<Arc<FeishuState>>,
-    Json(payload): Json<FeishuEventPayload>,
-) -> impl IntoResponse {
-    // 1. URL verification (challenge verification when configuring callback URL on Feishu Open Platform)
-    if let Some(challenge) = payload.challenge {
-        info!("[Feishu] URL verification challenge received");
-        return Json(json!({ "challenge": challenge }));
-    }
-
-    // 2. Handle event
-    let event_type = payload
-        .header
-        .as_ref()
-        .and_then(|h| h.event_type.as_deref())
-        .unwrap_or("");
-
-    let event_id = payload
-        .header
-        .as_ref()
-        .and_then(|h| h.event_id.clone())
-        .unwrap_or_default();
-
-    // Feishu event deduplication (at-least-once delivery)
-    if !event_id.is_empty() && !state.processed_events.insert(event_id.clone()) {
-        info!("[Feishu] Duplicate event {}, skipping", event_id);
-        return Json(json!({"code": 0, "msg": "duplicate"}));
-    }
-
-    match event_type {
-        "im.message.receive_v1" => {
-            // Message event
-            if let Some(event) = payload.event {
-                let state = state.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = handle_message_event(&state, &event).await {
-                        error!("[Feishu] Failed to handle message: {}", e);
-                    }
-                });
-            }
-        }
-        "card.action.trigger" => {
-            // Card button callback event: synchronously execute workflow, return updated card in callback response
-            // (PATCH API is ineffective during card.action.trigger callback; card must be returned in the response)
-            if let Some(event) = payload.event {
-                let result = handle_card_action_event(&state, &event).await;
-                return match result {
-                    Ok(reply_text) => {
-                        // Try to parse reply as card JSON (handle_card_action returns card_json)
-                        match serde_json::from_str::<Value>(&reply_text) {
-                            Ok(card) if card.get("header").is_some() => {
-                                // Valid card JSON: return updated card directly in callback response
-                                Json(json!({
-                                    "toast": { "type": "success", "content": "Processed" },
-                                    "card": { "type": "raw", "data": card }
-                                }))
-                            }
-                            _ => {
-                                // Non-card content (e.g. error message), return toast only
-                                Json(json!({
-                                    "toast": {
-                                        "type": "info",
-                                        "content": if reply_text.is_empty() || reply_text == "(No response)" {
-                                            "Processed".to_string()
-                                        } else {
-                                            reply_text
-                                        }
-                                    }
-                                }))
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        error!("[Feishu Card] Error: {}", e);
-                        Json(json!({
-                            "toast": { "type": "error", "content": format!("Processing failed: {}", e) }
-                        }))
-                    }
-                };
-            }
-            return Json(json!({ "toast": { "type": "error", "content": "Invalid event" } }));
-        }
-        _ => {
-            warn!(
-                "[Feishu] Unhandled event type: {} (id: {})",
-                event_type, event_id
-            );
-        }
-    }
-
-    Json(json!({ "code": 0, "msg": "ok" }))
-}
-
-/// Handle Feishu message event
-async fn handle_message_event(state: &FeishuState, event: &Value) -> Result<()> {
-    let message = event
-        .get("message")
-        .ok_or_else(|| anyhow::anyhow!("No message in event"))?;
-
-    // Extract message content
-    let msg_type = message["message_type"].as_str().unwrap_or("");
-    if msg_type != "text" {
-        info!("[Feishu] Skipping non-text message (type: {})", msg_type);
-        return Ok(());
-    }
-
-    let content_str = message["content"].as_str().unwrap_or("{}");
-    let content: Value = serde_json::from_str(content_str).unwrap_or(json!({}));
-    let raw_text = content["text"].as_str().unwrap_or("");
-
-    // Clean up @mention placeholders (e.g. @_user_1), keep actual user message
-    let text = raw_text
-        .split_whitespace()
-        .filter(|s| !s.starts_with("@_user_"))
-        .collect::<Vec<_>>()
-        .join(" ")
-        .trim()
-        .to_string();
-
-    if text.is_empty() {
-        return Ok(());
-    }
-
-    let chat_id = message["chat_id"].as_str().unwrap_or("").to_string();
-    let chat_type = message["chat_type"].as_str().unwrap_or("unknown");
-    let empty = json!({});
-    let sender = event.get("sender").unwrap_or(&empty);
-    let sender_id = sender["sender_id"]["open_id"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-
-    info!(
-        "📩 [Feishu] User {} (chat_type: {}, chat_id: {}): {}",
-        sender_id,
-        chat_type,
-        chat_id,
-        if text.chars().count() > 50 {
-            &text[..text
-                .char_indices()
-                .nth(50)
-                .map(|(i, _)| i)
-                .unwrap_or(text.len())]
-        } else {
-            &text
-        }
-    );
-
-    let platform_msg = PlatformMessage {
-        event_type: "message".into(),
-        event_data: json!({ "text": &text }),
-        platform_user_id: sender_id,
-        platform_chat_id: chat_id.clone(),
-        text,
-        username: None,
-        platform: "feishu".into(),
-    };
-
-    // Execute agent locally
-    let result = {
-        let tool_executor = FeishuToolExecutor::with_message(state, &platform_msg);
-        run_agent_for_message(
-            &state.config,
-            &state.project_root,
-            &state.agent_slug,
-            &platform_msg,
-            Some(&tool_executor),
-        )
-        .await
-    };
-
-    match result {
-        Ok(reply) => {
-            if !reply.text.is_empty() && reply.text != "(No response)" {
-                let token = get_access_token(
-                    &state.app_id,
-                    &state.app_secret,
-                    &state.base_url,
-                    &state.access_token,
-                )
-                .await?;
-                send_feishu_message(&token, &chat_id, &reply.text, &state.base_url).await?;
-            }
-        }
-        Err(e) => {
-            error!("[Feishu] Agent error: {}", e);
-            let token = get_access_token(
-                &state.app_id,
-                &state.app_secret,
-                &state.base_url,
-                &state.access_token,
-            )
-            .await?;
-            send_feishu_message(&token, &chat_id, &format!("Error: {}", e), &state.base_url)
-                .await?;
-        }
-    }
-
-    Ok(())
-}
-
-/// Get Feishu tenant_access_token (with caching)
 async fn get_access_token(
     app_id: &str,
     app_secret: &str,
@@ -867,59 +444,149 @@ async fn send_feishu_message(token: &str, chat_id: &str, text: &str, base_url: &
     Ok(())
 }
 
-/// Handle Feishu card button callback event (card.action.trigger)
+// ======================================================================
+// Channel impls — uniform Channel API over the Feishu adapters
+// ======================================================================
+
+/// Bidirectional Feishu event-subscription channel. Mounts a POST route at
+/// `/webhook/feishu/<instance_id>` that the Feishu Open Platform pushes events
+/// to; sends replies via Feishu OpenAPI (`im/v1/messages`).
 ///
-/// Builds a standardized event envelope and routes through the workflow.
-/// The workflow uses switch $input.event_type to route to Python direct calls.
-async fn handle_card_action_event(state: &FeishuState, event: &Value) -> Result<String> {
-    let action_value = event
-        .pointer("/action/value")
-        .ok_or_else(|| anyhow::anyhow!("No action.value in card event"))?;
+/// Backed by the existing [`FeishuWebhookHandler`] state; the channel layer
+/// adds route mounting and `Channel`-trait conformance.
+pub struct FeishuEventChannel {
+    id: String,
+    instance_id: String,
+    handler: Arc<FeishuWebhookHandler>,
+}
 
-    let operator_id = event
-        .pointer("/operator/open_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-
-    let chat_id = event
-        .pointer("/context/open_chat_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-
-    let action_str = serde_json::to_string(action_value).unwrap_or_default();
-
-    info!(
-        "🔘 [Feishu Card] Action from user {}: {}",
-        operator_id, action_str
-    );
-
-    // Standardized event envelope
-    let platform_msg = PlatformMessage {
-        event_type: "card_action".into(),
-        event_data: action_value.clone(),
-        platform_user_id: operator_id.to_string(),
-        platform_chat_id: chat_id.to_string(),
-        text: String::new(),
-        username: None,
-        platform: "feishu".into(),
-    };
-
-    // Route through workflow (workflow switch routes to Python direct calls)
-    let tool_executor = FeishuToolExecutor::with_message(state, &platform_msg);
-    let reply = run_agent_for_message(
-        &state.config,
-        &state.project_root,
-        &state.agent_slug,
-        &platform_msg,
-        Some(&tool_executor),
-    )
-    .await?;
-
-    // Try to parse as card JSON
-    if let Ok(card) = serde_json::from_str::<Value>(&reply.text) {
-        if card.get("header").is_some() {
-            return Ok(reply.text);
+impl FeishuEventChannel {
+    pub fn new(instance_id: String, handler: FeishuWebhookHandler) -> Self {
+        Self {
+            id: format!("feishu:{}", instance_id),
+            instance_id,
+            handler: Arc::new(handler),
         }
     }
-    Ok(reply.text)
+}
+
+#[async_trait::async_trait]
+impl crate::core::context::ChannelEgress for FeishuEventChannel {
+    async fn send(&self, conversation: &str, text: &str) -> Result<()> {
+        let token = get_access_token(
+            &self.handler.app_id,
+            &self.handler.app_secret,
+            &self.handler.base_url,
+            &self.handler.access_token,
+        )
+        .await?;
+        send_feishu_message(&token, conversation, text, &self.handler.base_url).await
+    }
+}
+
+#[async_trait::async_trait]
+impl Channel for FeishuEventChannel {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn kind(&self) -> &str {
+        "feishu"
+    }
+
+    fn install_routes(
+        self: Arc<Self>,
+        router: axum::Router,
+        _dispatcher: Arc<dyn MessageDispatcher>,
+    ) -> axum::Router {
+        let path = format!("/webhook/feishu/{}", self.instance_id);
+        let handler = self.handler.clone();
+        // Carry self as the channel egress so messages dispatched via this
+        // route get a ChannelOrigin pointing back through Feishu OpenAPI.
+        let channel: Arc<dyn crate::core::context::ChannelEgress> = self.clone();
+        router.route(
+            &path,
+            axum::routing::post(move |Json(body): Json<Value>| {
+                let handler = handler.clone();
+                let channel = channel.clone();
+                async move { Json(handler.handle_event_with_channel(body, channel).await) }
+            }),
+        )
+    }
+}
+
+/// Egress-only Feishu channel: pushes plain-text messages to a Feishu group via
+/// an incoming-webhook URL bound to that group. No ingress; `conversation` is
+/// ignored because the URL itself selects the destination.
+pub struct FeishuWebhookChannel {
+    id: String,
+    #[allow(dead_code)] // read in `send` (currently uncallable until point 9)
+    webhook_url: String,
+}
+
+impl FeishuWebhookChannel {
+    pub fn new(instance_id: String, webhook_url: String) -> Self {
+        Self {
+            id: format!("feishu-webhook:{}", instance_id),
+            webhook_url,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::core::context::ChannelEgress for FeishuWebhookChannel {
+    async fn send(&self, _conversation: &str, text: &str) -> Result<()> {
+        send_webhook(&self.webhook_url, text).await
+    }
+}
+
+#[async_trait::async_trait]
+impl Channel for FeishuWebhookChannel {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn kind(&self) -> &str {
+        "feishu"
+    }
+}
+
+/// Discover Feishu channels from `[channels.feishu.<id>]`. Each entry produces
+/// either an event channel (when `app_id` + `app_secret` are set) or a webhook
+/// channel (when `incoming_webhook_url` is set), or both if you want both
+/// directions registered separately.
+pub fn discover_channels(
+    config: &JuglansConfig,
+    project_root: &Path,
+) -> Vec<(Arc<dyn Channel>, String)> {
+    let mut out: Vec<(Arc<dyn Channel>, String)> = Vec::new();
+    for (instance_id, cfg) in &config.channels.feishu {
+        let agent = cfg.agent.clone();
+
+        if cfg.app_id.is_some() && cfg.app_secret.is_some() {
+            let handler = FeishuWebhookHandler {
+                config: config.clone(),
+                project_root: project_root.to_path_buf(),
+                agent_slug: agent.clone(),
+                app_id: cfg.app_id.clone().unwrap_or_default(),
+                app_secret: cfg.app_secret.clone().unwrap_or_default(),
+                base_url: cfg.base_url.clone(),
+                approvers: cfg.approvers.clone(),
+                access_token: Mutex::new(None),
+                processed_events: DashSet::new(),
+            };
+            let channel: Arc<dyn Channel> =
+                Arc::new(FeishuEventChannel::new(instance_id.clone(), handler));
+            out.push((channel, agent.clone()));
+        }
+
+        if let Some(url) = cfg.incoming_webhook_url.clone() {
+            if !url.is_empty() {
+                let channel: Arc<dyn Channel> =
+                    Arc::new(FeishuWebhookChannel::new(instance_id.clone(), url));
+                out.push((channel, agent));
+            }
+        }
+    }
+    out
 }

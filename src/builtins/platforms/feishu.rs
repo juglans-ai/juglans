@@ -20,22 +20,25 @@ fn param_str<'a>(params: &'a HashMap<String, String>, key: &str) -> Option<&'a s
     params.get(key).map(|s| s.trim_matches('"'))
 }
 
-/// Load `[bot.feishu]` + ensure app_id/app_secret are present.
+/// Load Feishu OpenAPI credentials from the first event-mode channel.
 fn load_feishu() -> Result<(String, String, String)> {
     let config = JuglansConfig::load().map_err(|e| anyhow!("load config: {}", e))?;
     let feishu = config
-        .bot
-        .as_ref()
-        .and_then(|b| b.feishu.as_ref())
-        .ok_or_else(|| anyhow!("Missing [bot.feishu] config in juglans.toml"))?;
+        .channels
+        .feishu
+        .values()
+        .find(|c| c.app_id.is_some() && c.app_secret.is_some())
+        .ok_or_else(|| {
+            anyhow!("No Feishu event channel configured (need [channels.feishu.<id>] with app_id + app_secret)")
+        })?;
     let app_id = feishu
         .app_id
         .clone()
-        .ok_or_else(|| anyhow!("Missing [bot.feishu].app_id"))?;
+        .ok_or_else(|| anyhow!("Missing app_id"))?;
     let app_secret = feishu
         .app_secret
         .clone()
-        .ok_or_else(|| anyhow!("Missing [bot.feishu].app_secret"))?;
+        .ok_or_else(|| anyhow!("Missing app_secret"))?;
     let base_url = feishu.base_url.clone();
     Ok((app_id, app_secret, base_url))
 }
@@ -213,19 +216,19 @@ impl Tool for SendWebhook {
             .ok_or_else(|| anyhow!("feishu.send_webhook: missing `message`"))?
             .to_string();
 
-        // webhook_url: param → config.bot.feishu.webhook_url
+        // webhook_url: param → first [channels.feishu.<id>] with incoming_webhook_url
         let webhook_url = if let Some(u) = param_str(params, "webhook_url") {
             u.to_string()
         } else {
             let config = JuglansConfig::load().map_err(|e| anyhow!("load config: {}", e))?;
             config
-                .bot
-                .as_ref()
-                .and_then(|b| b.feishu.as_ref())
-                .and_then(|f| f.webhook_url.clone())
+                .channels
+                .feishu
+                .values()
+                .find_map(|f| f.incoming_webhook_url.clone())
                 .ok_or_else(|| {
                     anyhow!(
-                        "feishu.send_webhook: no webhook URL — pass `webhook_url=` or set `[bot.feishu].webhook_url`"
+                        "feishu.send_webhook: no webhook URL — pass `webhook_url=` or set `[channels.feishu.<id>].incoming_webhook_url`"
                     )
                 })?
         };

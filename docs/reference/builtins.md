@@ -18,7 +18,8 @@ Conduct a conversation with an AI agent.
 | `system_prompt` | string | No | - | Override agent's system prompt |
 | `temperature` | number | No | - | Override agent's sampling temperature |
 | `format` | string | No | `"text"` | Output format: `"text"` or `"json"` |
-| `state` | string | No | `"context_visible"` | Message state — controls persistence + streaming (see below) |
+| `state` | string | No | `"context_visible"` | Visibility / persistence (see below). Hidden + silent states never reach the user regardless of `stream` |
+| `stream` | bool | No | `true` | Streaming hint passed to the channel egress. Visible-state nodes stream live where the channel supports it (Telegram debounced edits; web SSE per-token); pass `false` to force batch delivery (one final message). Ignored when `state` is `context_hidden` / `silent`. Channels without streaming support (WeChat, Discord, Feishu) always batch — `stream` is a no-op there |
 | `chat_id` | string | No | resolved | Conversation thread key for history auto-load / append (see resolution order below) |
 | `history` | string | No | - | Explicit history override: a JSON array of `{role, content}` that supersedes auto-loading |
 | `input` | JSON | No | - | Structured inputs passed to the agent's prompt template (available as `{{ input.* }}`) |
@@ -44,7 +45,7 @@ Composite syntax: `state="input_state:output_state"` controls input and output i
 **`chat_id` resolution** — when `chat_id` isn't passed explicitly, it falls back through:
 
 1. `reply.chat_id` — chained from a prior `chat()` in the same run
-2. `input.chat_id` — injected by bot adapters as `"{platform}:{user_id}:{agent_slug}"`
+2. `input.chat_id` — injected by channels as `"{platform}:{user_id}:{agent_slug}"`
 3. None — the call is stateless; history is not loaded or saved
 
 Pass `chat_id=""` to explicitly force a stateless call. Pass `state="silent"` or `state="display_only"` to skip just the persistence half while keeping the `chat_id` resolved (useful for ephemeral diagnostic messages).
@@ -216,21 +217,20 @@ Delay execution for a specified duration.
 
 ### reply()
 
-Return a text message directly without calling an AI model. Supports state control and SSE streaming, identical to `chat()` state semantics.
+Return a text message directly without calling an AI model. The runtime routes the output back through the channel that triggered the run (`ChannelOrigin`) — so the same `[welcome]: reply(message="Hello")` works on Telegram, WeChat, Discord, Feishu, web SSE, and CLI without any platform-specific dispatch.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `message` | string | No | `""` | Text to return |
-| `state` | string | No | `"context_visible"` | Message state (same as `chat()` state) |
+| `state` | string | No | `"context_visible"` | Visibility / persistence — same semantics as [`chat()`'s state](#chat) |
+| `stream` | bool | No | `true` | Streaming hint — same semantics as [`chat()`'s stream](#chat). For `reply()` (literal text, no token-by-token generation) the practical effect is limited to web SSE chunking; chat platforms always send one message either way |
 
-**Example:**
-
-```juglans
-[welcome]: reply(message="Welcome to the system!")
-```
+**Examples:**
 
 ```juglans
-[silent_reply]: reply(message="Internal note", state="silent")
+[welcome]: reply(message="Welcome!")                              # routes to origin
+[silent]:  reply(message="audit note", state="silent")            # not delivered, not stored
+[batch]:   reply(message="long block", stream=false)              # web SSE: one chunk instead of split
 ```
 
 ---
@@ -797,8 +797,9 @@ Push messages to a chat platform from any workflow node — reply branches, cron
 
 **Common behavior across all send tools:**
 
-- Target id (`chat_id` / `channel_id` / `user_id`) is **optional**. When omitted, the tool uses `input.platform_chat_id` — the value the adapter injected for the incoming message. Pass an explicit target for cron / broadcast / cross-channel use.
-- Credentials load from `[bot.<platform>]` in `juglans.toml` (WeChat loads from `.juglans/wechat/{account}.json` since its token is QR-login-issued).
+- Target id (`chat_id` / `channel_id` / `user_id`) is **optional**. When omitted, the tool uses `input.platform_chat_id` — the value the channel injected for the incoming message. Pass an explicit target for cron / broadcast / cross-channel use.
+- Credentials load from `[channels.<kind>.<id>]` in `juglans.toml` (the first configured instance for that platform). WeChat loads from `.juglans/wechat/{account}.json` since its token is QR-login-issued.
+- These builtins are an **escape hatch** for imperative push outside the normal reply flow. For replies inside a chat workflow, prefer plain `reply()` / `chat()` — the runtime routes them back to the originating channel automatically via `ChannelOrigin`, no platform-specific dispatch needed.
 - Return shape: `{ "status": "sent", "target": "<resolved_id>", ... }`.
 
 ### Telegram
@@ -834,7 +835,7 @@ Push messages to a chat platform from any workflow node — reply branches, cron
 
 | Tool | Parameters | Notes |
 |---|---|---|
-| `wechat.send_message` | `text` (required), `user_id?` / `chat_id?` / `to?` | Reads `.juglans/wechat/*.json` session — run `juglans bot wechat` once to log in |
+| `wechat.send_message` | `text` (required), `user_id?` / `chat_id?` / `to?` | Reads `.juglans/wechat/*.json` session — start `juglans serve` with `[channels.wechat]` and complete QR login once |
 
 ```juglans
 [reply]: wechat.send_message(text = "hi")            # auto-reply via input.platform_chat_id
@@ -847,7 +848,7 @@ Push messages to a chat platform from any workflow node — reply branches, cron
 |---|---|---|
 | `feishu.send_message` | `text` (required), `chat_id?` | Acquires a tenant access token per call |
 | `feishu.send_image` | `image` (required, URL or local path), `chat_id?` | Uploads to `/open-apis/im/v1/images`, then sends as image message |
-| `feishu.send_webhook` | `message` (required), `webhook_url?` | Webhook URL falls back to `[bot.feishu].webhook_url` |
+| `feishu.send_webhook` | `message` (required), `webhook_url?` | URL falls back to the first `[channels.feishu.<id>].incoming_webhook_url` configured |
 
 ```juglans
 [notify]: feishu.send_message(chat_id = "oc_xxx", text = "deploy finished")

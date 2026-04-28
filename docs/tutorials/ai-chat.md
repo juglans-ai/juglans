@@ -287,13 +287,13 @@ Now the bot remembers what the user said two messages ago — try it: ask the bo
 
 1. Explicit `chat_id="..."` parameter (highest)
 2. `reply.chat_id` (chained from a prior `chat()` in the same run)
-3. `input.chat_id` (auto-injected by bot adapters as `"{platform}:{user}:{agent}"`)
+3. `input.chat_id` (auto-injected by channels as `"{platform}:{user}:{agent}"`)
 4. None — call is stateless
 
-Inside a bot workflow you usually need zero arguments — the adapter sets `input.chat_id` for you:
+Inside a chat workflow you usually need zero arguments — the channel sets `input.chat_id` for you:
 
 ```juglans
-[reply]: chat(message = input.text)   # auto-history when running via juglans bot ...
+[reply]: chat(message = input.text)   # auto-history when running under juglans serve
 ```
 
 Backends are configured once in `juglans.toml`:

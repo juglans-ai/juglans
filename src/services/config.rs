@@ -2,6 +2,7 @@
 use anyhow::{Context, Result};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use tracing::debug;
@@ -140,58 +141,81 @@ pub struct PathsConfig {
     pub base: Option<String>,
 }
 
-// Bot configuration
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct BotConfig {
-    pub telegram: Option<TelegramBotConfig>,
-    pub feishu: Option<FeishuBotConfig>,
-    pub wechat: Option<WechatBotConfig>,
-    pub discord: Option<DiscordBotConfig>,
+/// Multi-instance channel config: `[channels.<kind>.<instance_id>]`.
+///
+/// One section per channel instance. Each platform module reads its own
+/// subsection in `discover_channels` and produces `Arc<dyn Channel>`s.
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub struct ChannelsConfig {
+    /// One entry per Telegram bot, keyed by an arbitrary instance id. Each
+    /// instance picks polling vs webhook automatically (webhook when
+    /// `server.endpoint_url` is set, polling otherwise) unless `mode` overrides.
+    #[serde(default)]
+    pub telegram: HashMap<String, TelegramChannelConfig>,
+
+    /// One entry per Discord gateway connection.
+    #[serde(default)]
+    pub discord: HashMap<String, DiscordChannelConfig>,
+
+    /// WeChat: accounts are auto-discovered from disk; this section sets
+    /// defaults applied to all of them. No per-instance subkeys.
+    #[serde(default)]
+    pub wechat: Option<WechatChannelConfig>,
+
+    /// One entry per Feishu channel — either a bidirectional event-subscription
+    /// (set `app_id` + `app_secret`) or an egress-only incoming webhook
+    /// (set `incoming_webhook_url`). The two variants share one config struct;
+    /// the discovery code picks which `Channel` impl to instantiate.
+    #[serde(default)]
+    pub feishu: HashMap<String, FeishuChannelConfig>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct TelegramBotConfig {
+pub struct TelegramChannelConfig {
     pub token: String,
-    #[serde(default = "default_bot_agent")]
+    #[serde(default = "default_channel_agent")]
     pub agent: String,
-    /// Execution mode (reserved, currently always local)
+    /// Ingress mode override. Auto-detected from `server.endpoint_url` when
+    /// not set: webhook (passive) if endpoint_url is configured, polling (active)
+    /// otherwise. Set to `"polling"` or `"webhook"` to force one mode.
     #[serde(default)]
     pub mode: Option<String>,
 }
 
+/// Feishu channel config. Two flavors share one struct; the discovery code
+/// picks an impl based on which fields are set:
+///
+/// - `app_id` + `app_secret` → [`FeishuEventChannel`] (bidirectional event subscription)
+/// - `incoming_webhook_url` → [`FeishuWebhookChannel`] (egress-only push to a Feishu group)
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct FeishuBotConfig {
-    /// Event subscription mode (bidirectional)
+pub struct FeishuChannelConfig {
+    /// Event-subscription mode credentials.
     pub app_id: Option<String>,
     pub app_secret: Option<String>,
-    /// Webhook mode (one-way push)
-    pub webhook_url: Option<String>,
-    #[serde(default = "default_bot_agent")]
+    /// Egress-only mode: incoming webhook URL bound to a single Feishu group.
+    pub incoming_webhook_url: Option<String>,
+    #[serde(default = "default_channel_agent")]
     pub agent: String,
-    #[serde(default = "default_feishu_port")]
-    pub port: u16,
-    /// API base URL: "https://open.feishu.cn" (default) or "https://open.larksuite.com" (Lark international)
+    /// API base URL: "https://open.feishu.cn" (default) or
+    /// "https://open.larksuite.com" (Lark international).
     #[serde(default = "default_feishu_base_url")]
     pub base_url: String,
-    /// List of approvers (open_id)
+    /// Approvers (open_id) — used by approval-flow workflows.
     #[serde(default)]
     pub approvers: Vec<String>,
-    /// Execution mode (reserved, currently always local)
-    #[serde(default)]
-    pub mode: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct WechatBotConfig {
-    #[serde(default = "default_bot_agent")]
+pub struct WechatChannelConfig {
+    #[serde(default = "default_channel_agent")]
     pub agent: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct DiscordBotConfig {
+pub struct DiscordChannelConfig {
     /// Discord bot token (use `${DISCORD_BOT_TOKEN}` in TOML to pull from `.env` / env).
     pub token: String,
-    #[serde(default = "default_bot_agent")]
+    #[serde(default = "default_channel_agent")]
     pub agent: String,
     /// Gateway intents by name. Default: guilds, guild_messages,
     /// message_content, direct_messages.
@@ -214,7 +238,7 @@ pub struct DiscordBotConfig {
     pub guilds: Vec<String>,
 }
 
-fn default_bot_agent() -> String {
+fn default_channel_agent() -> String {
     "default".to_string()
 }
 fn default_discord_intents() -> Vec<String> {
@@ -224,9 +248,6 @@ fn default_discord_intents() -> Vec<String> {
         "message_content".into(),
         "direct_messages".into(),
     ]
-}
-fn default_feishu_port() -> u16 {
-    9000
 }
 fn default_feishu_base_url() -> String {
     "https://open.feishu.cn".to_string()
@@ -341,8 +362,40 @@ pub struct JuglansConfig {
     #[serde(default)]
     pub limits: RuntimeLimits,
 
-    // Bot configuration
-    pub bot: Option<BotConfig>,
+    // Channel configuration: `[channels.<kind>.<instance_id>]`. Each subsection
+    //
+    // NOTE: legacy `[bot.*]` config is no longer parsed. Use `[channels.*]`
+    // exclusively. If serde encounters `[bot.*]` in juglans.toml, it is silently
+    // ignored (serde default behavior); bot config will simply not start.
+    //
+    // (continuation below)
+    // declares one platform endpoint (one Telegram bot, one Discord gateway,
+    // one Feishu event subscription, etc.). Multiple instances per kind are
+    // allowed:
+    //
+    //   [channels.telegram.main]
+    //   token = "..."
+    //   agent = "support"
+    //
+    //   [channels.telegram.beta]
+    //   token = "..."
+    //   agent = "beta_test"
+    //
+    //   [channels.discord.community]
+    //   token = "..."
+    //
+    //   [channels.feishu.events]      # bidirectional: event subscription
+    //   app_id = "..."
+    //   app_secret = "..."
+    //
+    //   [channels.feishu.alerts]      # egress-only: incoming webhook
+    //   incoming_webhook_url = "https://open.feishu.cn/...hook/..."
+    //
+    // WeChat is special: accounts are auto-discovered from disk, so
+    // `[channels.wechat]` (no instance_id) sets defaults that apply to all
+    // discovered accounts.
+    #[serde(default)]
+    pub channels: ChannelsConfig,
 
     // Path alias configuration
     #[serde(default)]
@@ -402,7 +455,7 @@ impl JuglansConfig {
                 env: Default::default(),
                 debug: DebugConfig::default(),
                 limits: RuntimeLimits::default(),
-                bot: None,
+                channels: ChannelsConfig::default(),
                 paths: PathsConfig::default(),
                 registry: None,
                 ai: AiConfig::default(),
@@ -436,7 +489,10 @@ impl JuglansConfig {
         Ok(config)
     }
 
-    /// Override config fields with environment variables (for FC/Lambda and other serverless environments)
+    /// Override config fields with environment variables (for FC/Lambda and
+    /// other serverless deployments). Env-var overrides drop into a synthetic
+    /// `[channels.<kind>.default]` instance so containers without TOML can
+    /// still bring up a channel.
     fn apply_env_overrides(&mut self) {
         if let Ok(v) = std::env::var("SERVER_HOST") {
             self.server.host = v;
@@ -444,33 +500,31 @@ impl JuglansConfig {
         if let Ok(Ok(v)) = std::env::var("SERVER_PORT").map(|s| s.parse::<u16>()) {
             self.server.port = v;
         }
-        // Feishu bot config
+
+        // Feishu event-mode credentials → channels.feishu.default
         let feishu_app_id = std::env::var("FEISHU_APP_ID").ok();
         let feishu_app_secret = std::env::var("FEISHU_APP_SECRET").ok();
         if feishu_app_id.is_some() || feishu_app_secret.is_some() {
-            let bot = self.bot.get_or_insert(BotConfig {
-                telegram: None,
-                feishu: None,
-                wechat: None,
-                discord: None,
-            });
-            let feishu = bot.feishu.get_or_insert_with(|| FeishuBotConfig {
-                app_id: None,
-                app_secret: None,
-                webhook_url: None,
-                agent: default_bot_agent(),
-                port: default_feishu_port(),
-                base_url: default_feishu_base_url(),
-                approvers: vec![],
-                mode: None,
-            });
+            let entry = self
+                .channels
+                .feishu
+                .entry("default".to_string())
+                .or_insert_with(|| FeishuChannelConfig {
+                    app_id: None,
+                    app_secret: None,
+                    incoming_webhook_url: None,
+                    agent: default_channel_agent(),
+                    base_url: default_feishu_base_url(),
+                    approvers: vec![],
+                });
             if let Some(v) = feishu_app_id {
-                feishu.app_id = Some(v);
+                entry.app_id = Some(v);
             }
             if let Some(v) = feishu_app_secret {
-                feishu.app_secret = Some(v);
+                entry.app_secret = Some(v);
             }
         }
+
         // History config overrides
         if let Ok(v) = std::env::var("JUGLANS_HISTORY_BACKEND") {
             self.history.backend = v;
@@ -491,20 +545,19 @@ impl JuglansConfig {
         if let Ok(Ok(v)) = std::env::var("JUGLANS_HISTORY_ENABLED").map(|s| s.parse::<bool>()) {
             self.history.enabled = v;
         }
-        // Telegram bot config
+
+        // Telegram token → channels.telegram.default
         if let Ok(token) = std::env::var("TELEGRAM_BOT_TOKEN") {
-            let bot = self.bot.get_or_insert(BotConfig {
-                telegram: None,
-                feishu: None,
-                wechat: None,
-                discord: None,
-            });
-            let tg = bot.telegram.get_or_insert_with(|| TelegramBotConfig {
-                token: String::new(),
-                agent: default_bot_agent(),
-                mode: None,
-            });
-            tg.token = token;
+            let entry = self
+                .channels
+                .telegram
+                .entry("default".to_string())
+                .or_insert_with(|| TelegramChannelConfig {
+                    token: String::new(),
+                    agent: default_channel_agent(),
+                    mode: None,
+                });
+            entry.token = token;
         }
     }
 }

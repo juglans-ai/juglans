@@ -209,7 +209,7 @@ http_timeout_secs = 300
 
 **Error:** `Address already in use (port 3000)`
 
-**Cause:** Another process is using the port when starting `juglans web` (or the unified `juglans serve`, which wraps web, bot adapters, and cron triggers).
+**Cause:** Another process is using the port when starting `juglans web` (or the unified `juglans serve`, which wraps web, channels, and cron triggers).
 
 **Solution:**
 
@@ -336,7 +336,7 @@ The new tools follow the same dotted convention as `db.*` / `history.*` and shar
 **Symptom:**
 
 ```
-[discord] Authentication failed (4004). Check [bot.discord].token.
+[discord] Authentication failed (4004). Check [channels.discord.<id>].token.
 ```
 
 or
@@ -360,11 +360,11 @@ grep DISCORD_BOT_TOKEN .env
 
 # 4014 — open the dev portal:
 #   Application → Bot → Privileged Gateway Intents → enable MESSAGE CONTENT INTENT
-# OR remove `message_content` from [bot.discord].intents:
+# OR drop `message_content` from the channel's intents:
 ```
 
 ```toml
-[bot.discord]
+[channels.discord.community]
 token = "${DISCORD_BOT_TOKEN}"
 intents = ["guilds", "guild_messages", "direct_messages"]   # no message_content
 ```
@@ -392,10 +392,10 @@ or
 
 ```
 wechat.send_message: no WeChat session found in .juglans/wechat/.
-                     Run `juglans bot wechat` once to complete QR login.
+                     Run `juglans serve` once with `[channels.wechat]` to complete QR login.
 ```
 
-**Cause:** Each `*.send_message` builtin auto-resolves its target from `input.platform_chat_id` — set automatically by the bot adapter on inbound messages. From a cron job, error handler, or any node that doesn't have a current platform message, you must pass the target explicitly.
+**Cause:** Each `*.send_message` builtin auto-resolves its target from `input.platform_chat_id` — set automatically by the channel on inbound messages. From a cron job, error handler, or any node that doesn't have a current platform message, you must pass the target explicitly.
 
 **Solution:**
 
@@ -409,6 +409,6 @@ wechat.send_message: no WeChat session found in .juglans/wechat/.
 [push]:  wechat.send_message(user_id = "u_abc", text = "reminder")
 ```
 
-For WeChat specifically, the token + base_url come from `.juglans/wechat/{account}.json` (the file written after QR login). Run `juglans bot wechat` once to log in, then the `wechat.send_message` builtin works from any context. Delete the file to force a re-login.
+For WeChat specifically, the token + base_url come from `.juglans/wechat/{account}.json` (the file written after QR login). Start `juglans serve` with `[channels.wechat]` configured and complete the QR login once; from then on the `wechat.send_message` builtin works from any context. Delete the file to force a re-login.
 
-For Telegram / Discord / Feishu, ensure the `[bot.<platform>]` section in `juglans.toml` has a non-empty `token` (or the equivalent `app_id` + `app_secret` for Feishu).
+For Telegram / Discord / Feishu, ensure the `[channels.<kind>.<id>]` section in `juglans.toml` has a non-empty `token` (or `app_id` + `app_secret` for Feishu event-mode, or `incoming_webhook_url` for egress-only Feishu).

@@ -15,12 +15,12 @@ use std::collections::HashMap;
 fn load_token() -> Result<String> {
     let config = JuglansConfig::load().map_err(|e| anyhow!("load config: {}", e))?;
     config
-        .bot
-        .as_ref()
-        .and_then(|b| b.discord.as_ref())
+        .channels
+        .discord
+        .values()
         .map(|d| d.token.clone())
-        .filter(|t| !t.is_empty())
-        .ok_or_else(|| anyhow!("Missing [bot.discord].token in juglans.toml"))
+        .find(|t| !t.is_empty())
+        .ok_or_else(|| anyhow!("No discord token configured ([channels.discord.<id>].token)"))
 }
 
 fn param_str<'a>(params: &'a HashMap<String, String>, key: &str) -> Option<&'a str> {

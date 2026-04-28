@@ -1162,69 +1162,16 @@ fn handle_check(path: Option<&Path>, show_all: bool, output_format: &str) -> Res
 
 async fn handle_bot(
     platform: &str,
-    agent_override: Option<String>,
-    port: Option<u16>,
+    _agent_override: Option<String>,
+    _port: Option<u16>,
 ) -> Result<()> {
-    let config = JuglansConfig::load()?;
-    let current_dir = env::current_dir()?;
-    let project_root = find_project_root(&current_dir)?;
-
-    match platform {
-        "telegram" => {
-            let agent_slug = agent_override
-                .or_else(|| {
-                    config
-                        .bot
-                        .as_ref()
-                        .and_then(|b| b.telegram.as_ref())
-                        .map(|t| t.agent.clone())
-                })
-                .unwrap_or_else(|| "default".to_string());
-            adapters::telegram::start(config, project_root, agent_slug).await?;
-        }
-        "feishu" | "lark" => {
-            let agent_slug = agent_override
-                .or_else(|| {
-                    config
-                        .bot
-                        .as_ref()
-                        .and_then(|b| b.feishu.as_ref())
-                        .map(|f| f.agent.clone())
-                })
-                .unwrap_or_else(|| "default".to_string());
-            let feishu_port = port.unwrap_or_else(|| {
-                config
-                    .bot
-                    .as_ref()
-                    .and_then(|b| b.feishu.as_ref())
-                    .map(|f| f.port)
-                    .unwrap_or(9000)
-            });
-            adapters::feishu::start(config, project_root, agent_slug, feishu_port).await?;
-        }
-        "wechat" | "weixin" => {
-            adapters::wechat::start(config, project_root, agent_override).await?;
-        }
-        "discord" => {
-            let agent_slug = agent_override
-                .or_else(|| {
-                    config
-                        .bot
-                        .as_ref()
-                        .and_then(|b| b.discord.as_ref())
-                        .map(|d| d.agent.clone())
-                })
-                .unwrap_or_else(|| "default".to_string());
-            adapters::discord::start(config, project_root, agent_slug).await?;
-        }
-        _ => {
-            return Err(anyhow!(
-                "Unknown platform '{}'. Supported: telegram, feishu, wechat, discord",
-                platform
-            ));
-        }
-    }
-    Ok(())
+    Err(anyhow!(
+        "`juglans bot {p}` has been removed. Use `juglans serve` instead — it runs\n\
+         every configured channel (including {p}) alongside the HTTP backend in one\n\
+         process. Migrate config from [bot.{p}] to [channels.{p}.<id>]; see the\n\
+         channel docs for the new schema.",
+        p = platform
+    ))
 }
 
 async fn handle_serve(
@@ -1257,49 +1204,104 @@ async fn handle_serve(
 
     let mut active_platforms: Vec<String> = vec![];
 
-    // Start bot adapters in background based on config
-    if let Some(ref bot) = config.bot {
-        // Telegram long-poll
-        if bot.telegram.is_some() && config.server.endpoint_url.is_none() {
-            let tg_config = config.clone();
-            let tg_root = project_root.clone();
-            let tg_slug = entry_slug.clone();
-            active_platforms.push("telegram (polling)".into());
-            tokio::spawn(async move {
-                if let Err(e) = adapters::telegram::start(tg_config, tg_root, tg_slug).await {
-                    tracing::error!("Telegram bot error: {}", e);
-                }
-            });
+    // Channel orchestrator: collect (channel, agent_slug) pairs from every
+    // platform's discover_channels, then spawn them all alongside the web
+    // server. A single channel failure can't take down the rest.
+    //
+    // Per-channel agent: each channel can configure its own `agent`
+    // (`[channels.telegram.beta] agent = "beta_bot"`); a HashMap caches one
+    // dispatcher per unique agent_slug so we don't allocate redundantly when
+    // many channels share the same agent. When a channel's agent is the
+    // sentinel "default", it inherits the entry workflow's slug instead.
+    let channel_pairs = {
+        let mut channels: Vec<(Arc<dyn adapters::Channel>, String)> = Vec::new();
+
+        // Telegram channels — `discover_channels` itself decides polling vs webhook
+        // per instance based on `mode` field (or auto from `server.endpoint_url`).
+        // Webhook channels return `Arc<dyn Channel>` whose `install_routes` mounts
+        // /webhook/telegram/<id>; polling channels run a long-poll loop.
+        if !config.channels.telegram.is_empty() {
+            for (ch, agent) in adapters::telegram::discover_channels(&config, &project_root) {
+                channels.push((ch, agent));
+            }
         }
 
-        // WeChat long-poll
-        if bot.wechat.is_some() {
-            let wx_config = config.clone();
-            let wx_root = project_root.clone();
-            let wx_slug = Some(entry_slug.clone());
-            active_platforms.push("wechat (polling)".into());
-            tokio::spawn(async move {
-                if let Err(e) = adapters::wechat::start(wx_config, wx_root, wx_slug).await {
-                    tracing::error!("WeChat bot error: {}", e);
+        // WeChat — auto-discovers all logged-in accounts under .juglans/wechat/,
+        // or drives a fresh QR login if none exist.
+        if config.channels.wechat.is_some() {
+            let http = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(60))
+                .build()?;
+            match adapters::wechat::discover_channels(&http, &project_root, &config).await {
+                Ok(chs) => {
+                    for (ch, agent) in chs {
+                        channels.push((ch, agent));
+                    }
                 }
-            });
+                Err(e) => {
+                    tracing::error!("WeChat channel discovery failed: {:#}", e);
+                }
+            }
         }
 
         // Discord Gateway (WebSocket — no webhook alternative).
-        // Requires a long-lived process; will error repeatedly on serverless
-        // platforms that suspend idle containers.
-        if bot.discord.is_some() {
-            let dc_config = config.clone();
-            let dc_root = project_root.clone();
-            let dc_slug = entry_slug.clone();
-            active_platforms.push("discord (gateway)".into());
-            tokio::spawn(async move {
-                if let Err(e) = adapters::discord::start(dc_config, dc_root, dc_slug).await {
-                    tracing::error!("Discord bot error: {}", e);
+        if !config.channels.discord.is_empty() {
+            match adapters::discord::discover_channels(&config, &project_root) {
+                Ok(chs) => {
+                    for (ch, agent) in chs {
+                        channels.push((ch, agent));
+                    }
                 }
-            });
+                Err(e) => {
+                    tracing::error!("Discord channel discovery failed: {:#}", e);
+                }
+            }
         }
-    }
+
+        // Feishu — event-mode channels mount /webhook/feishu/<id> via install_routes;
+        // incoming-webhook channels are egress-only.
+        if !config.channels.feishu.is_empty() {
+            for (ch, agent) in adapters::feishu::discover_channels(&config, &project_root) {
+                channels.push((ch, agent));
+            }
+        }
+
+        // Pair each channel with a dispatcher (cached per agent_slug so many
+        // channels sharing the same agent reuse one allocation).
+        let mut dispatchers: std::collections::HashMap<
+            String,
+            Arc<dyn adapters::MessageDispatcher>,
+        > = std::collections::HashMap::new();
+        let mut by_kind: std::collections::BTreeMap<String, usize> =
+            std::collections::BTreeMap::new();
+        let mut channel_pairs: Vec<(
+            Arc<dyn adapters::Channel>,
+            Arc<dyn adapters::MessageDispatcher>,
+        )> = Vec::with_capacity(channels.len());
+        for (ch, channel_agent) in channels {
+            *by_kind.entry(ch.kind().to_string()).or_insert(0) += 1;
+            let agent_slug = if channel_agent == "default" {
+                entry_slug.clone()
+            } else {
+                channel_agent
+            };
+            let dispatcher = dispatchers
+                .entry(agent_slug.clone())
+                .or_insert_with(|| {
+                    Arc::new(adapters::LocalDispatcher {
+                        config: config.clone(),
+                        project_root: project_root.clone(),
+                        agent_slug: agent_slug.clone(),
+                    })
+                })
+                .clone();
+            channel_pairs.push((ch, dispatcher));
+        }
+        for (kind, count) in &by_kind {
+            active_platforms.push(format!("{} (×{})", kind, count));
+        }
+        channel_pairs
+    };
 
     // Print banner
     println!("──────────────────────────────────────────────────");
@@ -1314,8 +1316,9 @@ async fn handle_serve(
     }
     println!("──────────────────────────────────────────────────");
 
-    // Start web server (blocks)
-    web_server::start_web_server(final_host, final_port, project_root).await?;
+    // Hand channels to the web server; it `install_routes` for passive ones,
+    // spawns `run` for active ones, then serves axum.
+    web_server::start_web_server(final_host, final_port, project_root, channel_pairs).await?;
 
     Ok(())
 }
@@ -1817,7 +1820,8 @@ async fn main() -> Result<()> {
                     .or_else(|| config.as_ref().map(|c| c.server.port))
                     .unwrap_or(8080);
 
-                web_server::start_web_server(final_host, final_port, root).await?;
+                // `juglans web` is dev-only HTTP — no channels.
+                web_server::start_web_server(final_host, final_port, root, Vec::new()).await?;
             }
             Commands::Whoami { verbose } => {
                 handle_whoami(*verbose).await?;

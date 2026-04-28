@@ -49,7 +49,7 @@ docker run -d \
   juglans
 ```
 
-This starts the binary with your workflow files in `/workspace`. The default `CMD` runs `juglans web` (HTTP API only); to also boot configured bot adapters in the same container, override with `command: ["juglans", "serve", "--host", "0.0.0.0", "--port", "8080"]` or use the Compose example below.
+This starts the binary with your workflow files in `/workspace`. The default `CMD` runs `juglans web` (dev HTTP API only — no channels); to also boot every configured channel in the same container, override with `command: ["juglans", "serve", "--host", "0.0.0.0", "--port", "8080"]` or use the Compose example below.
 
 ## Docker Compose
 
@@ -93,7 +93,7 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
       - QWEN_API_KEY=${QWEN_API_KEY:-}
-      # Bot adapters (optional — only needed for the bots you want to run)
+      # Channel credentials (optional — only set those you want to run)
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - FEISHU_APP_ID=${FEISHU_APP_ID:-}
       - FEISHU_APP_SECRET=${FEISHU_APP_SECRET:-}
@@ -101,11 +101,11 @@ services:
       # History storage (override defaults if you want SQLite or a custom path)
       - JUGLANS_HISTORY_BACKEND=${JUGLANS_HISTORY_BACKEND:-jsonl}
       - JUGLANS_HISTORY_DIR=${JUGLANS_HISTORY_DIR:-/workspace/.juglans/history}
-    # CRITICAL: use `serve` to also boot bot adapters; `web` runs only the HTTP API.
+    # CRITICAL: use `serve` to also boot every configured channel; `web` is HTTP-only.
     command: ["juglans", "serve", "--host", "0.0.0.0", "--port", "8080"]
 ```
 
-> **Bot adapters and serverless / scale-to-zero**. The Discord adapter holds a persistent Gateway WebSocket — it cannot survive container suspension. Run it on a long-lived host (Cloud Run with `min-instances >= 1`, Fly.io without autostop, a regular VM, etc.). Telegram / WeChat use long-poll which is also incompatible with idle suspension. Feishu's webhook mode is the only adapter that survives serverless.
+> **Channels and serverless / scale-to-zero**. Discord holds a persistent Gateway WebSocket — it cannot survive container suspension. Run on a long-lived host (Cloud Run with `min-instances >= 1`, Fly.io without autostop, a regular VM, etc.). Telegram-polling and WeChat are long-poll based, also incompatible with idle suspension. The serverless-friendly options are Telegram-webhook (set `mode = "webhook"` and a public `server.endpoint_url`) and Feishu event-subscription — both are passive HTTP routes that wake on incoming requests.
 
 ## Environment Variables
 
@@ -121,13 +121,13 @@ Pass any LLM provider API key (juglans is local-first — providers are called d
 | `XAI_API_KEY` | xAI API key |
 | `ARK_API_KEY` | ByteDance / BytePlus Ark API key |
 
-Bot adapter credentials (only needed for the bots you want to run — `juglans serve` boots them automatically when the corresponding section is present in `juglans.toml` or the env var auto-creates it):
+Channel credentials (only needed for the channels you want to run — `juglans serve` boots them automatically when the corresponding `[channels.<kind>.<id>]` section is present in `juglans.toml`, or the env var below auto-synthesizes one):
 
 | Variable | Effect |
 |----------|--------|
-| `TELEGRAM_BOT_TOKEN` | Auto-creates `[bot.telegram]` if absent — adapter starts on `juglans serve` |
-| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | Auto-create `[bot.feishu]` (webhook mode) |
-| `DISCORD_BOT_TOKEN` | NOT auto-consumed — must be referenced via `${DISCORD_BOT_TOKEN}` interpolation in `[bot.discord].token` |
+| `TELEGRAM_BOT_TOKEN` | Synthesizes `[channels.telegram.default]` if absent — channel starts on `juglans serve` |
+| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | Synthesize `[channels.feishu.default]` (event-subscription mode) |
+| `DISCORD_BOT_TOKEN` | NOT auto-consumed — reference via `${DISCORD_BOT_TOKEN}` interpolation in `[channels.discord.<id>].token` |
 
 History storage overrides (default backend is JSONL at `.juglans/history/`):
 

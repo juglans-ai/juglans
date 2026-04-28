@@ -184,8 +184,16 @@ impl Tool for Reply {
             None => (state_raw, state_raw),
         };
 
-        // should_stream based on output_state
-        let should_stream = output_state == "context_visible" || output_state == "display_only";
+        // Visibility: only user-facing states emit; AI-internal / silent
+        // states pass through silently. `stream` flag mirrors chat()'s
+        // semantics — for `reply()` it mostly only matters for SSE chunking
+        // (chat platforms always send a single message either way).
+        let visible = output_state == "context_visible" || output_state == "display_only";
+        let stream_param = params
+            .get("stream")
+            .map(|s| s.as_str())
+            .map(|s| s != "false" && s != "0" && s != "no");
+        let should_stream = visible && stream_param.unwrap_or(true);
 
         // SSE output
         if should_stream {

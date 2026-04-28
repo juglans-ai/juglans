@@ -55,7 +55,7 @@ Conditional edges are evaluated at runtime; branches whose conditions are not me
 
 | Variable | Scope | Description |
 |----------|-------|-------------|
-| `input.field` | Global | Input data passed via CLI or API (includes `input.chat_id` when triggered by a bot adapter) |
+| `input.field` | Global | Input data passed via CLI or API (includes `input.chat_id` when triggered by a channel) |
 | `output` | Per-node | Output of the previous node |
 | `key` | Global | Custom context variables (via assignment syntax) |
 | `reply.output` / `reply.chat_id` | Per-chat | Metadata from the agent's response; `reply.chat_id` chains history across `chat()` nodes in one run |
@@ -76,13 +76,15 @@ Reserved top-level names: `input`, `output`, `reply`, `error`, `config`, `respon
 | `display_only` | ✗ | ✓ |
 | `silent` | ✗ | ✗ |
 
-When a `chat_id` is resolved (explicit `chat_id=`, `reply.chat_id`, or `input.chat_id` injected by bot adapters), Juglans auto-loads the tail of the thread and appends the turn — so bot workflows get multi-turn memory with no extra wiring. See [Conversation History in connect-ai.md](./connect-ai.md#conversation-history) for the full story.
+When a `chat_id` is resolved (explicit `chat_id=`, `reply.chat_id`, or `input.chat_id` injected by a channel), Juglans auto-loads the tail of the thread and appends the turn — so chat workflows get multi-turn memory with no extra wiring. See [Conversation History in connect-ai.md](./connect-ai.md#conversation-history) for the full story.
 
-### Bot adapters
+### Channels
 
-Four platforms ship as first-class adapters: **Telegram**, **Discord**, **Feishu / Lark**, and **WeChat**. Each one runs as `juglans bot <platform>` standalone, or auto-starts inside `juglans serve` when its `[bot.<platform>]` section is present in `juglans.toml`. Inbound messages flow through the same `run_agent_for_message` pipeline, populating `input.platform`, `input.platform_chat_id`, `input.platform_user_id`, `input.text`, and the namespaced `input.chat_id` (e.g. `discord:{channel_id}:{agent_slug}`) so conversation history stays per-thread.
+Every chat-platform integration is a **channel** — a named ingress/egress pair tied to one platform identity. Four kinds ship: **Telegram** (polling or webhook), **Discord** (gateway), **Feishu / Lark** (event subscription or incoming webhook), and **WeChat** (auto-discovered iLink accounts). Each entry is configured as `[channels.<kind>.<instance_id>]` in `juglans.toml`, and `juglans serve` runs them all in one process — active channels (long-poll / websocket) get tokio tasks, passive channels (webhooks) mount HTTP routes on the shared axum router.
 
-Outbound push uses the platform-namespaced builtins — `telegram.send_message`, `discord.send_message`, `wechat.send_message`, `feishu.send_message` (and friends like `*.typing`, `*.edit_message`, `discord.react`, `feishu.send_image`). Targets auto-resolve from `input.platform_chat_id` on the inbound path, or take an explicit `chat_id` / `channel_id` / `user_id` for cron jobs and broadcasts. See [builtins.md → Platform Messaging](../reference/builtins.md#platform-messaging-telegram-discord-wechat-feishu).
+Inbound messages flow through `run_agent_for_message`, populating `input.platform`, `input.platform_chat_id`, `input.platform_user_id`, `input.text`, and the namespaced `input.chat_id` (e.g. `telegram:{chat_id}:{agent_slug}`) so conversation history stays per-thread. The dispatcher also stamps a `ChannelOrigin` on the workflow context — when the workflow calls `reply()` or `chat()`, the runtime routes the output back through that origin automatically. **The same `.jg` runs unchanged across platforms** — workflows don't carry platform-specific dispatch logic.
+
+Replies stream live where the platform supports it (Telegram debounced `editMessageText`; web SSE) or batch as one final message where it doesn't (WeChat, Discord, Feishu). The `state` parameter on `chat()`/`reply()` controls visibility (visible / hidden / silent); `stream` controls delivery timing — they're orthogonal. Imperative push outside the reply loop (notifications, cross-channel alerts) uses platform-namespaced builtins like `telegram.send_message`, `discord.send_message`, `feishu.send_webhook` — see [builtins.md → Platform Messaging](../reference/builtins.md#platform-messaging-telegram-discord-wechat-feishu).
 
 Variables are accessed by path within node parameters:
 

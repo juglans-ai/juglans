@@ -40,7 +40,7 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::protocol::Message as WsMessage;
 use tracing::{debug, error, info, warn};
 
-use super::{run_agent_for_message, PlatformMessage};
+use super::{Channel, MessageDispatcher, PlatformMessage};
 use crate::services::config::JuglansConfig;
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -117,10 +117,10 @@ fn log_fatal_close(code: u16) {
             "[discord] Gateway rejected intents (close code 4014). \
              Enable 'MESSAGE CONTENT INTENT' in the Discord Developer Portal \
              (https://discord.com/developers/applications), or remove \
-             'message_content' from [bot.discord].intents in juglans.toml."
+             'message_content' from [channels.discord.<id>].intents in juglans.toml."
         );
     } else if code == 4004 {
-        error!("[discord] Authentication failed (4004). Check [bot.discord].token.");
+        error!("[discord] Authentication failed (4004). Check [channels.discord.<id>].token.");
     } else {
         error!("[discord] Fatal gateway close code: {}", code);
     }
@@ -228,7 +228,7 @@ async fn fetch_gateway_url(http: &reqwest::Client, token: &str) -> Result<String
         let body = resp.text().await.unwrap_or_default();
         if status.as_u16() == 401 {
             return Err(anyhow!(
-                "Discord rejected bot token (401). Check [bot.discord].token."
+                "Discord rejected bot token (401). Check [channels.discord.<id>].token."
             ));
         }
         return Err(anyhow!("GET /gateway/bot failed: {} {}", status, body));
@@ -384,9 +384,8 @@ fn extract_close_code(err: &anyhow::Error) -> Option<u16> {
 async fn run_session(
     ws_url: &str,
     resume: bool,
-    cfg: Arc<JuglansConfig>,
+    dispatcher: Arc<dyn MessageDispatcher>,
     project_root: Arc<PathBuf>,
-    agent_slug: Arc<String>,
     rt: Arc<GatewayRuntime>,
     http: reqwest::Client,
 ) -> Result<CloseKind> {
@@ -489,9 +488,8 @@ async fn run_session(
                     Some(0) => {
                         if let Err(e) = handle_dispatch(
                             &v,
-                            cfg.clone(),
+                            dispatcher.clone(),
                             project_root.clone(),
-                            agent_slug.clone(),
                             rt.clone(),
                             http.clone(),
                         ).await {
@@ -529,9 +527,8 @@ async fn run_session(
 
 async fn handle_dispatch(
     v: &Value,
-    cfg: Arc<JuglansConfig>,
+    dispatcher: Arc<dyn MessageDispatcher>,
     project_root: Arc<PathBuf>,
-    agent_slug: Arc<String>,
     rt: Arc<GatewayRuntime>,
     http: reqwest::Client,
 ) -> Result<()> {
@@ -560,7 +557,7 @@ async fn handle_dispatch(
             info!("[discord] Gateway session resumed");
         }
         "MESSAGE_CREATE" => {
-            handle_message_create(&v["d"], cfg, project_root, agent_slug, rt, http).await?;
+            handle_message_create(&v["d"], dispatcher, project_root, rt, http).await?;
         }
         _ => {
             debug!("[discord] ignored dispatch: {}", t);
@@ -571,9 +568,8 @@ async fn handle_dispatch(
 
 async fn handle_message_create(
     d: &Value,
-    cfg: Arc<JuglansConfig>,
+    dispatcher: Arc<dyn MessageDispatcher>,
     project_root: Arc<PathBuf>,
-    agent_slug: Arc<String>,
     rt: Arc<GatewayRuntime>,
     http: reqwest::Client,
 ) -> Result<()> {
@@ -641,7 +637,7 @@ async fn handle_message_create(
 
         send_typing(&http, &token, &channel_id).await;
 
-        match run_agent_for_message(&cfg, &project_root, &agent_slug, &platform_msg, None).await {
+        match dispatcher.dispatch(&platform_msg).await {
             Ok(reply) => {
                 if reply.text.is_empty() || reply.text == "(No response)" {
                     return;
@@ -665,9 +661,8 @@ async fn handle_message_create(
 // ─── Connection loop (reconnect with backoff) ───────────────────────────────
 
 async fn connection_loop(
-    cfg: Arc<JuglansConfig>,
+    dispatcher: Arc<dyn MessageDispatcher>,
     project_root: Arc<PathBuf>,
-    agent_slug: Arc<String>,
     rt: Arc<GatewayRuntime>,
     http: reqwest::Client,
 ) -> Result<()> {
@@ -701,9 +696,8 @@ async fn connection_loop(
         match run_session(
             &connect_url,
             should_resume,
-            cfg.clone(),
+            dispatcher.clone(),
             project_root.clone(),
-            agent_slug.clone(),
             rt.clone(),
             http.clone(),
         )
@@ -742,56 +736,125 @@ async fn connection_loop(
     }
 }
 
-// ─── Public entry point ─────────────────────────────────────────────────────
+// ─── Channel + public entry point ───────────────────────────────────────────
 
-pub async fn start(config: JuglansConfig, project_root: PathBuf, agent_slug: String) -> Result<()> {
-    let bot_config = config
-        .bot
-        .as_ref()
-        .and_then(|b| b.discord.as_ref())
-        .ok_or_else(|| anyhow!("Missing [bot.discord] config in juglans.toml"))?;
+/// One Discord gateway connection = one [`DiscordChannel`].
+///
+/// Holds the bot token + computed intents bitmask + the project root (needed
+/// for `SessionFile` resume persistence). `id()` is `"discord:<token_prefix>"`,
+/// stable from construction; the bot's `@username` shows up in logs only after
+/// `READY`.
+pub struct DiscordChannel {
+    id: String,
+    rt: Arc<GatewayRuntime>,
+    project_root: Arc<PathBuf>,
+    intents: u64,
+    intents_label: String,
+}
 
-    let token = bot_config.token.clone();
-    if token.is_empty() {
-        return Err(anyhow!(
-            "[bot.discord].token is empty — set it in juglans.toml (e.g. `token = \"${{DISCORD_BOT_TOKEN}}\"`)"
-        ));
+impl DiscordChannel {
+    pub fn new(token: String, intents: u64, intents_label: String, project_root: PathBuf) -> Self {
+        let token_prefix = token.split('.').next().unwrap_or("unknown");
+        let id = format!("discord:{}", token_prefix);
+        Self {
+            id,
+            rt: Arc::new(GatewayRuntime::new(token, intents)),
+            project_root: Arc::new(project_root),
+            intents,
+            intents_label,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::core::context::ChannelEgress for DiscordChannel {
+    async fn send(&self, conversation: &str, text: &str) -> Result<()> {
+        // `conversation` is a Discord channel id (snowflake string).
+        send_channel_message(&reqwest::Client::new(), &self.rt.token, conversation, text).await
+    }
+}
+
+#[async_trait::async_trait]
+impl Channel for DiscordChannel {
+    fn id(&self) -> &str {
+        &self.id
     }
 
-    // v2 feature warnings
-    if bot_config.dm_policy.is_some()
-        || bot_config.group_policy.is_some()
-        || !bot_config.guilds.is_empty()
-    {
-        warn!(
-            "[discord] dm_policy / group_policy / guilds allowlist are parsed but not yet enforced (v2)"
+    fn kind(&self) -> &str {
+        "discord"
+    }
+
+    async fn run(self: Arc<Self>, dispatcher: Arc<dyn MessageDispatcher>) -> Result<()> {
+        info!(
+            "🤖 Discord channel starting — intents 0x{:X} ({})",
+            self.intents, self.intents_label
         );
+        // Auto-inject ChannelOrigin so workflows reply()-ing inside Discord
+        // events route back through this channel's egress.
+        let dispatcher = Arc::new(super::OriginAwareDispatcher::new(
+            self.clone(),
+            dispatcher,
+        )) as Arc<dyn MessageDispatcher>;
+        connection_loop(
+            dispatcher,
+            self.project_root.clone(),
+            self.rt.clone(),
+            reqwest::Client::new(),
+        )
+        .await
+    }
+}
+
+/// Build [`DiscordChannel`] instances from `juglans.toml`.
+///
+/// Reads `[channels.discord.<id>]` entries; tokens are deduplicated so the
+/// same bot can't be listed twice. Each pair is `(channel, agent_slug)` —
+/// per-channel agent lets different bots route to different workflows.
+pub fn discover_channels(
+    config: &JuglansConfig,
+    project_root: &Path,
+) -> Result<Vec<(Arc<DiscordChannel>, String)>> {
+    let mut tokens_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut out: Vec<(Arc<DiscordChannel>, String)> = Vec::new();
+
+    let mut emit = |bot_config: &crate::services::config::DiscordChannelConfig| -> Result<()> {
+        if bot_config.token.is_empty() {
+            return Err(anyhow!(
+                "discord channel token is empty — set it in juglans.toml (e.g. `token = \"${{DISCORD_BOT_TOKEN}}\"`)"
+            ));
+        }
+        if !tokens_seen.insert(bot_config.token.clone()) {
+            return Ok(());
+        }
+        if bot_config.dm_policy.is_some()
+            || bot_config.group_policy.is_some()
+            || !bot_config.guilds.is_empty()
+        {
+            warn!(
+                "[discord] dm_policy / group_policy / guilds allowlist are parsed but not yet enforced (v2)"
+            );
+        }
+        let intents = bot_config
+            .intents_bitmask
+            .unwrap_or_else(|| intents_to_bitmask(&bot_config.intents));
+        let intents_label = bot_config.intents.join(", ");
+        out.push((
+            Arc::new(DiscordChannel::new(
+                bot_config.token.clone(),
+                intents,
+                intents_label,
+                project_root.to_path_buf(),
+            )),
+            bot_config.agent.clone(),
+        ));
+        Ok(())
+    };
+
+    for cfg in config.channels.discord.values() {
+        emit(cfg)?;
     }
 
-    let intents = bot_config
-        .intents_bitmask
-        .unwrap_or_else(|| intents_to_bitmask(&bot_config.intents));
-
-    info!("🤖 Starting Discord Bot...");
-    info!("   Agent: {}", agent_slug);
-    info!(
-        "   Intents: 0x{:X} ({})",
-        intents,
-        bot_config.intents.join(", ")
-    );
-    // Token is never logged.
-
-    let http = reqwest::Client::new();
-    let rt = Arc::new(GatewayRuntime::new(token, intents));
-
-    connection_loop(
-        Arc::new(config),
-        Arc::new(project_root),
-        Arc::new(agent_slug),
-        rt,
-        http,
-    )
-    .await
+    Ok(out)
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────

@@ -41,8 +41,11 @@ use crate::services::config::JuglansConfig;
 use crate::services::local_runtime::LocalRuntime;
 use crate::services::prompt_loader::PromptRegistry;
 
-use crate::adapters::feishu::FeishuWebhookHandler;
-use crate::adapters::telegram::TelegramWebhookHandler;
+// Feishu/Telegram passive ingress now lives behind the unified `Channel` trait
+// (see `adapters::feishu::FeishuEventChannel` and
+// `adapters::telegram::TelegramWebhookChannel`). The orchestrator in
+// `start_web_server` calls `Channel::install_routes` on each, so legacy
+// `*WebhookHandler` direct mounts are gone.
 
 // --- File Watcher (hot-reload + cache invalidation) ---
 
@@ -827,22 +830,6 @@ async fn health_check() -> Json<Value> {
     Json(json!({"status": "ok"}))
 }
 
-/// Feishu webhook event receiver (serverless deployment)
-async fn handle_feishu_webhook(
-    Extension(handler): Extension<Arc<FeishuWebhookHandler>>,
-    Json(body): Json<Value>,
-) -> Json<Value> {
-    Json(handler.handle_event(body).await)
-}
-
-/// Telegram webhook event receiver (serverless deployment)
-async fn handle_telegram_webhook(
-    Extension(handler): Extension<Arc<TelegramWebhookHandler>>,
-    Json(body): Json<Value>,
-) -> Json<Value> {
-    Json(handler.handle_update(body).await)
-}
-
 /// Dashboard page
 async fn dashboard(Extension(state): Extension<Arc<WebState>>) -> Html<String> {
     let uptime = format_uptime(state.start_time.elapsed().as_secs());
@@ -1075,6 +1062,10 @@ pub async fn start_web_server(
     host: String,
     port: u16,
     project_root: PathBuf,
+    channels: Vec<(
+        Arc<dyn crate::adapters::Channel>,
+        Arc<dyn crate::adapters::MessageDispatcher>,
+    )>,
 ) -> anyhow::Result<()> {
     let config = JuglansConfig::load().ok();
 
@@ -1132,35 +1123,16 @@ pub async fn start_web_server(
         .route("/api/chat/tool-result", post(handle_tool_result))
         .route("/health", get(health_check));
 
-    // Feishu Webhook (if feishu app_id + app_secret are configured)
-    let feishu_enabled = if let Some(ref cfg) = config {
-        if let Some(handler) = FeishuWebhookHandler::from_config(cfg, &project_root) {
-            let handler = Arc::new(handler);
-            app = app
-                .route("/webhook/feishu", post(handle_feishu_webhook))
-                .layer(Extension(handler));
-            true
-        } else {
-            false
-        }
-    } else {
-        false
-    };
-
-    // Telegram Webhook (if telegram token is configured)
-    let telegram_enabled = if let Some(ref cfg) = config {
-        if let Some(handler) = TelegramWebhookHandler::from_config(cfg, &project_root) {
-            let handler = Arc::new(handler);
-            app = app
-                .route("/webhook/telegram", post(handle_telegram_webhook))
-                .layer(Extension(handler));
-            true
-        } else {
-            false
-        }
-    } else {
-        false
-    };
+    // Channel orchestration: each channel can be active (run() loop), passive
+    // (install_routes mounts /webhook/<kind>/<id>), or both. Mount routes here
+    // before `axum::serve` so passive channels are wired into the same router
+    // as the rest of the API.
+    let mut channel_summary: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
+    for (ch, dispatcher) in &channels {
+        *channel_summary.entry(ch.kind().to_string()).or_insert(0) += 1;
+        app = ch.clone().install_routes(app, dispatcher.clone());
+    }
 
     // If serve() workflow is found, register catch-all fallback
     if serve_workflow.is_some() {
@@ -1187,11 +1159,12 @@ pub async fn start_web_server(
     info!("   - GET  /api/prompts");
     info!("   - GET  /api/workflows");
     info!("   - POST /api/chat");
-    if feishu_enabled {
-        info!("   - POST /webhook/feishu");
-    }
-    if telegram_enabled {
-        info!("   - POST /webhook/telegram");
+    if !channel_summary.is_empty() {
+        let summary: Vec<String> = channel_summary
+            .iter()
+            .map(|(k, v)| format!("{} (×{})", k, v))
+            .collect();
+        info!("📡 Channels: {}", summary.join(", "));
     }
     if let Some(ref sw) = serve_workflow {
         info!("🌐 HTTP Backend: {} (entry: [{}])", sw.slug, sw.entry_node);
@@ -1201,6 +1174,18 @@ pub async fn start_web_server(
 
     // File watcher: log file changes and invalidate the workflow cache on relevant edits.
     spawn_workspace_watcher(project_root.clone(), state.clone());
+
+    // Spawn each channel's active ingress loop (no-op for passive-only channels;
+    // their routes were already installed above).
+    for (ch, dispatcher) in channels {
+        let ch_for_log = ch.clone();
+        tokio::spawn(async move {
+            let id = ch_for_log.id().to_string();
+            if let Err(e) = ch.run(dispatcher).await {
+                tracing::error!("[{}] exited: {:#}", id, e);
+            }
+        });
+    }
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     info!("🚀 Server is ready and waiting for requests...");

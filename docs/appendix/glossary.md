@@ -6,13 +6,13 @@ Core terminology used throughout Juglans documentation.
 
 **Agent** -- An AI persona defined as an inline JSON map node in a `.jg` file, specifying model, system prompt, tools, and behavior parameters. Referenced by node ID in `chat()` calls (e.g., `chat(agent=my_agent, ...)`). For cross-workflow reuse, agents can be defined in a library file and imported via `libs:`.
 
-**Bot adapter** -- A server-side integration that connects a chat platform (Telegram, Feishu, WeChat, Discord) to a Juglans workflow, translating inbound messages into workflow runs and replies back to the platform. Started via `juglans bot` or the unified `juglans serve`. Each adapter sets `input.chat_id` using a platform-specific key (`discord:{channel_id}:{agent_slug}` for Discord, `telegram:{chat_id}:{agent_slug}` for Telegram, etc.) so conversation-history buckets stay isolated per thread.
+**Channel** -- A named platform endpoint that receives inbound messages and / or sends outbound replies for one platform identity (one Telegram bot, one WeChat account, one Feishu app, etc.). Configured under `[channels.<kind>.<instance_id>]` in `juglans.toml` and run by `juglans serve` — the legacy `juglans bot <platform>` subcommand and `[bot.*]` config form were removed. Channels can have active ingress (long-poll, websocket), passive ingress (webhook routes mounted on the shared axum server), egress, or any combination. Each channel sets `input.chat_id` using a platform-specific key (`telegram:{chat_id}:{agent_slug}`, etc.) so conversation-history buckets stay isolated per thread, and stamps a `ChannelOrigin` on the workflow context so `reply()` automatically routes back through the originating channel.
 
 **Builtin** -- A tool implemented directly in the Juglans Rust runtime (e.g., `chat`, `fetch`, `notify`), available without any external configuration.
 
 **CLI** -- The `juglans` command-line interface, the primary way to execute workflows, manage resources, and run development tools.
 
-**`chat_id`** -- The routing key that identifies a single conversation thread in the history store. Resolved per `chat()` call in priority order: explicit `chat_id=` → `reply.chat_id` (chained within a run) → `input.chat_id` (auto-injected by bot adapters as `"{platform}:{user}:{agent}"`) → stateless. Used as the primary key in the JSONL / SQLite history backends.
+**`chat_id`** -- The routing key that identifies a single conversation thread in the history store. Resolved per `chat()` call in priority order: explicit `chat_id=` → `reply.chat_id` (chained within a run) → `input.chat_id` (auto-injected by channels as `"{platform}:{user}:{agent}"`) → stateless. Used as the primary key in the JSONL / SQLite history backends.
 
 **Class** -- A named, typed schema declared inside a `.jg` file. Classes define the shape of structured data so the type checker can validate how values flow between nodes.
 
@@ -68,7 +68,7 @@ Core terminology used throughout Juglans documentation.
 
 **Registry** -- The package registry (`jgr.juglans.ai`) where Juglans packages are published and installed via `juglans publish` / `juglans add`.
 
-**Serve** -- The unified server subcommand (`juglans serve`) that hosts the web API, bot adapters, and cron triggers together in a single process, replacing the older standalone `juglans web` / `juglans bot` pattern.
+**Serve** -- The unified server subcommand (`juglans serve`) that hosts the HTTP API, every configured channel (active ingress + passive webhook routes), and cron triggers together in a single process. Replaces the older standalone `juglans web` / `juglans bot` pattern.
 
 **Skill** -- A packaged, reusable capability (a workflow plus its prompts, agents, and tools) that can be listed and invoked via `juglans skills`. Skills are the primary unit of sharing on the registry.
 
@@ -80,6 +80,6 @@ Core terminology used throughout Juglans documentation.
 
 **Type checker** -- The static analysis pass (part of `juglans check`) that validates class definitions, node inputs/outputs, and cross-node data flow before execution, catching wiring mistakes that would otherwise surface at runtime.
 
-**Variable** -- A runtime reference to data: `input` (CLI/adapter input, including `input.chat_id` for history routing and `input.platform_chat_id` as the raw target id used by `*.send_message`), `output` (previous node result), `reply.*` (agent response metadata, including `reply.chat_id` for chaining), `error` (`on error` paths), `config` (parsed `juglans.toml`), `response` (HTTP handlers), plus loop-scoped `loop.index` / `loop.item` inside `foreach` / `while` blocks. Reserved names cannot be used as user variables.
+**Variable** -- A runtime reference to data: `input` (CLI / channel-injected input, including `input.chat_id` for history routing and `input.platform_chat_id` as the raw target id used by `*.send_message`), `output` (previous node result), `reply.*` (agent response metadata, including `reply.chat_id` for chaining), `error` (`on error` paths), `config` (parsed `juglans.toml`), `response` (HTTP handlers), plus loop-scoped `loop.index` / `loop.item` inside `foreach` / `while` blocks. Reserved names cannot be used as user variables.
 
 **Workflow** -- A complete execution graph defined in a `.jg` file, consisting of metadata, nodes, edges, and optional function definitions.

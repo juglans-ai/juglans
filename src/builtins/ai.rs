@@ -1038,8 +1038,17 @@ impl Tool for Chat {
             Some((i, o)) => (i.to_string(), o.to_string()),
             None => (state_raw.clone(), state_raw.clone()),
         };
-        // should_stream based on output_state (whether AI response is visible to user)
-        let should_stream = output_state == "context_visible" || output_state == "display_only";
+        // Visibility: only user-facing states stream tokens out. AI-internal
+        // and silent states never stream regardless of the explicit `stream`
+        // flag — there's nothing for a stream to be visible on.
+        let visible = output_state == "context_visible" || output_state == "display_only";
+        // Explicit stream override (default: stream when visible). Lets a
+        // workflow ask for "user-visible but batched" by passing stream=false.
+        let stream_param = params
+            .get("stream")
+            .map(|s| s.as_str())
+            .map(|s| s != "false" && s != "0" && s != "no");
+        let should_stream = visible && stream_param.unwrap_or(true);
         // should_persist: if either input or output needs persistence, inherit chat_id
         let should_persist = input_state == "context_visible"
             || input_state == "context_hidden"

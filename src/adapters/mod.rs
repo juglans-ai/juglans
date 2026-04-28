@@ -52,12 +52,130 @@ pub trait ToolExecutor: Send + Sync {
 /// Pluggable message dispatch. Default behavior is the in-process workflow
 /// runtime (see [`LocalDispatcher`]); orchestrator-style hosts (e.g.
 /// juglans-wallet) wrap their own dispatcher so a long-running adapter loop
-/// (`adapters::wechat::run_message_loop`, `adapters::telegram::start`, …)
-/// can route incoming messages to whichever agent the orchestrator picks
-/// without going through the public `run_agent_for_message` helper at all.
+/// can route incoming messages to whichever agent the orchestrator picks.
+///
+/// Two entry points coexist:
+/// - `dispatch(message)` — legacy, "concatenate Token events into BotReply.text"
+///   semantics. Kept for callers that don't have a Channel (orchestrator hosts,
+///   tests). Channels should not call this directly.
+/// - `dispatch_with_origin(message, origin)` — new entry. When `origin` is
+///   `Some`, the implementation sets `WorkflowContext::origin` and routes
+///   replies through `origin.channel.send(...)` per speech node, returning an
+///   empty `BotReply` (channels see empty text and skip the legacy re-send).
+///   The default impl delegates to `dispatch`, ignoring origin — old impls
+///   keep working but lose the per-node routing benefit.
 #[async_trait::async_trait]
 pub trait MessageDispatcher: Send + Sync {
     async fn dispatch(&self, message: &PlatformMessage) -> Result<BotReply>;
+
+    async fn dispatch_with_origin(
+        &self,
+        message: &PlatformMessage,
+        _origin: Option<crate::core::context::ChannelOrigin>,
+    ) -> Result<BotReply> {
+        self.dispatch(message).await
+    }
+}
+
+/// A named platform endpoint with optional ingress and egress.
+///
+/// Channels uniformly model every chat-platform integration: WeChat accounts,
+/// Telegram bots (polling or webhook), Discord gateways, Feishu event apps,
+/// Feishu incoming webhooks. Each channel implements whichever direction(s) it
+/// supports — pure-egress channels (e.g. Feishu incoming webhook) leave both
+/// ingress methods at their default no-op.
+///
+/// **Active ingress** — `run()`. Spawn a long-lived loop (long-poll, websocket).
+/// **Passive ingress** — `install_routes()`. Mount HTTP routes that the platform POSTs to.
+/// **Egress** — `send()` (inherited from `ChannelEgress`). Push a reply to a conversation.
+///
+/// `Channel` extends `ChannelEgress` (defined in `core::context`) so a
+/// `WorkflowContext` can carry an `Arc<dyn ChannelEgress>` without `core`
+/// depending on `adapters`. `Arc<dyn Channel>` coerces to `Arc<dyn ChannelEgress>`
+/// automatically.
+///
+/// A single juglans process can run many channels concurrently; the orchestrator
+/// spawns each `run()` and merges each `install_routes()` into the shared axum
+/// router before serving.
+#[async_trait::async_trait]
+pub trait Channel: crate::core::context::ChannelEgress {
+    /// Stable identifier, e.g. `"wechat:wxid_alpha"` or `"telegram:main"`.
+    fn id(&self) -> &str;
+
+    /// Platform family, e.g. `"wechat"`, `"telegram"`, `"discord"`, `"feishu"`.
+    fn kind(&self) -> &str;
+
+    /// Active ingress loop. Default: no-op (passive-only or egress-only channels
+    /// leave this alone). Implementations should tolerate transient errors
+    /// internally and only return `Err` for unrecoverable conditions.
+    async fn run(self: Arc<Self>, _dispatcher: Arc<dyn MessageDispatcher>) -> Result<()> {
+        Ok(())
+    }
+
+    /// Passive ingress route registration. Default: returns the router untouched
+    /// (active or egress-only channels leave this alone). Called once at server
+    /// boot, before `axum::serve`. The same `dispatcher` the channel will hand
+    /// to its workflow runs is passed in so handlers can capture it.
+    fn install_routes(
+        self: Arc<Self>,
+        router: axum::Router,
+        _dispatcher: Arc<dyn MessageDispatcher>,
+    ) -> axum::Router {
+        router
+    }
+}
+
+// Note: the egress `send` method lives on `ChannelEgress` in `core::context`,
+// not on `Channel` directly. Each channel impl provides an
+// `impl ChannelEgress for Foo { async fn send(...) {...} }` block alongside
+// its `impl Channel for Foo { ... }` block.
+
+/// Wraps another `MessageDispatcher` to auto-inject a `ChannelOrigin` derived
+/// from the inbound message's `platform_chat_id`. Channel ingress code wraps
+/// its supplied dispatcher with this, so the underlying message loop doesn't
+/// need to know about origin — it just calls `dispatch` like before, and
+/// origin gets plumbed transparently.
+pub struct OriginAwareDispatcher {
+    inner: Arc<dyn MessageDispatcher>,
+    channel: Arc<dyn crate::core::context::ChannelEgress>,
+}
+
+impl OriginAwareDispatcher {
+    pub fn new(
+        channel: Arc<dyn crate::core::context::ChannelEgress>,
+        inner: Arc<dyn MessageDispatcher>,
+    ) -> Self {
+        Self { inner, channel }
+    }
+}
+
+#[async_trait::async_trait]
+impl MessageDispatcher for OriginAwareDispatcher {
+    async fn dispatch(&self, message: &PlatformMessage) -> Result<BotReply> {
+        let origin = crate::core::context::ChannelOrigin {
+            channel: self.channel.clone(),
+            conversation: message.platform_chat_id.clone(),
+        };
+        self.inner
+            .dispatch_with_origin(message, Some(origin))
+            .await
+    }
+
+    async fn dispatch_with_origin(
+        &self,
+        message: &PlatformMessage,
+        origin: Option<crate::core::context::ChannelOrigin>,
+    ) -> Result<BotReply> {
+        // If caller supplied an origin we honor that; otherwise synthesize
+        // one from this wrapper's channel + the message's chat_id.
+        let origin = origin.or_else(|| {
+            Some(crate::core::context::ChannelOrigin {
+                channel: self.channel.clone(),
+                conversation: message.platform_chat_id.clone(),
+            })
+        });
+        self.inner.dispatch_with_origin(message, origin).await
+    }
 }
 
 /// Default dispatcher: load the workflow file from disk and run it in-process.
@@ -77,6 +195,23 @@ impl MessageDispatcher for LocalDispatcher {
             &self.agent_slug,
             message,
             None,
+            None,
+        )
+        .await
+    }
+
+    async fn dispatch_with_origin(
+        &self,
+        message: &PlatformMessage,
+        origin: Option<crate::core::context::ChannelOrigin>,
+    ) -> Result<BotReply> {
+        run_agent_for_message(
+            &self.config,
+            &self.project_root,
+            &self.agent_slug,
+            message,
+            None,
+            origin,
         )
         .await
     }
@@ -93,6 +228,7 @@ pub async fn run_agent_for_message(
     agent_slug: &str,
     message: &PlatformMessage,
     tool_executor: Option<&dyn ToolExecutor>,
+    origin: Option<crate::core::context::ChannelOrigin>,
 ) -> Result<BotReply> {
     // 1. Find workflow file by slug (agent_slug is now a workflow name)
     let wf_path = {
@@ -167,6 +303,14 @@ pub async fn run_agent_for_message(
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<WorkflowEvent>();
     let ctx = WorkflowContext::with_sender(tx.clone());
 
+    // If a channel origin is set, hand it to the context so reply()/chat()
+    // can find their way back, and turn on per-node events so the egress
+    // driver can react to NodeComplete (only chat/reply nodes are sent).
+    if let Some(ref org) = origin {
+        ctx.set_origin(org.clone());
+        ctx.set_stream_node_events(true);
+    }
+
     // Derive a namespaced chat_id for history storage. Keeps different
     // platforms / users / agents on separate threads so a telegram chat
     // and a wechat chat for the same slug never collide.
@@ -240,21 +384,80 @@ pub async fn run_agent_for_message(
         }
     });
 
-    // 5. Collect all Token events -> concatenate into reply text
+    // 5. Drain events.
+    //
+    // Two paths:
+    // - With `origin`: speech-node lifecycle drives channel egress. Per-node
+    //   visibility (state=visible/display) and streaming (stream=true AND
+    //   channel supports it) is decided at NodeStart. Tokens push live for
+    //   streaming nodes; finalize fires on NodeComplete. Non-streaming
+    //   visible nodes batch on NodeComplete via `send`. Hidden/silent nodes
+    //   skip channel egress entirely.
+    // - Without `origin` (back-compat orchestrator hosts): collect all Token
+    //   events into one BotReply.text and return.
     let mut reply_text = String::new();
+    let conversation = origin.as_ref().map(|o| o.conversation.clone());
+    let egress_channel = origin.as_ref().map(|o| o.channel.clone());
+
+    // Per-node egress state. Populated on NodeStart for chat/reply when
+    // origin is set; cleared on NodeComplete. `visible` controls whether
+    // we send at all; `stream_handle` is Some when streaming was negotiated.
+    use crate::core::context::StreamHandle;
+    struct NodeEgress {
+        visible: bool,
+        stream_handle: Option<Box<dyn StreamHandle>>,
+    }
+    let mut node_egress: HashMap<String, NodeEgress> = HashMap::new();
+    // The single currently-streaming node id, if any. Token events route
+    // here. Assumes serial chat/reply (the >99% common case); parallel
+    // chat across nodes will fall back to batch on the second one.
+    let mut streaming_node_id: Option<String> = None;
+
+    fn parse_visibility(params: &HashMap<String, String>) -> bool {
+        let raw = params.get("state").map(|s| s.as_str()).unwrap_or("context_visible");
+        let output_state = match raw.split_once(':') {
+            Some((_, o)) => o,
+            None => raw,
+        };
+        matches!(output_state, "context_visible" | "display_only")
+    }
+    fn parse_stream_flag(params: &HashMap<String, String>) -> bool {
+        params
+            .get("stream")
+            .map(|s| s.as_str())
+            .map(|s| s != "false" && s != "0" && s != "no")
+            .unwrap_or(true)
+    }
 
     while let Some(event) = rx.recv().await {
         match event {
             WorkflowEvent::Token(t) => {
-                reply_text.push_str(&t);
+                if egress_channel.is_none() {
+                    // Legacy path: tokens accumulate into BotReply.text.
+                    reply_text.push_str(&t);
+                } else if let Some(node_id) = &streaming_node_id {
+                    if let Some(state) = node_egress.get_mut(node_id) {
+                        if let Some(handle) = state.stream_handle.as_mut() {
+                            if let Err(e) = handle.push_token(&t).await {
+                                warn!(
+                                    "[channel egress] stream push failed on [{}]: {:#}",
+                                    node_id, e
+                                );
+                            }
+                        }
+                    }
+                }
             }
             WorkflowEvent::Status(s) => {
                 debug!("[Bot Status] {}", s);
             }
             WorkflowEvent::Error(e) => {
-                if reply_text.is_empty() {
+                if egress_channel.is_none() && reply_text.is_empty() {
                     reply_text = format!("Error: {}", e);
                 }
+                // With origin: workflow errors don't auto-reply to channel.
+                // Workflow author can `reply(text="error: ...")` if they want
+                // the user to see something.
             }
             WorkflowEvent::ToolCall {
                 tools, result_tx, ..
@@ -294,13 +497,79 @@ pub async fn run_agent_for_message(
                     let _ = result_tx.send((vec![], None));
                 }
             }
+            WorkflowEvent::NodeStart(evt) => {
+                // Speech-node setup: only chat/reply matter for egress.
+                if let (Some(channel), Some(conv)) = (&egress_channel, &conversation) {
+                    if matches!(evt.tool.as_str(), "chat" | "reply") {
+                        let visible = parse_visibility(&evt.params);
+                        let want_stream = visible && parse_stream_flag(&evt.params);
+                        let mut handle: Option<Box<dyn StreamHandle>> = None;
+                        if want_stream && streaming_node_id.is_none() {
+                            // Try to negotiate a streaming session. Failure
+                            // is fine — we'll batch on NodeComplete.
+                            match channel.start_stream(conv).await {
+                                Ok(h) => {
+                                    handle = Some(h);
+                                    streaming_node_id = Some(evt.node_id.clone());
+                                }
+                                Err(_) => {
+                                    // Channel doesn't support streaming, or
+                                    // a transient failure. Either way: batch.
+                                }
+                            }
+                        }
+                        node_egress.insert(
+                            evt.node_id.clone(),
+                            NodeEgress {
+                                visible,
+                                stream_handle: handle,
+                            },
+                        );
+                    }
+                }
+            }
+            WorkflowEvent::NodeComplete(evt) => {
+                if let (Some(channel), Some(conv)) = (&egress_channel, &conversation) {
+                    if let Some(state) = node_egress.remove(&evt.node_id) {
+                        // Visible? Either finalize stream or send batch.
+                        // Hidden/silent? Skip — workflow author chose silence.
+                        if state.visible {
+                            if let Some(handle) = state.stream_handle {
+                                if Some(&evt.node_id) == streaming_node_id.as_ref() {
+                                    streaming_node_id = None;
+                                }
+                                if let Err(e) = handle.finalize().await {
+                                    warn!(
+                                        "[channel egress] stream finalize failed on [{}]: {:#}",
+                                        evt.node_id, e
+                                    );
+                                }
+                            } else if let Some(text) = extract_speech_text(&evt.result) {
+                                if !text.is_empty() {
+                                    if let Err(e) = channel.send(conv, &text).await {
+                                        error!(
+                                            "[channel egress] {} send failed for [{}]: {:#}",
+                                            evt.tool, evt.node_id, e
+                                        );
+                                    }
+                                }
+                            }
+                        } else {
+                            // Hidden node had a stream handle? Defensive
+                            // finalize so resources don't leak.
+                            if let Some(handle) = state.stream_handle {
+                                let _ = handle.finalize().await;
+                            }
+                        }
+                    }
+                }
+            }
             WorkflowEvent::Meta(_)
             | WorkflowEvent::Yield(_)
             | WorkflowEvent::ToolStart(_)
-            | WorkflowEvent::ToolComplete(_)
-            | WorkflowEvent::NodeStart(_)
-            | WorkflowEvent::NodeComplete(_) => {
-                // Bot mode ignores meta / yield / tool / node events
+            | WorkflowEvent::ToolComplete(_) => {
+                // Bot mode ignores these — interactive UIs use them for
+                // status display but channels just want the final text.
             }
         }
     }
@@ -308,18 +577,40 @@ pub async fn run_agent_for_message(
     // Wait for execution to finish
     let _ = exec_handle.await;
 
-    // If reply_text is empty, try to get from context
-    if reply_text.is_empty() {
-        if let Ok(Some(val)) = WorkflowContext::new().resolve_path("reply.output") {
-            if let Some(s) = val.as_str() {
-                reply_text = s.to_string();
-            }
-        }
+    if egress_channel.is_some() {
+        // Origin-routed reply: nothing to return — channel.send / start_stream
+        // already delivered per node. Empty text signals "no need to re-send"
+        // to the caller's legacy guard.
+        return Ok(BotReply { text: String::new() });
     }
 
+    // No-origin path: callers (juglans-wallet–style external orchestrators)
+    // expect the concatenated Token text. Fall back to "(No response)" so the
+    // calling channel sends *something* on a workflow that never spoke.
+    //
+    // (An earlier version tried to read `reply.output` from a freshly-built
+    // empty `WorkflowContext::new()` here as a last resort — that always
+    // returned None, so it was dead code. Removed.)
     if reply_text.is_empty() {
         reply_text = "(No response)".to_string();
     }
 
     Ok(BotReply { text: reply_text })
+}
+
+/// Pull a string reply out of a chat/reply NodeComplete result.
+///
+/// `chat()` returns `{ content: "...", ... }` (sometimes with `tokens`/`role`
+/// fields); `reply()` returns `{ content: "...", status: "sent" }`. Either way,
+/// the visible message is the `content` field. Falls back to direct string
+/// values for forward-compat with future builtins that just return text.
+fn extract_speech_text(result: &Option<Value>) -> Option<String> {
+    let v = result.as_ref()?;
+    if let Some(s) = v.as_str() {
+        return Some(s.to_string());
+    }
+    if let Some(s) = v.get("content").and_then(|c| c.as_str()) {
+        return Some(s.to_string());
+    }
+    None
 }
