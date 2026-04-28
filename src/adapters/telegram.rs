@@ -123,16 +123,15 @@ impl TelegramWebhookHandler {
                 .send()
                 .await;
 
-            let result =
-                run_agent_for_message(
-                    &config,
-                    &project_root,
-                    &agent_slug,
-                    &platform_msg,
-                    None,
-                    origin,
-                )
-                .await;
+            let result = run_agent_for_message(
+                &config,
+                &project_root,
+                &agent_slug,
+                &platform_msg,
+                None,
+                origin,
+            )
+            .await;
 
             match result {
                 Ok(reply) => {
@@ -241,10 +240,8 @@ impl Channel for TelegramChannel {
     async fn run(self: Arc<Self>, dispatcher: Arc<dyn MessageDispatcher>) -> Result<()> {
         // Auto-inject ChannelOrigin into every dispatched message so workflows
         // calling `reply()` route their output back through this channel.
-        let dispatcher = Arc::new(super::OriginAwareDispatcher::new(
-            self.clone(),
-            dispatcher,
-        )) as Arc<dyn MessageDispatcher>;
+        let dispatcher = Arc::new(super::OriginAwareDispatcher::new(self.clone(), dispatcher))
+            as Arc<dyn MessageDispatcher>;
 
         let base_url = format!("https://api.telegram.org/bot{}", self.token);
 
@@ -431,7 +428,6 @@ pub fn discover_channels(
 
     out
 }
-
 
 /// Telegram Bot API base URL.
 pub(crate) const TELEGRAM_API: &str = "https://api.telegram.org";
@@ -702,17 +698,12 @@ impl TelegramStreamHandle {
             .await?;
         let body: Value = resp.json().await.unwrap_or(serde_json::json!({}));
         if body["ok"].as_bool() != Some(true) {
-            return Err(anyhow::anyhow!(
-                "Telegram sendMessage failed: {}",
-                body
-            ));
+            return Err(anyhow::anyhow!("Telegram sendMessage failed: {}", body));
         }
         let id = body
             .pointer("/result/message_id")
             .and_then(|v| v.as_i64())
-            .ok_or_else(|| {
-                anyhow::anyhow!("Telegram sendMessage: no message_id in response")
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("Telegram sendMessage: no message_id in response"))?;
         self.message_id = Some(id);
         self.last_edit = std::time::Instant::now();
         self.pending = false;
@@ -721,8 +712,15 @@ impl TelegramStreamHandle {
 
     async fn flush_edit(&mut self) -> Result<()> {
         if let Some(id) = self.message_id {
-            edit_message_api(&self.http, &self.token, &self.chat_id, id, &self.buffer, None)
-                .await?;
+            edit_message_api(
+                &self.http,
+                &self.token,
+                &self.chat_id,
+                id,
+                &self.buffer,
+                None,
+            )
+            .await?;
             self.last_edit = std::time::Instant::now();
             self.pending = false;
         }

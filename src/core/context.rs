@@ -123,10 +123,7 @@ pub trait ChannelEgress: Send + Sync {
     /// should fall back to `send` at finalization. Channels that have a
     /// native streaming primitive (Telegram `sendMessageDraft`, web SSE)
     /// override this to return a real `StreamHandle`.
-    async fn start_stream(
-        &self,
-        _conversation: &str,
-    ) -> Result<Box<dyn StreamHandle>> {
+    async fn start_stream(&self, _conversation: &str) -> Result<Box<dyn StreamHandle>> {
         Err(anyhow!("channel does not support streaming"))
     }
 }

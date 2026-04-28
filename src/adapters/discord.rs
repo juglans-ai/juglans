@@ -791,10 +791,8 @@ impl Channel for DiscordChannel {
         );
         // Auto-inject ChannelOrigin so workflows reply()-ing inside Discord
         // events route back through this channel's egress.
-        let dispatcher = Arc::new(super::OriginAwareDispatcher::new(
-            self.clone(),
-            dispatcher,
-        )) as Arc<dyn MessageDispatcher>;
+        let dispatcher = Arc::new(super::OriginAwareDispatcher::new(self.clone(), dispatcher))
+            as Arc<dyn MessageDispatcher>;
         connection_loop(
             dispatcher,
             self.project_root.clone(),

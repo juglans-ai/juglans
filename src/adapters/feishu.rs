@@ -9,9 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tracing::{error, info, warn};
 
-use super::{
-    run_agent_for_message, Channel, MessageDispatcher, PlatformMessage, ToolExecutor,
-};
+use super::{run_agent_for_message, Channel, MessageDispatcher, PlatformMessage, ToolExecutor};
 use crate::services::config::JuglansConfig;
 
 /// Feishu platform tool executor -- invokes bill_utils.py via Python subprocess
@@ -277,10 +275,12 @@ impl FeishuWebhookHandler {
             platform: "feishu".into(),
         };
 
-        let origin = channel.as_ref().map(|ch| crate::core::context::ChannelOrigin {
-            channel: ch.clone(),
-            conversation: chat_id.clone(),
-        });
+        let origin = channel
+            .as_ref()
+            .map(|ch| crate::core::context::ChannelOrigin {
+                channel: ch.clone(),
+                conversation: chat_id.clone(),
+            });
         let result = {
             let tool_executor = FeishuToolExecutor::from_handler(self, &platform_msg);
             run_agent_for_message(

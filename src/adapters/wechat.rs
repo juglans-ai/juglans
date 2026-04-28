@@ -873,10 +873,8 @@ impl Channel for WechatChannel {
         info!("[wechat] {} starting message loop", account_id);
         // Wrap so `reply()` inside the workflow routes back through this
         // channel via the egress driver.
-        let dispatcher = Arc::new(super::OriginAwareDispatcher::new(
-            self.clone(),
-            dispatcher,
-        )) as Arc<dyn MessageDispatcher>;
+        let dispatcher = Arc::new(super::OriginAwareDispatcher::new(self.clone(), dispatcher))
+            as Arc<dyn MessageDispatcher>;
         let result = message_loop(&self.http, &self.workspace, login, dispatcher).await;
         match &result {
             Ok(()) => info!("[wechat] {} loop exited cleanly", account_id),

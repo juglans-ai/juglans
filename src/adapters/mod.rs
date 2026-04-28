@@ -156,9 +156,7 @@ impl MessageDispatcher for OriginAwareDispatcher {
             channel: self.channel.clone(),
             conversation: message.platform_chat_id.clone(),
         };
-        self.inner
-            .dispatch_with_origin(message, Some(origin))
-            .await
+        self.inner.dispatch_with_origin(message, Some(origin)).await
     }
 
     async fn dispatch_with_origin(
@@ -414,7 +412,10 @@ pub async fn run_agent_for_message(
     let mut streaming_node_id: Option<String> = None;
 
     fn parse_visibility(params: &HashMap<String, String>) -> bool {
-        let raw = params.get("state").map(|s| s.as_str()).unwrap_or("context_visible");
+        let raw = params
+            .get("state")
+            .map(|s| s.as_str())
+            .unwrap_or("context_visible");
         let output_state = match raw.split_once(':') {
             Some((_, o)) => o,
             None => raw,
@@ -581,7 +582,9 @@ pub async fn run_agent_for_message(
         // Origin-routed reply: nothing to return — channel.send / start_stream
         // already delivered per node. Empty text signals "no need to re-send"
         // to the caller's legacy guard.
-        return Ok(BotReply { text: String::new() });
+        return Ok(BotReply {
+            text: String::new(),
+        });
     }
 
     // No-origin path: callers (juglans-wallet–style external orchestrators)
