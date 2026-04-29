@@ -151,16 +151,17 @@ juglans check workflow.jg
 
 ---
 
-### 9. Resource already exists
+### 9. Package already exists in registry
 
-**Error:** `Resource 'my-prompt' already exists (use --force to overwrite)`
+**Error:** `Package 'my-pkg' version X already exists`
 
-**Cause:** Pushing a resource that already exists on the server.
+**Cause:** Trying to publish a package version that's already on the registry. Versions are immutable — bump the version field in `jgpackage.toml` instead of overwriting.
 
-**Solution:**
+**Solution:** Edit `version = "..."` in `jgpackage.toml`, re-pack, and re-publish:
 
 ```bash
-juglans push src/prompts/my-prompt.jgx --force
+juglans pack
+juglans publish
 ```
 
 ---
@@ -177,7 +178,7 @@ juglans push src/prompts/my-prompt.jgx --force
 
 ### 11. Max loop iterations exceeded
 
-**Error:** `Loop exceeded maximum iterations (100)`
+**Error:** `Loop limit exceeded (max: 100).`
 
 **Cause:** A `foreach` or `while` loop hit the iteration limit.
 
@@ -209,14 +210,12 @@ http_timeout_secs = 300
 
 **Error:** `Address already in use (port 3000)`
 
-**Cause:** Another process is using the port when starting `juglans web` (or the unified `juglans serve`, which wraps web, channels, and cron triggers).
+**Cause:** Another process is already using the port that `juglans serve` is trying to bind.
 
 **Solution:**
 
 ```bash
 # Use a different port
-juglans web --port 8081
-# or
 juglans serve --port 8081
 
 # Or find and stop the conflicting process

@@ -195,7 +195,7 @@ fn generate_dockerfile(port: u16) -> String {
 COPY workspace/ /workspace/
 WORKDIR /workspace
 EXPOSE {port}
-CMD ["juglans", "web", "--host", "0.0.0.0", "--port", "{port}"]
+CMD ["juglans", "serve", "--host", "0.0.0.0", "--port", "{port}"]
 "#,
         base = BASE_IMAGE,
         port = port

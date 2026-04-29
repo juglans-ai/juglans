@@ -2,11 +2,9 @@
 
 ## File Location
 
-Searched by priority (first found wins):
+`juglans.toml` is read from the project root. The runtime walks up from the current working directory looking for the first ancestor containing a `juglans.toml` file (`find_project_root`). When no `juglans.toml` exists anywhere on the path up to root, defaults are used.
 
-1. `./juglans.toml` -- project directory (or any ancestor)
-2. `~/.config/juglans/juglans.toml` -- user configuration
-3. `/etc/juglans/juglans.toml` -- system configuration
+> Per-user (`~/.config/juglans/juglans.toml`) and system-wide (`/etc/juglans/juglans.toml`) config paths are **not** searched. Per-deployment overrides go through environment variables instead — see [Environment Variables](#environment-variables).
 
 ## Complete Configuration Example
 
@@ -160,7 +158,7 @@ You can also configure providers entirely via env vars without a `juglans.toml`:
 
 ## [server]
 
-Local web server configuration (for `juglans web`).
+HTTP server configuration (used by `juglans serve`).
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|

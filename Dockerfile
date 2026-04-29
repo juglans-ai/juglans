@@ -10,4 +10,4 @@ COPY workers/ /usr/local/bin/workers/
 WORKDIR /workspace
 EXPOSE 8080
 
-CMD ["juglans", "web", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["juglans", "serve", "--host", "0.0.0.0", "--port", "8080"]

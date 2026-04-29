@@ -37,6 +37,7 @@ Download from [GitHub Releases](https://github.com/juglans-ai/juglans/releases):
 | macOS (Apple Silicon) | `juglans-darwin-arm64.tar.gz` |
 | macOS (Intel) | `juglans-darwin-x64.tar.gz` |
 | Linux (x64) | `juglans-linux-x64.tar.gz` |
+| Linux (ARM64) | `juglans-linux-arm64.tar.gz` |
 | Windows (x64) | `juglans-windows-x64.zip` |
 
 ```bash

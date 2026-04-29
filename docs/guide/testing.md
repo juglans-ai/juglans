@@ -36,7 +36,7 @@ What it checks:
 
 Core capabilities:
 
-- **Test discovery** -- Scans `.jg` files for nodes prefixed with `test_` and executes each as an isolated subgraph
+- **Test discovery** -- Scans the `./tests/` directory by default (override with the path argument to `juglans test`) for `.jg` files containing `test_*` nodes, and executes each as an isolated subgraph
 - **Multiple output formats** -- Report results as human-readable `text`, machine-readable `json`, or CI-friendly `junit` XML via `--format`
 - **Standard exit codes** -- Exit 0 when all tests pass, non-zero on failure, suitable for CI pipelines
 
@@ -169,7 +169,8 @@ jobs:
 
       - name: Install Juglans
         run: |
-          cargo install --path juglans
+          curl -fsSL https://juglans.ai/install.sh | bash
+          echo "$HOME/.juglans/bin" >> "$GITHUB_PATH"
 
       - name: Syntax Check
         run: juglans check ./src/

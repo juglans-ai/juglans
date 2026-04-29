@@ -25,11 +25,12 @@ The node ID becomes the agent's identifier. Reference it by name (without quotes
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `model` | string | No | `"gpt-4o-mini"` | LLM model name |
+| `model` | string | No | `"gpt-4o"` | LLM model name |
 | `system_prompt` | string | No | -- | System prompt content |
 | `temperature` | number | No | `0.7` | Sampling temperature (0.0 -- 2.0) |
 | `tools` | JSON array / string list | No | -- | Default tool configuration |
-| `mcp` | string list | No | `[]` | MCP server names to attach |
+
+> MCP servers are configured per-call on `chat()` via the `mcp` parameter — see [`chat()` in builtins](./builtins.md#chat). The agent inline map does not carry an `mcp` field.
 
 ---
 
@@ -116,17 +117,6 @@ Default tools attached to every `chat()` request for this agent.
 ```
 
 Built-in slug `"devtools"` is auto-populated with every builtin that implements `schema()` — this includes the 6 developer tools (`read_file`, `write_file`, `edit_file`, `glob`, `grep`, `bash`), `http_request`, and any other schema-registered builtins.
-
-### mcp
-
-List of MCP (Model Context Protocol) server names. Servers must be configured in `juglans.toml`.
-
-```juglans
-[mcp_agent]: {
-  "model": "gpt-4o-mini",
-  "mcp": ["filesystem", "github"]
-}
-```
 
 ---
 

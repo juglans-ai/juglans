@@ -1,6 +1,8 @@
-# HTTP Client (httpx-style)
+# Tutorial 9: HTTP Client (httpx-style)
 
 Juglans provides a full-featured HTTP client library inspired by Python's httpx. Import it via `libs: ["http"]`.
+
+> This tutorial is a cookbook — feel free to skim it for the verbs you need. The next tutorial (the full project) wires this together with everything else.
 
 ## Basic Requests
 
@@ -152,3 +154,7 @@ libs: ["http"]
 [h]: http.head(url="https://httpbin.org/get")
 [o]: http.options(url="https://httpbin.org/get")
 ```
+
+---
+
+**Next:** [Full Project: AI Assistant](./full-project.md) — combines AI chat, branching, prompts, composition, error handling, and HTTP into one deployable bot.

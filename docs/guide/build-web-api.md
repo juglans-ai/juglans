@@ -17,14 +17,14 @@ Juglans can turn any workflow into an HTTP API using two builtins:
 Start the server:
 
 ```bash
-juglans web
+juglans serve
 # Server listens on http://127.0.0.1:3000 by default
 
 curl http://localhost:3000/api/hello
 # {"message": "Hello from Juglans!"}
 ```
 
-> **Port precedence:** `--port` flag > `[server] port` in `juglans.toml` > built-in fallback `8080` (only used when no `juglans.toml` exists at all). Project scaffolds ship with `port = 3000`, which is why local dev typically shows `3000`. The official Docker image runs `juglans web --port 8080`, so when running in Docker publish `8080:8080`.
+> **Port precedence:** `--port` flag > `[server] port` in `juglans.toml` > built-in fallback `8080` (only used when no `juglans.toml` exists at all). Project scaffolds ship with `port = 3000`, which is why local dev typically shows `3000`. The official Docker image runs `juglans serve --port 8080`, so when running in Docker publish `8080:8080`.
 
 The node ID (`[hello]`) is **not** the URL path. There are two ways to declare routes — pick the one that fits your workflow:
 
@@ -94,10 +94,10 @@ The web server injects these variables before workflow execution:
 
 ```bash
 # Default: http://127.0.0.1:3000
-juglans web
+juglans serve
 
 # Custom host and port
-juglans web --host 0.0.0.0 --port 3030
+juglans serve --host 0.0.0.0 --port 3030
 ```
 
 Or configure in `juglans.toml`:

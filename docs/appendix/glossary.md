@@ -68,7 +68,7 @@ Core terminology used throughout Juglans documentation.
 
 **Registry** -- The package registry (`jgr.juglans.ai`) where Juglans packages are published and installed via `juglans publish` / `juglans add`.
 
-**Serve** -- The unified server subcommand (`juglans serve`) that hosts the HTTP API, every configured channel (active ingress + passive webhook routes), and cron triggers together in a single process. Replaces the older standalone `juglans web` / `juglans bot` pattern.
+**Serve** -- The single server subcommand (`juglans serve`) that hosts the HTTP API, every configured channel (active ingress + passive webhook routes), and cron triggers together in a single process. The legacy `juglans web` and `juglans bot` subcommands have been removed in favor of this unified entry point.
 
 **Skill** -- A packaged, reusable capability (a workflow plus its prompts, agents, and tools) that can be listed and invoked via `juglans skills`. Skills are the primary unit of sharing on the registry.
 

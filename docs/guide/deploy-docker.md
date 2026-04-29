@@ -16,40 +16,57 @@ Open `http://localhost:3080` to view the docs.
 
 ## Workflow Runtime
 
-The root `Dockerfile` packages the pre-built `juglans` binary for running workflows via `juglans serve`. The relevant directives are `COPY juglans /usr/local/bin/juglans` and `COPY workers/ /usr/local/bin/workers/` — it expects a **staged `docker-context/` directory** containing the Linux binary and Python workers, not the repo root directly.
+Two paths land at a working container — pick by use case.
 
-The fastest path is `juglans deploy` (see the section below), which stages, builds, and runs the container in one command. Manual staging is shown next for transparency.
+### Path A — `juglans deploy` (recommended)
 
-Prepare the context and build:
+The fastest way to ship a workflow project is the built-in `juglans deploy` subcommand. It generates a Dockerfile based on the public `juglansai/juglans:latest` base image, copies your `workspace/` directory in, and builds + runs the container — no manual staging.
 
 ```bash
-# Build the Linux binary (see note below for macOS)
+juglans deploy                     # build + run
+juglans deploy --port 9000         # custom host port
+juglans deploy --build-only        # build only, don't start
+juglans deploy --tag my-bot:v1     # custom image tag
+juglans deploy --stop              # stop the running container
+juglans deploy --status            # print container status
+```
+
+The generated Dockerfile is roughly:
+
+```dockerfile
+FROM juglansai/juglans:latest
+COPY workspace/ /workspace/
+WORKDIR /workspace
+EXPOSE 8080
+CMD ["juglans", "serve", "--host", "0.0.0.0", "--port", "8080"]
+```
+
+The base image already contains a Linux build of `juglans` plus the Python worker, so there is no cross-compile step on the host — `juglans deploy` works directly from macOS, Windows, or Linux.
+
+### Path B — from-source build (root Dockerfile)
+
+The root `Dockerfile` in the repo is what produces the public base image. It expects a **staged build context** with a pre-built Linux `juglans` binary plus the `workers/` directory at the context root — not the raw repo. Use this flow when you're building the base image itself or when you can't use `juglans deploy`:
+
+```bash
+# 1. Build the Linux binary (cross-compile from macOS — see note)
 cargo build --release --target x86_64-unknown-linux-gnu
 
-# Stage the Docker build context
+# 2. Stage the Docker build context
 mkdir -p docker-context/workers
 cp target/x86_64-unknown-linux-gnu/release/juglans docker-context/
 cp src/workers/python_worker.py docker-context/workers/
 cp Dockerfile docker-context/
 
-# Build the image
+# 3. Build the image
 docker build -t juglans docker-context/
+
+# 4. Run with workspace mounted
+docker run -d -p 8080:8080 -v $(pwd)/workspace:/workspace juglans
 ```
 
-The `juglans deploy` subcommand wraps this staging step if you prefer not to do it by hand.
+The image's default `CMD` is `juglans serve --host 0.0.0.0 --port 8080`, which boots the HTTP API plus every configured channel in one process.
 
-> **macOS note:** `cargo build --target x86_64-unknown-linux-gnu` on macOS requires a cross-compilation toolchain. Use [`cross`](https://github.com/cross-rs/cross) (`cross build --release --target x86_64-unknown-linux-gnu`) or configure a `Cross.toml` in the repo root. Native `cargo build` on macOS produces a Mach-O binary that will not run inside a Linux container.
-
-Run with a workspace mounted:
-
-```bash
-docker run -d \
-  -p 8080:8080 \
-  -v $(pwd)/workspace:/workspace \
-  juglans
-```
-
-This starts the binary with your workflow files in `/workspace`. The default `CMD` runs `juglans web` (dev HTTP API only — no channels); to also boot every configured channel in the same container, override with `command: ["juglans", "serve", "--host", "0.0.0.0", "--port", "8080"]` or use the Compose example below.
+> **macOS note:** `cargo build --target x86_64-unknown-linux-gnu` on macOS needs a cross-compile toolchain. Use [`cross`](https://github.com/cross-rs/cross) (`cross build --release --target x86_64-unknown-linux-gnu`) or set up a `Cross.toml`. A native `cargo build` on macOS produces a Mach-O binary that won't run inside a Linux container.
 
 ## Docker Compose
 

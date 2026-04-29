@@ -332,6 +332,22 @@ See [Conversation History in connect-ai.md](../guide/connect-ai.md#conversation-
 
 Compound form `state="input:output"` controls input and output independently — for fine-grained cases like "store the user message but don't stream the response".
 
+### Streaming hint (`stream=`)
+
+Independent from `state` is a `stream=` flag (default `true`). It tells the channel egress whether to stream tokens live as they arrive from the LLM, or batch-deliver one final message:
+
+```juglans
+# Default — stream live where the channel supports it
+[reply]: chat(message = input.text)
+
+# Force batch — wait for the full response, send one message
+[reply]: chat(message = input.text, stream = false)
+```
+
+Streaming-capable channels (Telegram, web SSE) honor the hint by pushing tokens as they arrive (Telegram via debounced `editMessageText`; web SSE per-token chunks). Channels without a streaming primitive (WeChat, Discord, Feishu) ignore `stream=` and always deliver one final message — same `.jg` runs unchanged on every platform.
+
+`stream` is also ignored when `state` is `context_hidden` or `silent` (no user-visible delivery either way). For more detail see [`chat()` in builtins](../reference/builtins.md#chat) and the [Channels concept overview](../guide/concepts.md#channels) for the full deployment story.
+
 ## Summary
 
 | Concept | Syntax | Purpose |

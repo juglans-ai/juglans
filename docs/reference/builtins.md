@@ -317,7 +317,7 @@ HTTP request tool (legacy). `fetch()` is recommended instead.
 
 ### serve()
 
-Mark a workflow node as the HTTP entry point. When `juglans web` starts, it scans all `.jg` files and registers the workflow containing `serve()` as the catch-all HTTP handler. At runtime, `serve()` is a pass-through that reads pre-injected request data and computes `input.route`.
+Mark a workflow node as the HTTP entry point. When `juglans serve` starts, it scans all `.jg` files and registers the workflow containing `serve()` as the catch-all HTTP handler. At runtime, `serve()` is a pass-through that reads pre-injected request data and computes `input.route`.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|

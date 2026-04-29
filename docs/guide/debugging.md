@@ -80,8 +80,8 @@ Code blocks that should not be validated can be marked with `ignore`:
 
 | # | Error | Cause | Solution |
 |---|-------|-------|----------|
-| 1 | `Duplicate node ID: X` | Two nodes in the same workflow share a name | Rename one of the nodes |
-| 2 | `Edge references undefined node: X` | An edge references a node that has not been defined | Check the node name spelling; make sure nodes are defined before edges |
+| 1 | `Duplicate parameter 'X' in node [Y]` | Two parameters in the same node share a name | Rename one (the parser rejects duplicate keys at parse time) |
+| 2 | `Graph Error: Pending edge references undefined node 'X'` | An edge references a node that has not been defined | Check the node name spelling; make sure nodes are defined before edges |
 | 3 | `Node 'X' is not reachable from entry node` (W002) | A node has no path from the entry node | Connect the node to the graph or remove it |
 | 4 | `No API-key provided` | No LLM provider configured for `chat()` | Set `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`/etc., or define `[ai.providers]` in `juglans.toml` |
 | 5 | `Agent not found: X` | The agent slug does not exist | Check the spelling and ensure the corresponding file is imported via `libs:` |

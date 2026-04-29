@@ -30,7 +30,7 @@ juglans workflow.jg --input '{"query": "hello", "count": 5}'
 juglans workflow.jg --input-file data.json
 ```
 
-**API (juglans web):**
+**API (juglans serve):**
 ```
 POST /api/workflows/my-flow/execute
 {"query": "hello", "count": 5}
@@ -85,7 +85,7 @@ The return value of the most recently executed node. Overwritten after each node
 | assignment | null |
 | `notify()` | `{status, content}` |
 | `print()` | string (the printed message) |
-| `reply()` | `{content, status}` |
+| `reply()` | `{content, status}` (`content` is the message text, `status: "sent"`); also appends to `reply.output` |
 | `return()` | the evaluated value |
 | `timer()` | `{status, duration_ms}` |
 

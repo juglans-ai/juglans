@@ -679,9 +679,21 @@ impl Renderable for MyType {
 | `W002` | Warning | Node `<id>` is not reachable from entry node |
 | `W003` | Warning | No terminal nodes found (all nodes have outgoing edges) |
 | `W004` | Warning | Unknown tool `<name>` |
+| `W005` | Warning | `chat()` should have `agent` or `system_prompt` parameter |
+| `W006`–`W014` | Warning | Various edge / parameter / on-tool / on-error refinements |
+| `W022` | Warning | Reserved variable name used as node id |
 | `E001` | Error | Entry node `<id>` does not exist |
 | `E002` | Error | Cycle detected involving node `<id>`. Workflows must be acyclic (DAG). |
 | `E004` | Error | Workflow contains no nodes |
+| `E007` | Error | `chat()` requires `message` parameter |
+| `E008` | Error | `p()` requires `slug` or `file` parameter |
+| `E009` | Error | `memory_search()` requires `query` parameter |
+| `E010` | Error | `history()` requires `chat_id` parameter |
+| `E011`–`E021` | Error | Other required-parameter / unknown-node-reference / type-validation errors |
+
+The full set lives in `src/core/validator.rs` (`add_error` / `add_warning` calls). Errors fail `juglans check`; warnings only show with `--all`.
+
+> Note: a top-level `agents:` declaration at the workflow level is silently parsed and discarded — agents are defined as inline JSON map nodes (`[my_agent]: { "model": "...", ... }`) and referenced by node id, not via a top-level list.
 
 ---
 

@@ -262,6 +262,8 @@ juglans serve
 
 The channel injects `input.text` (the user's message) and `input.platform_chat_id` (the chat or channel id) before calling the workflow, and stamps a `ChannelOrigin` on the run so `reply()` automatically routes back through Telegram. `input.chat_id` is auto-namespaced as `telegram:{chat_id}:main`, keeping each user's history thread separate.
 
+> **Polling vs webhook (Telegram only).** Telegram instances default to long-poll. If your deployment has a public address, set `[server] endpoint_url = "https://your-domain"` and the channel auto-flips to webhook mode (mounts `/webhook/telegram/main` on the same axum server). Pin a mode explicitly with `mode = "polling"` or `mode = "webhook"` on the channel. Webhook mode is the only Telegram option that survives serverless / scale-to-zero deployments. See [`[channels.telegram.<id>]` in config](../reference/config.md#channelstelegramid) for the full schema.
+
 If you'd rather send the reply explicitly (e.g. for richer formatting, or because the response isn't an LLM output), call the platform's `send_message` builtin:
 
 ```juglans
@@ -339,10 +341,10 @@ Have the summarizer agent refine the answer before output:
 
 **Web Server Mode**
 
-Use `juglans web` to expose the workflow as an HTTP API, with the frontend receiving streaming responses via SSE:
+Use `juglans serve` to expose the workflow as an HTTP API, with the frontend receiving streaming responses via SSE:
 
 ```bash
-juglans web --port 8080
+juglans serve --port 8080
 ```
 
 ```bash

@@ -439,6 +439,7 @@ Use parentheses to override precedence:
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
+| `if(cond, then, else)` | `if(bool, value, value) -> value` | Ternary — returns `then` when `cond` is truthy, else `else`. Both branches are evaluated; for short-circuit semantics use `and` / `or` |
 | `default(x, fallback)` | `default(value, value) -> value` | Return fallback if x is null or empty string |
 | `format(template, args...)` | `format(str, ...) -> str` | Python-style `{}` formatting |
 | `uuid()` | `uuid() -> str` | Generate a UUID v4 |
@@ -471,6 +472,10 @@ These functions accept lambda expressions (`x => expr` or `(x, y) => expr`):
 | `group_by(arr, fn)` | `group_by(list, lambda) -> dict` | Group elements by computed key |
 | `flat_map(arr, fn)` | `flat_map(list, lambda) -> list` | Map then flatten one level |
 | `count_by(arr, fn)` | `count_by(list, lambda) -> dict` | Count elements by computed key |
+| `min_by(arr, fn)` | `min_by(list, lambda) -> value\|null` | Element minimizing the computed key |
+| `max_by(arr, fn)` | `max_by(list, lambda) -> value\|null` | Element maximizing the computed key |
+| `every(arr, fn)` | `every(list, lambda) -> bool` | True iff every element satisfies the predicate |
+| `some(arr, fn)` | `some(list, lambda) -> bool` | True iff at least one element satisfies the predicate |
 
 Lambda syntax: `param => body` for single parameter, `(a, b) => body` for multiple.
 

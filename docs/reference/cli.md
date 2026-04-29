@@ -28,9 +28,8 @@ juglans <COMMAND> [OPTIONS]
 | `juglans init` | Create a new project scaffold |
 | `juglans install` | Install package dependencies from jgpackage.toml |
 | `juglans check` | Validate file syntax |
-| `juglans web` | Start local development web server |
 | `juglans whoami` | Show account and config info |
-| `juglans serve` | Start unified server (web API + every configured channel) |
+| `juglans serve` | Start unified server (HTTP API + every configured channel) |
 | `juglans chat` | Launch interactive chat TUI |
 | `juglans test` | Run tests (test_* nodes in .jg files) |
 | `juglans doctest` | Validate code snippets in markdown docs |
@@ -163,47 +162,6 @@ juglans check --format json
 
 ---
 
-## web
-
-Start local development web server with SSE streaming support.
-
-```bash
-juglans web [OPTIONS]
-```
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `--host <HOST>` | `127.0.0.1` | Bind address |
-| `--port <PORT>` | `3000` | Port number |
-
-**API Endpoints:**
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/agents` | GET | List agents |
-| `/api/agents/:slug` | GET | Get agent |
-| `/api/prompts` | GET | List prompts |
-| `/api/prompts/:slug/render` | POST | Render prompt |
-| `/api/workflows` | GET | List workflows |
-| `/api/workflows/:slug/execute` | POST | Execute workflow |
-| `/api/chat` | POST | Chat (SSE stream) |
-| `/api/chat/tool-result` | POST | Return client tool result |
-
-**Examples:**
-
-```bash
-# Default (localhost:3000)
-juglans web
-
-# Custom port
-juglans web --port 8080
-
-# Allow external access
-juglans web --host 0.0.0.0 --port 8080
-```
-
----
-
 ## whoami
 
 Show current account and configuration information.
@@ -239,6 +197,20 @@ juglans serve [OPTIONS]
 | `--host <HOST>` | `127.0.0.1` | Host address to bind |
 | `--entry <FILE>` | `main.jg` | Workflow entry file (defaults to `main.jg` in the project root) |
 
+**HTTP endpoints (always mounted):**
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/prompts` | GET | List prompts |
+| `/api/workflows` | GET | List workflows (with validation) |
+| `/api/chat` | POST | Chat (SSE stream) |
+| `/api/chat/tool-result` | POST | Return client tool result |
+| `/health` | GET | Liveness probe |
+| `/webhook/<kind>/<instance_id>` | POST | One per passive-ingress channel (Feishu event, Telegram webhook), mounted by `Channel::install_routes` |
+| (catch-all) | * | Fallback to `serve()` workflow when present |
+
+**Port resolution:** `--port` flag > `[server] port` in `juglans.toml` > `8080` (only when no `juglans.toml` exists at all). Project scaffolds ship with `port = 3000`, which is why local dev typically shows `3000`.
+
 **Examples:**
 
 ```bash
@@ -251,14 +223,10 @@ A single channel failure (token expired, network down) is logged and that task e
 
 ---
 
-## bot (removed)
+## Removed subcommands
 
-`juglans bot <platform>` has been removed. Every channel runs through `juglans serve` now. To migrate:
-
-1. Move `[bot.telegram]` / `[bot.feishu]` / `[bot.wechat]` / `[bot.discord]` config to `[channels.<kind>.<id>]` form (see [config docs](./config.md#channels)).
-2. Replace `juglans bot <platform>` invocations with `juglans serve`.
-
-The command exits with an error message pointing here.
+- **`juglans web`** — the dev-only HTTP server is gone; `juglans serve` is the single entry point. Old configs work unchanged: `[server] port = 3000` continues to apply, the same `/api/*` endpoints are mounted, and (if no `[channels.*]` is configured) no channels boot, matching the old `web` behavior. Just substitute the command.
+- **`juglans bot <platform>`** — removed in favor of `juglans serve`. Migrate `[bot.telegram]` / `[bot.feishu]` / `[bot.wechat]` / `[bot.discord]` config to `[channels.<kind>.<id>]` form (see [config docs](./config.md#channels)). The old subcommand exits with an error message pointing here.
 
 ---
 

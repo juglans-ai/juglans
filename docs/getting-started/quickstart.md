@@ -60,7 +60,7 @@ You are developer
 
 ## Step 3: Use Context Variables
 
-Nodes can store data in the workflow **context** and pass it to later nodes:
+Nodes can store data in the workflow **context** and pass it to later nodes. **Replace** the contents of `hello.jg` with:
 
 ```juglans
 [init]: greeting = "Good morning", count = 3

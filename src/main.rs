@@ -97,20 +97,13 @@ enum Commands {
         #[arg(long, default_value = "text")]
         format: String,
     },
-    /// Start local web server for development
-    Web {
-        #[arg(short, long)]
-        port: Option<u16>,
-        #[arg(long)]
-        host: Option<String>,
-    },
     /// Show current account information
     Whoami {
         /// Show detailed information
         #[arg(long, short = 'v')]
         verbose: bool,
     },
-    /// Start unified server: web API + all configured bot adapters
+    /// Start unified server: web API + every configured channel
     Serve {
         /// Port for the web server
         #[arg(short, long)]
@@ -1801,27 +1794,6 @@ async fn main() -> Result<()> {
             Commands::Install => handle_install().await?,
             Commands::Check { path, all, format } => {
                 handle_check(path.as_deref(), *all, format)?;
-            }
-            Commands::Web { port, host } => {
-                let current_dir = env::current_dir()?;
-                let root = find_project_root(&current_dir)?;
-
-                // 1. Try to load configuration
-                let config = JuglansConfig::load().ok();
-
-                // 2. Determine host (CLI > Config > Default)
-                let final_host = host
-                    .clone()
-                    .or_else(|| config.as_ref().map(|c| c.server.host.clone()))
-                    .unwrap_or_else(|| "127.0.0.1".to_string());
-
-                // 3. Determine port (CLI > Config > Default: 8080)
-                let final_port = port
-                    .or_else(|| config.as_ref().map(|c| c.server.port))
-                    .unwrap_or(8080);
-
-                // `juglans web` is dev-only HTTP — no channels.
-                web_server::start_web_server(final_host, final_port, root, Vec::new()).await?;
             }
             Commands::Whoami { verbose } => {
                 handle_whoami(*verbose).await?;

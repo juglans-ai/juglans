@@ -15,5 +15,16 @@ services:
     volumes:
       - ./workspace:/workspace
     environment:
-      - JUG0_BASE_URL=${JUG0_BASE_URL:-http://localhost:3000}
-      - JUG0_API_KEY=${JUG0_API_KEY:-}
+      # LLM provider keys (set whichever you actually use)
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - QWEN_API_KEY=${QWEN_API_KEY:-}
+      # Channel credentials (only needed for the channels you want to run)
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - FEISHU_APP_ID=${FEISHU_APP_ID:-}
+      - FEISHU_APP_SECRET=${FEISHU_APP_SECRET:-}
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
+      # History storage overrides (defaults to JSONL under .juglans/history/)
+      - JUGLANS_HISTORY_BACKEND=${JUGLANS_HISTORY_BACKEND:-jsonl}
+      - JUGLANS_HISTORY_DIR=${JUGLANS_HISTORY_DIR:-/workspace/.juglans/history}
