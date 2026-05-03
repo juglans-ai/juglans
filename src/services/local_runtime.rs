@@ -55,6 +55,12 @@ pub struct ChatRequest {
 pub struct LocalRuntime {
     factory: ProviderFactory,
     default_model: String,
+    /// Fallback `ChatToolHandler` consulted when a per-call `req.tool_handler`
+    /// is `None`. Lets a Rust host (e.g. an embedded app) inject one handler
+    /// once at runtime construction and have every `.jg` `chat(...)` call
+    /// use it without each workflow having to declare `on_tool` / `tools={..}`.
+    /// Per-call handlers (set inside `.jg`) still take precedence.
+    default_tool_handler: Option<Arc<dyn ChatToolHandler>>,
 }
 
 impl Default for LocalRuntime {
@@ -68,6 +74,7 @@ impl LocalRuntime {
         Self {
             factory: ProviderFactory::new(),
             default_model: "gpt-4o-mini".to_string(),
+            default_tool_handler: None,
         }
     }
 
@@ -92,7 +99,24 @@ impl LocalRuntime {
                 .default_model
                 .clone()
                 .unwrap_or_else(|| "gpt-4o-mini".to_string()),
+            default_tool_handler: None,
         }
+    }
+
+    /// Builder: install a default `ChatToolHandler` that handles tool_call
+    /// events whose `.jg` did not declare a `on_tool` / `tools={..}` mapping.
+    /// Returns `self` so callers can write
+    /// `LocalRuntime::new_with_config(&cfg).with_default_tool_handler(h)`.
+    #[allow(dead_code)] // pub API for external Rust hosts (e.g. embedding apps); main.rs reincludes src/ via `mod`, so the bin build doesn't see a caller
+    pub fn with_default_tool_handler(mut self, handler: Arc<dyn ChatToolHandler>) -> Self {
+        self.default_tool_handler = Some(handler);
+        self
+    }
+
+    /// Read accessor used by `Chat::execute` to fall back to the runtime's
+    /// default handler when the per-call request has none.
+    pub fn default_tool_handler(&self) -> Option<Arc<dyn ChatToolHandler>> {
+        self.default_tool_handler.clone()
     }
 
     /// Core chat capability: streams a chat completion against the configured
@@ -191,10 +215,15 @@ impl LocalRuntime {
 
             let assembled_calls = accumulators_to_tool_calls(&tool_accs);
 
-            // No tool_handler → return tool calls to caller
-            let handler = match &req.tool_handler {
-                Some(h) => h,
-                None => {
+            // No tool_handler on the per-call request → consult the runtime's
+            // default tool handler (set via `with_default_tool_handler`). If
+            // both are absent, we surface the tool_calls to the caller as
+            // before so non-Rust-host paths (CLI, tests) keep working.
+            let fallback = self.default_tool_handler.clone();
+            let handler: &Arc<dyn ChatToolHandler> = match (&req.tool_handler, &fallback) {
+                (Some(h), _) => h,
+                (None, Some(h)) => h,
+                (None, None) => {
                     return Ok(ChatOutput::ToolCalls {
                         _calls: assembled_calls,
                         _chat_id: String::new(),

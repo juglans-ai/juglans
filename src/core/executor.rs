@@ -1013,11 +1013,49 @@ impl WorkflowExecutor {
         config: &JuglansConfig,
         input: Option<Value>,
     ) -> Result<WorkflowContext> {
+        self.run_with_input_inner(workflow, config, input, None)
+            .await
+    }
+
+    /// Same as `run_with_input` but injects an event sender into the context
+    /// up-front, so chat() (and other builtins) can stream `WorkflowEvent`s —
+    /// most importantly `WorkflowEvent::Token(String)` per-token deltas — to
+    /// the host process while the workflow is still running. Use this when
+    /// the host wants to forward tokens to a UI/event bus (e.g. Tauri emit).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(dead_code)] // pub API for external Rust hosts (e.g. embedding apps); main.rs reincludes src/ via `mod`, so the bin build doesn't see a caller
+    pub async fn run_with_input_with_sender(
+        self: Arc<Self>,
+        workflow: Arc<WorkflowGraph>,
+        config: &JuglansConfig,
+        input: Option<Value>,
+        sender: tokio::sync::mpsc::UnboundedSender<crate::core::context::WorkflowEvent>,
+    ) -> Result<WorkflowContext> {
+        self.run_with_input_inner(workflow, config, input, Some(sender))
+            .await
+    }
+
+    async fn run_with_input_inner(
+        self: Arc<Self>,
+        workflow: Arc<WorkflowGraph>,
+        config: &JuglansConfig,
+        input: Option<Value>,
+        #[cfg(not(target_arch = "wasm32"))] sender: Option<
+            tokio::sync::mpsc::UnboundedSender<crate::core::context::WorkflowEvent>,
+        >,
+        #[cfg(target_arch = "wasm32")] _sender: Option<()>,
+    ) -> Result<WorkflowContext> {
         info!(
             "🚀 Starting Execution: {} (v{})",
             workflow.name, workflow.version
         );
         debug!("👤 User: {}", config.account.name);
+        #[cfg(not(target_arch = "wasm32"))]
+        let context = match sender {
+            Some(s) => WorkflowContext::with_sender(s),
+            None => WorkflowContext::new(),
+        };
+        #[cfg(target_arch = "wasm32")]
         let context = WorkflowContext::new();
 
         // Inject juglans.toml configuration into $config

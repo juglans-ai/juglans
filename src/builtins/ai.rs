@@ -1581,6 +1581,14 @@ impl Tool for Chat {
                 base_dir,
                 stream_tool_events,
             })
+        } else if let Some(host_handler) = self.runtime.default_tool_handler() {
+            // Host process injected a default ChatToolHandler (e.g. Tauri
+            // app embedding juglans wired its own SQLite-query tool router).
+            // Prefer it over the WorkflowToolHandler client-bridge fallback —
+            // workflows that don't declare `on_tool` still get to use Rust
+            // tools without each .jg having to bridge them by hand.
+            info!("│   default tool_handler: host-provided (Rust)");
+            host_handler
         } else {
             Arc::new(WorkflowToolHandler {
                 builtin_registry: self.builtin_registry.clone(),
