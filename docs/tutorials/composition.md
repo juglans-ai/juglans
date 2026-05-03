@@ -299,6 +299,8 @@ impl Config {
   [info(self)]: output = self.host + ":" + str(self.port)
   [defaults()]: output = "localhost:8080"
 }
+
+[default_addr]: Config.defaults()
 ```
 
 Usage:
@@ -319,11 +321,17 @@ trait Validatable {
   [validate(self)]:
   [is_valid(self)]: output = self.validate().valid == true
 }
+
+[ready]: notify(status="trait Validatable defined")
 ```
 
 ### impl Trait for Type
 
 ```juglans
+trait Validatable {
+  [validate(self)]:
+}
+
 [User]: {
   name: str
   email: str
@@ -332,6 +340,8 @@ trait Validatable {
 impl Validatable for User {
   [validate(self)]: valid = self.name != "" and self.email != ""
 }
+
+[u]: new User(name="Alice", email="a@b.com")
 ```
 
 The compiler validates that all required methods are provided. Default methods are automatically inherited.
@@ -354,6 +364,8 @@ trait Displayable {
 impl Displayable for User {
   [format(self)]: output = self.name + " <" + self.email + ">"
 }
+
+[demo]: new User(name="Alice", email="a@b.com")
 ```
 
 Import and use:

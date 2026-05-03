@@ -38,10 +38,15 @@ An equivalent Python pipeline (LangChain LCEL, LangGraph, or hand-rolled) needs 
 **Built-in routing without code.** Conditional edges and `switch` are part of the DSL, not helper classes:
 
 ```juglans
+[classify]: chat(prompt="Classify intent")
+[answer]:   notify(status="answering")
+[execute]:  notify(status="executing")
+[fallback]: notify(status="fallback")
+
 [classify] -> switch output.intent {
     "question": [answer]
-    "task": [execute]
-    default: [fallback]
+    "task":     [execute]
+    default:    [fallback]
 }
 ```
 

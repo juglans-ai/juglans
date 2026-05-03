@@ -119,8 +119,13 @@ Available on `on error` paths. Contains information about the failure.
 When using `flows:` imports, subworkflow node outputs are accessed via namespace prefix:
 
 ```juglans
-auth.verify.output       # Output of the verify node in the auth subworkflow
-trading.extract.output   # Output of extract in the trading subworkflow
+flows: { auth: "./auth.jg", trading: "./trading.jg" }
+
+# auth.verify.output     — output of the verify node in the auth subworkflow
+# trading.extract.output — output of extract in the trading subworkflow
+[a]: notify(status=auth.verify.output)
+[b]: notify(status=trading.extract.output)
+[a] -> [b]
 ```
 
 Global variables (`input`, `output`, context variables) are not prefixed.

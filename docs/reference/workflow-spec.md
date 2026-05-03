@@ -331,12 +331,15 @@ Switch with numeric cases:
 **`ok:` / `err:` cases** — In addition to `default:`, `switch` accepts two special cases that work with the error edge system:
 
 ```juglans
-[parse]: fetch(url=input.url)
+[parse]:       fetch(url=input.url)
+[continue]:    notify(status="ok")
+[retry_once]:  notify(status="retrying")
+[fallback]:    notify(status="fallback")
 
 [parse] -> switch {
-    ok:  [continue]          # took the happy path
-    err: [retry_once]        # any on-error propagation
-    err "timeout": [fallback]  # typed error (matches on error.kind / error.code)
+    ok:           [continue]      # took the happy path
+    err:          [retry_once]    # any on-error propagation
+    err "timeout": [fallback]      # typed error (matches on error.kind / error.code)
 }
 ```
 
@@ -373,6 +376,8 @@ base = "."
 # any workflow under the project root
 flows: { auth: "@/shared/auth.jg" }
 libs:  ["@/shared/helpers.jg"]
+
+[start]: notify(status="ready")
 ```
 
 This keeps imports stable regardless of how deeply nested the importing file is.
@@ -402,15 +407,19 @@ Functions are reusable parameterized blocks. They are NOT added to the main DAG.
 [run]: pipeline(msg="test")
 ```
 
-Steps separated by newlines or semicolons. The function returns `output` from its last step by default. To return early or to return a specific value, use the `return` keyword:
+Steps run sequentially; the function returns whatever is bound to `output` after the final step (either by an explicit `output = ...` assignment or as the result of the last task call). For conditional value selection, route between functions at the DAG level using `if` edges or `switch`. To bubble an error out of a function early, use `return err { kind: "...", message: "..." }`:
 
 ```juglans
-[classify(text)]: {
-  score = sentiment(text)
-  if score > 0.9 return "strong_positive"
-  if score < 0.1 return "strong_negative"
-  output = "neutral"     # implicit return of last expression
+[validate(price)]: {
+  assert price > 0
+  output = "ok: " + str(price)
 }
+
+[reject(price)]: {
+  return err { kind: "validation", message: "price must be positive" }
+}
+
+[run]: validate(price=10)
 ```
 
 ### Multiple Parameters
